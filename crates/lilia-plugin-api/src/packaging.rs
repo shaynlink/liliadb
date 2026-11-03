@@ -9,15 +9,19 @@ use sha2::{Digest, Sha256};
 
 use crate::install::{create_private_directory, set_private_file, sync_directory};
 use crate::package::{plain_child, read_regular_file, verify_package, MAX_LIBRARY_BYTES};
-use crate::{host_target, Capability, PluginApiError, PluginManifest, ABI_MAJOR, ABI_MINOR};
+use crate::{
+    host_target, is_wasm_target, Capability, PluginApiError, PluginManifest, ABI_MAJOR, ABI_MINOR,
+    WASM_TARGET_WASIP1,
+};
 
-/// Options for packaging a native plugin.
-#[derive(Debug, Clone)]
+/// Options for packaging a native or WebAssembly plugin.
+#[derive(Debug, Clone, Default)]
 pub struct PackOptions {
     pub name: String,
     pub version: String,
     pub capabilities: Vec<Capability>,
     pub engine_requirement: Option<String>,
+    pub target: Option<String>,
 }
 
 /// Generate a cryptographically secure Ed25519 keypair for signing native plugins.
@@ -72,12 +76,36 @@ pub fn pack_plugin(
         .and_then(|v| v.to_str())
         .ok_or_else(|| PluginApiError::Invalid("invalid library filename".into()))?;
 
-    let expected_ext = if cfg!(target_os = "windows") {
-        "dll"
-    } else if cfg!(target_os = "macos") {
-        "dylib"
+    let is_wasm = library_path.extension().and_then(|v| v.to_str()) == Some("wasm")
+        || options
+            .target
+            .as_deref()
+            .map(is_wasm_target)
+            .unwrap_or(false);
+
+    let (target, expected_ext) = if is_wasm {
+        (
+            options
+                .target
+                .clone()
+                .unwrap_or_else(|| WASM_TARGET_WASIP1.to_string()),
+            "wasm",
+        )
     } else {
-        "so"
+        let ext = if cfg!(target_os = "windows") {
+            "dll"
+        } else if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
+        (
+            options
+                .target
+                .clone()
+                .unwrap_or_else(|| host_target().to_string()),
+            ext,
+        )
     };
 
     if library_path.extension().and_then(|v| v.to_str()) != Some(expected_ext) {
@@ -95,7 +123,7 @@ pub fn pack_plugin(
         abi_major: ABI_MAJOR,
         abi_minor: ABI_MINOR,
         engine_requirement: engine_req_str,
-        target: host_target().to_string(),
+        target,
         library: library_filename.to_string(),
         library_sha256,
         capabilities: options.capabilities.clone(),

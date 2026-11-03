@@ -8,10 +8,22 @@ use crate::{
     CodecDescriptorV1, PluginApiError, PluginDescriptorV1, PluginManifest, ABI_MAJOR, ABI_MINOR,
 };
 
+#[derive(Clone)]
+enum PluginBackend {
+    Native {
+        _library: std::sync::Arc<Library>,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
+    Wasm {
+        pool: std::sync::Arc<crate::wasm_runtime::WasmInstancePool>,
+    },
+}
+
 pub struct LoadedPlugin {
-    pub descriptor: PluginDescriptorV1,
+    pub descriptor: Option<PluginDescriptorV1>,
     pub name: String,
-    _library: std::sync::Arc<Library>,
+    manifest_capabilities: Vec<crate::Capability>,
+    backend: PluginBackend,
 }
 
 impl std::fmt::Debug for LoadedPlugin {
@@ -19,6 +31,7 @@ impl std::fmt::Debug for LoadedPlugin {
         formatter
             .debug_struct("LoadedPlugin")
             .field("name", &self.name)
+            .field("sandboxed", &self.is_sandboxed())
             .field("descriptor", &self.descriptor)
             .finish_non_exhaustive()
     }
@@ -33,25 +46,139 @@ pub unsafe fn load_descriptor(
     package_dir: &Path,
     manifest: &PluginManifest,
 ) -> Result<LoadedPlugin, PluginApiError> {
-    let library_path = safe_regular_file(package_dir, &manifest.library, 256 * 1024 * 1024)?;
-    let library = unsafe { Library::new(library_path)? };
-    let entry: Symbol<'_, unsafe extern "C" fn() -> PluginDescriptorV1> =
-        unsafe { library.get(b"lilia_plugin_v1\0")? };
-    let descriptor = unsafe { entry() };
-    let name = validate_descriptor(&descriptor, manifest)?;
-    Ok(LoadedPlugin {
-        descriptor,
-        name,
-        _library: std::sync::Arc::new(library),
-    })
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        load_descriptor_with_config(
+            package_dir,
+            manifest,
+            crate::wasm_runtime::WasmPluginConfig::default(),
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        load_descriptor_with_config(package_dir, manifest)
+    }
 }
 
-/// Load a plugin package or raw dynamic library.
+/// Load a package with custom sandboxing configuration.
+///
+/// # Safety
+/// Native plugins still execute with the host process privileges.
+pub unsafe fn load_descriptor_with_config(
+    package_dir: &Path,
+    manifest: &PluginManifest,
+    #[cfg(not(target_arch = "wasm32"))] config: crate::wasm_runtime::WasmPluginConfig,
+) -> Result<LoadedPlugin, PluginApiError> {
+    if crate::is_wasm_target(&manifest.target) || manifest.library.ends_with(".wasm") {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let wasm_path = safe_regular_file(package_dir, &manifest.library, 256 * 1024 * 1024)?;
+            let engine = crate::wasm_runtime::WasmPluginEngine::load(&wasm_path, config)
+                .map_err(|e| PluginApiError::Invalid(format!("failed to load wasm plugin: {e}")))?;
+
+            if manifest.capabilities.contains(&crate::Capability::Codec)
+                && !(engine.has_export("codec_encode") || engine.has_export("lilia_codec_encode"))
+            {
+                return Err(PluginApiError::Invalid(
+                    "wasm plugin declares codec capability but missing codec_encode export".into(),
+                ));
+            }
+
+            let pool = engine.into_pool();
+            Ok(LoadedPlugin {
+                descriptor: None,
+                name: manifest.name.clone(),
+                manifest_capabilities: manifest.capabilities.clone(),
+                backend: PluginBackend::Wasm { pool },
+            })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Err(PluginApiError::Invalid(
+                "wasm plugins not supported on wasm32 host".into(),
+            ))
+        }
+    } else {
+        let library_path = safe_regular_file(package_dir, &manifest.library, 256 * 1024 * 1024)?;
+        let library = unsafe { Library::new(library_path)? };
+        let entry: Symbol<'_, unsafe extern "C" fn() -> PluginDescriptorV1> =
+            unsafe { library.get(b"lilia_plugin_v1\0")? };
+        let descriptor = unsafe { entry() };
+        let name = validate_descriptor(&descriptor, manifest)?;
+        Ok(LoadedPlugin {
+            descriptor: Some(descriptor),
+            name,
+            manifest_capabilities: manifest.capabilities.clone(),
+            backend: PluginBackend::Native {
+                _library: std::sync::Arc::new(library),
+            },
+        })
+    }
+}
+
+/// Load a plugin package or raw dynamic library / wasm module.
 ///
 /// # Safety
 /// Native plugins execute with host process privileges. Only load trusted code.
 pub unsafe fn load_plugin(path: &Path) -> Result<LoadedPlugin, PluginApiError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        load_plugin_with_config(path, crate::wasm_runtime::WasmPluginConfig::default())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        load_plugin_with_config(path)
+    }
+}
+
+/// Load a plugin package or raw library with custom sandboxing configuration.
+///
+/// # Safety
+/// Native plugins execute with host process privileges. Only load trusted code.
+pub unsafe fn load_plugin_with_config(
+    path: &Path,
+    #[cfg(not(target_arch = "wasm32"))] config: crate::wasm_runtime::WasmPluginConfig,
+) -> Result<LoadedPlugin, PluginApiError> {
     if path.is_file() {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("wasm") {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let engine =
+                    crate::wasm_runtime::WasmPluginEngine::load(path, config).map_err(|e| {
+                        PluginApiError::Invalid(format!("failed to load wasm plugin: {e}"))
+                    })?;
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("wasm-plugin")
+                    .to_owned();
+
+                let mut capabilities = Vec::new();
+                if engine.has_export("codec_encode") || engine.has_export("lilia_codec_encode") {
+                    capabilities.push(crate::Capability::Codec);
+                }
+                if engine.has_export("sql_validate_query")
+                    || engine.has_export("lilia_sql_validate_query")
+                {
+                    capabilities.push(crate::Capability::Sql);
+                }
+
+                let pool = engine.into_pool();
+                return Ok(LoadedPlugin {
+                    descriptor: None,
+                    name,
+                    manifest_capabilities: capabilities,
+                    backend: PluginBackend::Wasm { pool },
+                });
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                return Err(PluginApiError::Invalid(
+                    "wasm plugins not supported on wasm32 host".into(),
+                ));
+            }
+        }
+
         let library = unsafe { Library::new(path)? };
         let entry: Symbol<'_, unsafe extern "C" fn() -> PluginDescriptorV1> =
             unsafe { library.get(b"lilia_plugin_v1\0")? };
@@ -68,22 +195,31 @@ pub unsafe fn load_plugin(path: &Path) -> Result<LoadedPlugin, PluginApiError> {
             .to_str()
             .map_err(|_| PluginApiError::Invalid("plugin descriptor name is not UTF-8".into()))?
             .to_owned();
-        if descriptor.capabilities & crate::Capability::Codec.bit() != 0
-            && descriptor.codec.is_null()
-        {
-            return Err(PluginApiError::Invalid(
-                "plugin claims codec capability but codec descriptor is null".into(),
-            ));
+
+        let mut capabilities = Vec::new();
+        if descriptor.capabilities & crate::Capability::Codec.bit() != 0 {
+            if descriptor.codec.is_null() {
+                return Err(PluginApiError::Invalid(
+                    "plugin claims codec capability but codec descriptor is null".into(),
+                ));
+            }
+            capabilities.push(crate::Capability::Codec);
         }
-        if descriptor.capabilities & crate::Capability::Sql.bit() != 0 && descriptor.sql.is_null() {
-            return Err(PluginApiError::Invalid(
-                "plugin claims sql capability but sql descriptor is null".into(),
-            ));
+        if descriptor.capabilities & crate::Capability::Sql.bit() != 0 {
+            if descriptor.sql.is_null() {
+                return Err(PluginApiError::Invalid(
+                    "plugin claims sql capability but sql descriptor is null".into(),
+                ));
+            }
+            capabilities.push(crate::Capability::Sql);
         }
         return Ok(LoadedPlugin {
-            descriptor,
+            descriptor: Some(descriptor),
             name,
-            _library: std::sync::Arc::new(library),
+            manifest_capabilities: capabilities,
+            backend: PluginBackend::Native {
+                _library: std::sync::Arc::new(library),
+            },
         });
     }
 
@@ -91,7 +227,14 @@ pub unsafe fn load_plugin(path: &Path) -> Result<LoadedPlugin, PluginApiError> {
     if manifest_path.exists() {
         let manifest_bytes = std::fs::read(&manifest_path)?;
         let manifest: PluginManifest = serde_json::from_slice(&manifest_bytes)?;
-        return unsafe { load_descriptor(path, &manifest) };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            return unsafe { load_descriptor_with_config(path, &manifest, config) };
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            return unsafe { load_descriptor_with_config(path, &manifest) };
+        }
     }
 
     Err(PluginApiError::Invalid(format!(
@@ -154,47 +297,118 @@ fn validate_descriptor(
 
 impl LoadedPlugin {
     #[must_use]
+    pub fn is_sandboxed(&self) -> bool {
+        match &self.backend {
+            PluginBackend::Native { .. } => false,
+            #[cfg(not(target_arch = "wasm32"))]
+            PluginBackend::Wasm { .. } => true,
+        }
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn descriptor(&self) -> Option<&PluginDescriptorV1> {
+        self.descriptor.as_ref()
+    }
+
+    #[must_use]
     pub fn codec(&self) -> Option<PluginCodec> {
-        let desc = unsafe { self.descriptor.codec.as_ref().copied() }?;
-        let codec_name = if desc.name.is_null() {
-            self.name.clone()
-        } else {
-            unsafe { CStr::from_ptr(desc.name) }
-                .to_str()
-                .unwrap_or(&self.name)
-                .to_owned()
-        };
-        Some(PluginCodec {
-            name: codec_name,
-            descriptor: desc,
-            _library: std::sync::Arc::clone(&self._library),
-        })
+        match &self.backend {
+            PluginBackend::Native { _library } => {
+                let desc = unsafe { self.descriptor.as_ref()?.codec.as_ref().copied() }?;
+                let codec_name = if desc.name.is_null() {
+                    self.name.clone()
+                } else {
+                    unsafe { CStr::from_ptr(desc.name) }
+                        .to_str()
+                        .unwrap_or(&self.name)
+                        .to_owned()
+                };
+                Some(PluginCodec {
+                    name: codec_name,
+                    inner: CodecInner::Native {
+                        descriptor: desc,
+                        _library: std::sync::Arc::clone(_library),
+                    },
+                })
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            PluginBackend::Wasm { pool } => {
+                if self
+                    .manifest_capabilities
+                    .contains(&crate::Capability::Codec)
+                {
+                    Some(PluginCodec {
+                        name: self.name.clone(),
+                        inner: CodecInner::Wasm {
+                            pool: std::sync::Arc::clone(pool),
+                        },
+                    })
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     #[must_use]
     pub fn sql(&self) -> Option<PluginSql> {
-        let desc = unsafe { self.descriptor.sql.as_ref().copied() }?;
-        let sql_name = if desc.name.is_null() {
-            self.name.clone()
-        } else {
-            unsafe { CStr::from_ptr(desc.name) }
-                .to_str()
-                .unwrap_or(&self.name)
-                .to_owned()
-        };
-        Some(PluginSql {
-            name: sql_name,
-            descriptor: desc,
-            _library: std::sync::Arc::clone(&self._library),
-        })
+        match &self.backend {
+            PluginBackend::Native { _library } => {
+                let desc = unsafe { self.descriptor.as_ref()?.sql.as_ref().copied() }?;
+                let sql_name = if desc.name.is_null() {
+                    self.name.clone()
+                } else {
+                    unsafe { CStr::from_ptr(desc.name) }
+                        .to_str()
+                        .unwrap_or(&self.name)
+                        .to_owned()
+                };
+                Some(PluginSql {
+                    name: sql_name,
+                    inner: SqlInner::Native {
+                        descriptor: desc,
+                        _library: std::sync::Arc::clone(_library),
+                    },
+                })
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            PluginBackend::Wasm { pool } => {
+                if self.manifest_capabilities.contains(&crate::Capability::Sql) {
+                    Some(PluginSql {
+                        name: self.name.clone(),
+                        inner: SqlInner::Wasm {
+                            pool: std::sync::Arc::clone(pool),
+                        },
+                    })
+                } else {
+                    None
+                }
+            }
+        }
     }
+}
+
+#[derive(Clone)]
+enum SqlInner {
+    Native {
+        descriptor: crate::manifest::SqlDescriptorV1,
+        _library: std::sync::Arc<Library>,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
+    Wasm {
+        pool: std::sync::Arc<crate::wasm_runtime::WasmInstancePool>,
+    },
 }
 
 #[derive(Clone)]
 pub struct PluginSql {
     name: String,
-    descriptor: crate::manifest::SqlDescriptorV1,
-    _library: std::sync::Arc<Library>,
+    inner: SqlInner,
 }
 
 impl PluginSql {
@@ -204,18 +418,29 @@ impl PluginSql {
     }
 
     pub fn validate_query(&self, query: &str) -> Result<(), PluginApiError> {
-        if let Some(validate_fn) = self.descriptor.validate_query {
-            let c_query = std::ffi::CString::new(query).map_err(|_| {
-                PluginApiError::Invalid("SQL query contains interior null byte".into())
-            })?;
-            let code = unsafe { validate_fn(c_query.as_ptr()) };
-            if code != 0 {
-                return Err(PluginApiError::Invalid(format!(
-                    "SQL query validation rejected with code {code}"
-                )));
+        match &self.inner {
+            SqlInner::Native { descriptor, .. } => {
+                if let Some(validate_fn) = descriptor.validate_query {
+                    let c_query = std::ffi::CString::new(query).map_err(|_| {
+                        PluginApiError::Invalid("SQL query contains interior null byte".into())
+                    })?;
+                    let code = unsafe { validate_fn(c_query.as_ptr()) };
+                    if code != 0 {
+                        return Err(PluginApiError::Invalid(format!(
+                            "SQL query validation rejected with code {code}"
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            SqlInner::Wasm { pool } => {
+                let mut instance = pool
+                    .acquire()
+                    .map_err(|e| PluginApiError::Invalid(e.to_string()))?;
+                instance.validate_query(query)
             }
         }
-        Ok(())
     }
 }
 
@@ -232,10 +457,21 @@ unsafe impl Send for PluginSql {}
 unsafe impl Sync for PluginSql {}
 
 #[derive(Clone)]
+enum CodecInner {
+    Native {
+        descriptor: CodecDescriptorV1,
+        _library: std::sync::Arc<Library>,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
+    Wasm {
+        pool: std::sync::Arc<crate::wasm_runtime::WasmInstancePool>,
+    },
+}
+
+#[derive(Clone)]
 pub struct PluginCodec {
     name: String,
-    descriptor: CodecDescriptorV1,
-    _library: std::sync::Arc<Library>,
+    inner: CodecInner,
 }
 
 impl PluginCodec {
@@ -263,99 +499,117 @@ impl lilia_core::ValueCodec for PluginCodec {
     }
 
     fn encode(&self, plaintext: &[u8]) -> lilia_core::Result<Vec<u8>> {
-        let encode_fn = self.descriptor.encode.ok_or_else(|| {
-            lilia_core::LiliaError::new(
-                lilia_core::ErrorCode::Storage,
-                "plugin codec missing encode function",
-                false,
-            )
-        })?;
-        let mut out = vec![0u8; plaintext.len() + 64];
-        let mut out_len = 0usize;
-        let res = unsafe {
-            encode_fn(
-                plaintext.as_ptr(),
-                plaintext.len(),
-                out.as_mut_ptr(),
-                out.len(),
-                &mut out_len,
-            )
-        };
-        if res == 1 {
-            out.resize(out_len, 0);
-            let res2 = unsafe {
-                encode_fn(
-                    plaintext.as_ptr(),
-                    plaintext.len(),
-                    out.as_mut_ptr(),
-                    out.len(),
-                    &mut out_len,
-                )
-            };
-            if res2 != 0 {
-                return Err(lilia_core::LiliaError::new(
-                    lilia_core::ErrorCode::Storage,
-                    "plugin codec encode failed",
-                    false,
-                ));
+        match &self.inner {
+            CodecInner::Native { descriptor, .. } => {
+                let encode_fn = descriptor.encode.ok_or_else(|| {
+                    lilia_core::LiliaError::new(
+                        lilia_core::ErrorCode::Storage,
+                        "plugin codec missing encode function",
+                        false,
+                    )
+                })?;
+                let mut out = vec![0u8; plaintext.len() + 64];
+                let mut out_len = 0usize;
+                let res = unsafe {
+                    encode_fn(
+                        plaintext.as_ptr(),
+                        plaintext.len(),
+                        out.as_mut_ptr(),
+                        out.len(),
+                        &mut out_len,
+                    )
+                };
+                if res == 1 {
+                    out.resize(out_len, 0);
+                    let res2 = unsafe {
+                        encode_fn(
+                            plaintext.as_ptr(),
+                            plaintext.len(),
+                            out.as_mut_ptr(),
+                            out.len(),
+                            &mut out_len,
+                        )
+                    };
+                    if res2 != 0 {
+                        return Err(lilia_core::LiliaError::new(
+                            lilia_core::ErrorCode::Storage,
+                            "plugin codec encode failed",
+                            false,
+                        ));
+                    }
+                } else if res != 0 {
+                    return Err(lilia_core::LiliaError::new(
+                        lilia_core::ErrorCode::Storage,
+                        "plugin codec encode failed",
+                        false,
+                    ));
+                }
+                out.truncate(out_len);
+                Ok(out)
             }
-        } else if res != 0 {
-            return Err(lilia_core::LiliaError::new(
-                lilia_core::ErrorCode::Storage,
-                "plugin codec encode failed",
-                false,
-            ));
+            #[cfg(not(target_arch = "wasm32"))]
+            CodecInner::Wasm { pool } => {
+                let mut instance = pool.acquire()?;
+                instance.encode(plaintext)
+            }
         }
-        out.truncate(out_len);
-        Ok(out)
     }
 
     fn decode(&self, encoded: &[u8]) -> lilia_core::Result<Vec<u8>> {
-        let decode_fn = self.descriptor.decode.ok_or_else(|| {
-            lilia_core::LiliaError::new(
-                lilia_core::ErrorCode::Storage,
-                "plugin codec missing decode function",
-                false,
-            )
-        })?;
-        let mut out = vec![0u8; encoded.len()];
-        let mut out_len = 0usize;
-        let res = unsafe {
-            decode_fn(
-                encoded.as_ptr(),
-                encoded.len(),
-                out.as_mut_ptr(),
-                out.len(),
-                &mut out_len,
-            )
-        };
-        if res == 1 {
-            out.resize(out_len, 0);
-            let res2 = unsafe {
-                decode_fn(
-                    encoded.as_ptr(),
-                    encoded.len(),
-                    out.as_mut_ptr(),
-                    out.len(),
-                    &mut out_len,
-                )
-            };
-            if res2 != 0 {
-                return Err(lilia_core::LiliaError::new(
-                    lilia_core::ErrorCode::Corrupt,
-                    "plugin codec decode failed or authentication failure",
-                    false,
-                ));
+        match &self.inner {
+            CodecInner::Native { descriptor, .. } => {
+                let decode_fn = descriptor.decode.ok_or_else(|| {
+                    lilia_core::LiliaError::new(
+                        lilia_core::ErrorCode::Storage,
+                        "plugin codec missing decode function",
+                        false,
+                    )
+                })?;
+                let mut out = vec![0u8; encoded.len()];
+                let mut out_len = 0usize;
+                let res = unsafe {
+                    decode_fn(
+                        encoded.as_ptr(),
+                        encoded.len(),
+                        out.as_mut_ptr(),
+                        out.len(),
+                        &mut out_len,
+                    )
+                };
+                if res == 1 {
+                    out.resize(out_len, 0);
+                    let res2 = unsafe {
+                        decode_fn(
+                            encoded.as_ptr(),
+                            encoded.len(),
+                            out.as_mut_ptr(),
+                            out.len(),
+                            &mut out_len,
+                        )
+                    };
+                    if res2 != 0 {
+                        return Err(lilia_core::LiliaError::new(
+                            lilia_core::ErrorCode::Corrupt,
+                            "plugin codec decode failed or authentication failure",
+                            false,
+                        ));
+                    }
+                } else if res != 0 {
+                    return Err(lilia_core::LiliaError::new(
+                        lilia_core::ErrorCode::Corrupt,
+                        "plugin codec decode failed or authentication failure",
+                        false,
+                    ));
+                }
+                out.truncate(out_len);
+                Ok(out)
             }
-        } else if res != 0 {
-            return Err(lilia_core::LiliaError::new(
-                lilia_core::ErrorCode::Corrupt,
-                "plugin codec decode failed or authentication failure",
-                false,
-            ));
+            #[cfg(not(target_arch = "wasm32"))]
+            CodecInner::Wasm { pool } => {
+                let mut instance = pool.acquire()?;
+                instance.decode(encoded)
+            }
         }
-        out.truncate(out_len);
-        Ok(out)
     }
 }
 

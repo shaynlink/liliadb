@@ -54,6 +54,18 @@ impl Capability {
     }
 }
 
+pub const WASM_TARGET_WASIP1: &str = "wasm32-wasip1";
+pub const WASM_TARGET_WASI: &str = "wasm32-wasi";
+pub const WASM_TARGET_UNKNOWN: &str = "wasm32-unknown-unknown";
+
+#[must_use]
+pub fn is_wasm_target(target: &str) -> bool {
+    matches!(
+        target,
+        WASM_TARGET_WASIP1 | WASM_TARGET_WASI | WASM_TARGET_UNKNOWN | "wasm"
+    )
+}
+
 /// Exact Rust target triple supported by this distribution build.
 #[must_use]
 pub const fn host_target() -> &'static str {

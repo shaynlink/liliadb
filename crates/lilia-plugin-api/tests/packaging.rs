@@ -34,6 +34,7 @@ fn pack_and_sign_lifecycle_end_to_end() {
         version: "1.2.3".into(),
         capabilities: vec![Capability::Codec],
         engine_requirement: None,
+        ..Default::default()
     };
 
     let packed_path = pack_plugin(&raw_lib_path, &package_dir, &options).expect("pack plugin");
@@ -71,6 +72,7 @@ fn official_release_key_signs_and_verifies() {
         version: "0.1.0-alpha.1".into(),
         capabilities: vec![Capability::Sql],
         engine_requirement: None,
+        ..Default::default()
     };
 
     pack_plugin(&raw_lib_path, &package_dir, &options).expect("pack");
@@ -100,6 +102,7 @@ fn install_force_flag_replaces_existing_installation() {
         version: "2.0.0".into(),
         capabilities: vec![Capability::Kv],
         engine_requirement: None,
+        ..Default::default()
     };
     pack_plugin(&raw_lib_path, &package_dir, &options).expect("pack");
     sign_package(&package_dir, &signing_key).expect("sign");
@@ -140,6 +143,7 @@ fn discover_and_find_installed_plugins() {
             version: "1.0.0".into(),
             capabilities: vec![Capability::Codec],
             engine_requirement: None,
+            ..Default::default()
         },
     )
     .expect("pack 1");
@@ -156,6 +160,7 @@ fn discover_and_find_installed_plugins() {
             version: "1.0.0".into(),
             capabilities: vec![Capability::Sql],
             engine_requirement: None,
+            ..Default::default()
         },
     )
     .expect("pack 2");

@@ -9,7 +9,7 @@ use semver::{Version, VersionReq};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{host_target, PluginManifest, ABI_MAJOR, ABI_MINOR};
+use crate::{host_target, is_wasm_target, PluginManifest, ABI_MAJOR, ABI_MINOR};
 
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 256;
@@ -104,31 +104,43 @@ fn validate_manifest(manifest: &PluginManifest) -> Result<(), PluginApiError> {
     if manifest.abi_major != ABI_MAJOR || manifest.abi_minor > ABI_MINOR {
         return Err(PluginApiError::Invalid("unsupported plugin ABI".into()));
     }
-    if host_target() == "unsupported-target" {
-        return Err(PluginApiError::Invalid(
-            "this distribution target does not support native plugins".into(),
-        ));
-    }
-    if manifest.target != host_target() {
-        return Err(PluginApiError::Invalid(
-            "plugin target does not match this host".into(),
-        ));
-    }
-    let expected_extension = if cfg!(target_os = "windows") {
-        "dll"
-    } else if cfg!(target_os = "macos") {
-        "dylib"
+    if is_wasm_target(&manifest.target) {
+        if Path::new(&manifest.library)
+            .extension()
+            .and_then(|value| value.to_str())
+            != Some("wasm")
+        {
+            return Err(PluginApiError::Invalid(
+                "wasm plugin library extension must be '.wasm'".into(),
+            ));
+        }
     } else {
-        "so"
-    };
-    if Path::new(&manifest.library)
-        .extension()
-        .and_then(|value| value.to_str())
-        != Some(expected_extension)
-    {
-        return Err(PluginApiError::Invalid(
-            "plugin library extension does not match the target".into(),
-        ));
+        if host_target() == "unsupported-target" {
+            return Err(PluginApiError::Invalid(
+                "this distribution target does not support native plugins".into(),
+            ));
+        }
+        if manifest.target != host_target() {
+            return Err(PluginApiError::Invalid(
+                "plugin target does not match this host".into(),
+            ));
+        }
+        let expected_extension = if cfg!(target_os = "windows") {
+            "dll"
+        } else if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
+        if Path::new(&manifest.library)
+            .extension()
+            .and_then(|value| value.to_str())
+            != Some(expected_extension)
+        {
+            return Err(PluginApiError::Invalid(
+                "plugin library extension does not match the target".into(),
+            ));
+        }
     }
     plain_relative_filename(&manifest.library)?;
     if manifest.library_sha256.len() != 64
