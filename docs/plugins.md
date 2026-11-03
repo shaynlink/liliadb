@@ -1,111 +1,187 @@
-# Native plugin format
+# Plugins & WebAssembly Sandboxing
 
-Native plugins are trusted, privileged code. A signature establishes provenance and integrity; it
-does not sandbox the library.
+LiliaDB provides an extensible plugin system supporting two execution runtimes:
+1. **Native Dynamic Libraries (C-ABI)**: High performance, direct host memory access. Trusted, privileged code with Ed25519 signature verification.
+2. **WebAssembly Sandboxed Modules (WASI via Wasmtime)**: Hardened, fault-isolated execution with linear memory boundaries, strict memory quotas, CPU fuel metering, and process-crash immunity.
 
-## Package
+---
 
-A package directory contains:
+## Architecture: Native C-ABI vs. WebAssembly Sandbox
 
-- `manifest.json`, serialized canonically without unknown fields;
-- `manifest.sig`, an Ed25519 signature over the manifest bytes;
-- one platform library whose SHA-256 digest is recorded by the manifest.
+```
+                      +---------------------------------------+
+                      |       LiliaDB Daemon / CLI Engine     |
+                      +---------------------------------------+
+                                          |
+                   -------------------------------------------------
+                   |                                               |
+                   v                                               v
+        [ Native Plugin Loader ]                        [ Wasmtime WASI Sandbox ]
+        - dlopen / LoadLibrary                          - 32-bit Isolated Linear Memory
+        - Direct host memory                            - Configurable Memory Quota (64 MB)
+        - Native C-ABI v1.0                             - CPU Fuel Metering (10M Units)
+        - Cryptographic Ed25519                         - Fault-Isolated Instance Pool
+        - Highly trusted code                           - Crash-Proof (No Segfaults)
+```
 
-The manifest identifies name, semantic version, ABI `1.0`, engine requirement, target, library,
-digest, and capabilities. It must be the exact compact serialization produced by
-`PluginManifest::canonical_bytes`; whitespace or field-order variants are rejected before signature
-verification. The engine requirement is a SemVer range which must include the running engine.
+| Dimension | Native C-ABI (`.dylib` / `.so` / `.dll`) | WebAssembly Sandbox (`.wasm`) |
+| :--- | :--- | :--- |
+| **Runtime** | OS dynamic loader (`libloading`) | `wasmtime` 43.0 + `wasmtime-wasi` (p1) |
+| **Isolation** | Shared address space | Strict linear memory sandbox |
+| **Fault Tolerance** | Host crash on panic / segfault | Traps caught safely; instance evicted |
+| **Resource Limits** | Unbounded OS process limits | `--plugin-memory-limit-mb`, `--plugin-fuel-limit` |
+| **Portability** | OS and arch-specific binary | Universal cross-platform bytecode |
+| **Target Triples** | `x86_64-*`, `aarch64-*` | `wasm32-wasip1`, `wasm32-wasi`, `wasm32-unknown-none` |
 
-Target identifiers are exact Rust target triples. Alpha 1 accepts only:
+---
 
-- `aarch64-apple-darwin`;
-- `x86_64-apple-darwin`;
-- `aarch64-unknown-linux-gnu`;
-- `x86_64-unknown-linux-gnu`;
-- `x86_64-pc-windows-msvc`.
+## WebAssembly Sandboxing Runtime
 
-The installer rejects absolute and nested paths, traversal, symlinks, unexpected or oversized files,
-mismatched digests, unknown signing keys, incompatible targets, duplicate capabilities, and
-incompatible ABI versions. The plugin root must be a real private directory (`0700` on Unix).
-Installation copies into a random private staging directory, re-verifies the staged bytes, serializes
-competing installers with an exclusive destination reservation, and publishes without overwriting an
-existing version. Installed packages live at `<root>/<name>-<version>-<target>/package`. Loading
-occurs only at process startup, and the exported descriptor must declare exactly the capabilities
-present in the signed manifest.
+The WebAssembly sandbox isolates untrusted or third-party plugins using Wasmtime:
 
-## ABI & Capabilities
+### 1. Memory Isolation & Out-of-Bounds Protection
+Every WASM plugin executes within its own isolated 32-bit linear memory space. Out-of-bounds pointer reads or writes trigger a WebAssembly trap that is mapped to `LiliaError::Storage` or `LiliaError::Corrupt`, completely preventing host memory corruption or segmentation faults.
 
-Each library exports `lilia_plugin_v1` using the C ABI and returns `PluginDescriptorV1`. No Rust ABI,
-panic, owned Rust value, or allocator boundary may cross the interface. Capabilities are bitflags:
+### 2. Linear Memory Quotas
+Memory allocation inside the sandbox is strictly bounded by `wasmtime::ResourceLimiter`:
+- Default quota: **64 MB** per plugin instance.
+- Configurable via `--plugin-memory-limit-mb <MB>` on `lilia-daemon`.
+- Any attempt by the guest plugin to grow memory beyond this quota fails cleanly with a memory allocation error without starving the host daemon.
 
-- `1 << 0`: `kv`
-- `1 << 1`: `json`
-- `1 << 2`: `sql`
-- `1 << 3`: `document`
-- `1 << 4`: `graph`
-- `1 << 5`: `codec` (authenticated storage encryption at rest)
+### 3. CPU Fuel Metering (Anti-DoS)
+To prevent infinite loops, algorithmic denial of service, or rogue computation:
+- Default execution budget: **10,000,000 fuel units** per plugin invocation.
+- Configurable via `--plugin-fuel-limit <UNITS>` on `lilia-daemon`.
+- When fuel is exhausted, the call aborts immediately with a `LiliaError::Timeout` trap.
 
-## Trust & Signatures
+### 4. Instance Pooling & Fault Eviction
+Plugins are executed via a thread-safe `WasmInstancePool`:
+- Hot instances are reused across requests for near-zero startup overhead.
+- If a guest plugin instance panics, traps, or corrupts its internal state, it is immediately discarded and replaced with a fresh instance on the next request. Sibling connections and the daemon core remain fully unaffected.
 
-Official release packages are signed with the embedded LiliaDB official release key, which is
-trusted by default out of the box. Third-party keys live in the per-user trust store shared by
-the CLI and daemon:
+---
 
-- macOS: `~/Library/Application Support/LiliaDB/plugins/.trust`;
-- Linux: `$XDG_DATA_HOME/liliadb/plugins/.trust`, or `~/.local/share/liliadb/plugins/.trust`;
-- Windows: `%LOCALAPPDATA%\\LiliaDB\\plugins\\.trust`.
+## Daemon Security Policies
 
-`lilia plugin trust add <base64-public-key>` displays its SHA-256 fingerprint and requires an
-interactive confirmation; structured and non-interactive callers must pass `--yes`. Listing returns
-fingerprints only. Each key is staged privately and atomically published as `<fingerprint>.pub`, so
-an interrupted addition is ignored. Symlinked, malformed, public-on-Unix, and fingerprint-mismatched
-stores are rejected.
+The daemon provides flags to configure plugin runtime behavior and enforce security constraints:
 
-Production always installs and loads from this OS-specific root. Alternate roots and inline
-`--trusted-key` values require `--development`. Unsigned packages fail closed by default; the CLI
-requires both `--allow-unsigned --development`, and the daemon equivalently requires
-`--allow-unsigned-plugins --development`. Production launchers must never enable these pairs.
+```sh
+lilia-daemon \
+  --database ./app.lilia \
+  --plugin ./dist/my-wasm-plugin \
+  --require-sandboxed-plugins \
+  --plugin-memory-limit-mb 128 \
+  --plugin-fuel-limit 20000000
+```
 
-## CLI Packaging & Lifecycle Tooling
+- `--require-sandboxed-plugins`: **Fail-closed security policy**. Rejects any native dynamic library before `dlopen` is attempted. Only WebAssembly (`.wasm`) plugins are allowed to load.
+- `--plugin-memory-limit-mb <MB>`: Maximum linear memory permitted for sandboxed plugins (default: 64).
+- `--plugin-fuel-limit <UNITS>`: Execution fuel limit per invocation (default: 10,000,000).
 
-LiliaDB includes built-in commands for the entire plugin packaging and distribution lifecycle:
+---
+
+## Packaging & Distribution
+
+A LiliaDB plugin package contains:
+- `manifest.json`: Canonical JSON descriptor specifying name, version, ABI, capabilities, target, and SHA-256 digest.
+- `manifest.sig`: Ed25519 signature covering `manifest.json`.
+- `library`: The compiled binary (native dynamic library or `.wasm` module).
+
+### Supported Targets
+
+**Native:**
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+- `aarch64-unknown-linux-gnu`
+- `x86_64-unknown-linux-gnu`
+- `x86_64-pc-windows-msvc`
+
+**WebAssembly (Sandboxed):**
+- `wasm32-wasip1` (Recommended)
+- `wasm32-wasi`
+- `wasm32-unknown-none`
+
+### CLI Packaging Workflow
 
 ```sh
 # 1. Generate an Ed25519 signing keypair
 lilia plugin keygen --out-dir ./keys --name my-author
 
-# 2. Package a compiled dynamic library with canonical manifest.json
-lilia plugin pack ./target/release/libmy_plugin.dylib \
+# 2. Package a compiled WebAssembly module
+lilia plugin pack ./target/wasm32-wasip1/release/my_plugin.wasm \
   --name lilia-plugin-custom \
   --version 0.1.0 \
+  --target wasm32-wasip1 \
   --capability codec \
   --out-dir ./dist/lilia-plugin-custom-package
 
-# 3. Cryptographically sign the package with your private key (produces manifest.sig)
+# 3. Cryptographically sign the package with your private key
 lilia plugin sign ./dist/lilia-plugin-custom-package --key ./keys/my-author.key
 
 # 4. Verify package integrity and signature against trusted keys
 lilia plugin verify ./dist/lilia-plugin-custom-package
 
-# 5. Install into the local plugin store (use --force to overwrite an existing version)
-lilia plugin install ./dist/lilia-plugin-custom-package [--force]
+# 5. Install into the local plugin store
+lilia plugin install ./dist/lilia-plugin-custom-package
 
-# 6. List installed plugins (supports human ASCII table, JSON, and JSONL)
+# 6. List installed plugins (displays target and sandbox compatibility)
 lilia plugin list
-
-# 7. Remove an installed plugin
-lilia plugin remove lilia-plugin-custom-0.1.0-aarch64-apple-darwin
 ```
 
-## Plugin Resolution Priority
+---
 
-When launching the CLI or Daemon with `--plugin <ARG>`, LiliaDB resolves the plugin using a
-strict 3-step priority order:
+## Guest WebAssembly ABI Specification
 
-1. **Direct filesystem path**: If `<ARG>` exists on disk (as a `.dylib`/`.so`/`.dll` library file or
-   a directory containing `manifest.json` / `package/manifest.json`), it is loaded directly.
-2. **Exact plugin name**: If not found on disk, the installed plugin store is searched for an
-   exact match on package ID or plugin name (e.g. `lilia-plugin-codec`).
-3. **Short name or capability**: If still unresolved, the store is searched for a matching short
-   name (e.g. `codec`) or capability (e.g. `sql`).
+WebAssembly plugins export standard memory management functions along with their respective capability hooks:
 
+### Memory Allocation
+```c
+// Allocate memory inside guest linear memory
+void* lilia_alloc(uint32_t len);
+
+// Free previously allocated memory
+void lilia_dealloc(void* ptr, uint32_t len);
+```
+
+### Codec Plugin Exports (`--capability codec`)
+```c
+// Encrypt plaintext using key, returning 0 on success
+uint32_t codec_encode(
+    const uint8_t* key_ptr, uint32_t key_len,
+    const uint8_t* pt_ptr,  uint32_t pt_len,
+    uint8_t** out_ptr_buf,  uint32_t* out_len_buf
+);
+
+// Decrypt ciphertext using key, returning 0 on success
+uint32_t codec_decode(
+    const uint8_t* key_ptr, uint32_t key_len,
+    const uint8_t* ct_ptr,  uint32_t ct_len,
+    uint8_t** out_ptr_buf,  uint32_t* out_len_buf
+);
+```
+
+### SQL Plugin Exports (`--capability sql`)
+```c
+// Validate SQL query before execution, returning 0 on success
+uint32_t sql_validate_query(
+    const uint8_t* sql_ptr, uint32_t sql_len,
+    uint8_t** out_err_ptr_buf, uint32_t* out_err_len_buf
+);
+```
+
+---
+
+## Trust & Signatures
+
+Official release packages are signed with the embedded LiliaDB official release key. Third-party keys live in the per-user trust store:
+- macOS: `~/Library/Application Support/LiliaDB/plugins/.trust`
+- Linux: `$XDG_DATA_HOME/liliadb/plugins/.trust`, or `~/.local/share/liliadb/plugins/.trust`
+- Windows: `%LOCALAPPDATA%\LiliaDB\plugins\.trust`
+
+Manage trusted keys using:
+```sh
+lilia plugin trust add <base64-public-key> --yes
+lilia plugin trust list
+```
+
+Unsigned packages fail closed by default; the CLI requires `--allow-unsigned --development`, and the daemon equivalently requires `--allow-unsigned-plugins --development`.

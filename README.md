@@ -51,9 +51,9 @@ Install the official zero-dependency Python SDK:
 pip install liliadb
 ```
 
-### 3. JavaScript / TypeScript (Node.js, Bun, Deno)
-Install the universal Node-API & client SDK:
+### 3. JavaScript / TypeScript
 
+**Native Node-API (Node.js, Bun, Deno):**
 ```bash
 # Node.js (npm / pnpm / yarn)
 pnpm add @liliadb/node
@@ -63,6 +63,13 @@ bun add @liliadb/node
 
 # Deno
 deno add npm:@liliadb/node
+```
+
+**WebAssembly, Browsers (OPFS) & Edge Runtimes (Cloudflare Workers, Deno Deploy, Vercel Edge):**
+```bash
+pnpm add @liliadb/wasm
+# or
+npm install @liliadb/wasm
 ```
 
 ---
@@ -124,7 +131,27 @@ print(doc.value)
 # Key/Value store
 client.kv.set("configs", "theme", "dark")
 entry = client.kv.get("configs", "theme")
-print(entry.value)
+```
+
+### WebAssembly & OPFS Browser SDK (`@liliadb/wasm`)
+```typescript
+import { Database } from "@liliadb/wasm";
+
+// Opens persistent database in the browser's Origin Private File System (OPFS)
+const db = await Database.open({
+  path: "app.lilia",
+  vfs: "opfs", // automatically uses synchronous access handle pool (SAHPool)
+});
+
+// JSON documents, KV, Graph, FTS5, and SQL with 100% API parity
+await db.json.put("users", "usr_1", { name: "Ada Lovelace", role: "admin" });
+const user = await db.json.get("users", "usr_1");
+
+// BM25 full-text search
+await db.fts.index("articles", "art_1", "LiliaDB runs in browser OPFS and Edge workers.");
+const results = await db.fts.search("articles", "OPFS");
+
+await db.close();
 ```
 
 ---
@@ -233,6 +260,32 @@ Exposed Tools: `lilia_kv_get`, `lilia_kv_set`, `lilia_json_get`, `lilia_json_put
 
 ---
 
+### 6. WebAssembly Plugin Sandboxing (Wasmtime / WASI)
+Safely execute untrusted third-party plugins with out-of-bounds protection, fault isolation, and resource caps:
+- **Linear Memory Boundaries**: Guest plugins operate inside isolated 32-bit linear memory—panics or traps never crash the host daemon.
+- **Resource Limiter**: Memory bounded via `--plugin-memory-limit-mb` (default 64MB).
+- **CPU Fuel Metering**: Execution limits prevent runaway CPU loops via `--plugin-fuel-limit` (default 10,000,000 units).
+- **Strict Enforcement Policy**: `--require-sandboxed-plugins` strictly forbids native dynamic libraries and requires WASM modules.
+
+```sh
+lilia-daemon \
+  --database ./app.lilia \
+  --require-sandboxed-plugins \
+  --plugin ./dist/my-wasm-plugin
+```
+
+See [Plugin Architecture & Sandboxing Guide](docs/plugins.md).
+
+---
+
+### 7. WebAssembly & OPFS Storage for Browsers & Edge (`@liliadb/wasm`)
+Run identical LiliaDB storage engines across web browsers and serverless edge functions:
+- **Browser Origin Private File System (OPFS)**: High-speed zero-copy persistence using Synchronous Access Handle Pool (`opfs-sahpool`) without locking the browser's UI thread.
+- **Serverless Edge Runtimes**: Zero-native-dependency deployment on Cloudflare Workers, Deno Deploy, and Vercel Edge.
+- **100% Multimodel API Parity**: Identical `kv`, `json`, `graph`, `fts`, and `sql` surfaces across native Node-API and WebAssembly.
+
+---
+
 ## Performance Benchmarks
 
 Calibrated throughput and latency distributions measured on Apple M3 Max (14 cores, macOS 25.6, SQLite WAL `Durability::Durable`):
@@ -260,10 +313,12 @@ Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) an
   - `lilia-protocol`: Binary MessagePack IPC framing, handshake, and streaming request/response envelopes.
   - `lilia-plugin-api`: Plugin C-ABI, trust store, and ed25519 signature verification.
   - `lilia-graph`: Graph reachability and adjacency engine.
+  - `lilia-wasm`: WebAssembly core and OPFS/in-memory VFS bindings.
   - `lilia-node-native`: High-performance Node-API native bindings.
-- `plugins/`: Native plugins (`lilia-plugin-codec`, `lilia-plugin-sql`, `lilia-plugin-kv`, `lilia-plugin-json`).
+- `plugins/`: Native & WebAssembly plugins (`lilia-plugin-codec`, `lilia-plugin-sql`, `lilia-plugin-kv`, `lilia-plugin-json`).
 - `packages/`:
   - `@liliadb/node`: Universal Node.js, Bun, and Deno SDK (`packages/node`) and native prebuilds (`packages/node-*`).
+  - `@liliadb/wasm`: WebAssembly and OPFS browser / edge SDK (`packages/wasm`).
   - `liliadb`: Official zero-dependency Python SDK (`packages/python`).
 - `Formula/`: Homebrew packaging (`Formula/liliadb.rb`, `Formula/lilia.rb`).
 - `examples/`: Runnable examples for Node.js, Bun, Python, and native Rust.

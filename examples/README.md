@@ -181,5 +181,36 @@ Demonstrates:
 - Live state synchronization for autonomous AI agents and cache invalidation
 - Graceful subscription management with `.unsubscribe()`
 
+---
+
+## WebAssembly & OPFS Examples (`@liliadb/wasm`)
+
+Zero-native-dependency SDK running in browsers, dedicated Web Workers, and Edge runtimes (Cloudflare Workers, Deno Deploy, Vercel Edge).
+
+### 1. Browser & Origin Private File System (`examples/browser-opfs/`)
+Interactive Vite application demonstrating:
+- Persistent SQLite storage in the browser using OPFS (Origin Private File System) SAHPool
+- Transparent Web Worker bridge ensuring synchronous OPFS handles run without blocking the UI thread
+- Real-time full-text search with FTS5 highlighting
+- Declarative SQL queries over JSON document collections
+- Transparent AES-256-GCM encryption at rest
+
+**Run:**
+```sh
+cd examples/browser-opfs
+pnpm dev
+```
+
+### 2. Cloudflare Workers (`examples/cloudflare-worker/`)
+Edge Worker endpoint demonstrating:
+- In-memory LiliaDB instance created per request or cached across Worker warm invocations
+- Compiling WASM module at build time via Wrangler
+- Handling relational SQL queries and document storage at the Edge
+
+### 3. Deno & Deno Deploy (`examples/deno-edge/`)
+Deno script demonstrating:
+- Direct execution of `@liliadb/wasm` with TypeScript
+- Secondary index creation, lookups, and full-text search in Edge runtimes
+
 
 
