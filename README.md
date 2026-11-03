@@ -12,13 +12,15 @@ transaction boundary, with embedded Rust, Node.js, Bun, Deno, Python, CLI, and M
 
 ---
 
-## Status: v0.1.0-alpha.4
+## Status: v0.1.0-alpha.5
 
-This repository contains the `0.1.0-alpha.4` release featuring:
+This repository contains the `0.1.0-alpha.5` release featuring:
+- **WebAssembly & OPFS (Origin Private File System)**: `@liliadb/wasm` bringing 100% multimodel database capabilities directly into web browsers (with high-speed OPFS SAHPool zero-copy persistence and dedicated Web Worker bridge) and Edge runtimes (Cloudflare Workers, Deno Deploy, Vercel Edge).
+- **WebAssembly Plugin Sandboxing**: Hardened, fault-isolated Wasmtime/WASI plugin runtime with isolated 32-bit linear memory, CPU fuel metering (`--plugin-fuel-limit`), strict memory quotas (`--plugin-memory-limit-mb`), and fail-closed daemon security policy (`--require-sandboxed-plugins`).
 - **Global Package Manager Distribution**:
   - **Official Homebrew Tap** (`brew tap liliadb/tap && brew install lilia`) with daemon background service support (`brew services start liliadb`).
   - **Official PyPI Package** (`pip install liliadb`) with automated Trusted Publishing (OIDC) and zero external dependencies.
-  - **Universal npm SDK** (`@liliadb/node`) supporting Node.js (>=22), Bun (>=1.0), and Deno (>=2.0) with multi-platform prebuilds (`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`, `win32-x64`).
+  - **Universal npm SDKs**: `@liliadb/node` for Node.js, Bun, and Deno with multi-platform prebuilds, and `@liliadb/wasm` for browsers and edge runtimes.
 - **Real-Time CDC & Live Event Streaming**: Sub-millisecond reactive subscriptions via `db.watch()` in Node/Bun/Deno, `client.watch()` in Python, and Server-Sent Events (`/v1/watch` SSE) over HTTP.
 - **Graph & Full-Text Search (FTS5)**: Embedded graph traversal (`setNode`, `addEdge`, `neighbors`, `reachability`) and BM25-ranked full-text search with highlighting and snippets across all entry points.
 - **Encryption at Rest**: Native authenticated encryption (AES-256-GCM AEAD) via `plugins/lilia-plugin-codec`, ensuring zero plaintext is stored on disk or in WAL frames, with transparent decryption across KV, JSON, and SQL views.

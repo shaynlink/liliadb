@@ -4,6 +4,14 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 
 ---
 
+## [0.1.0-alpha.5] - 2026-11-03
+
+### Changed
+- Workspace version alignment alongside new `@liliadb/wasm` release.
+- Added support for WebAssembly sandboxed plugin verification in daemon client sessions.
+
+---
+
 ## [0.1.0-alpha.4] - 2026-10-29
 
 ### Changed

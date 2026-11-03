@@ -1,7 +1,7 @@
 class Lilia < Formula
   desc "Local-first multimodel embedded and daemon database (CLI, Daemon & MCP)"
   homepage "https://liliadb.org"
-  version "0.1.0-alpha.4"
+  version "0.1.0-alpha.5"
   license "Apache-2.0"
 
   on_macos do

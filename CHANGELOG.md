@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.0-alpha.5] - 2026-11-03
+
+### Added
+- **WebAssembly & Origin Private File System (OPFS) Support**:
+  - New Rust crate `crates/lilia-wasm` compiling the core storage engine and SQLite to `wasm32-unknown-unknown` with zero native dependencies.
+  - New universal npm package `@liliadb/wasm` (`packages/wasm`) providing 100% multimodel API parity with `@liliadb/node` (`kv`, `json`, `graph`, `fts`, `sql`, `batch`).
+  - Browser OPFS persistence via Synchronous Access Handle Pool (`opfs-sahpool`) VFS with transparent dedicated Web Worker bridge to prevent blocking the UI thread.
+  - Multi-runtime serverless Edge support for Cloudflare Workers, Deno Deploy, and Vercel Edge.
+  - Runnable end-to-end examples for Browser OPFS (Vite), Cloudflare Workers (Wrangler), and Deno (`examples/browser-opfs`, `examples/cloudflare-worker`, `examples/deno-edge`).
+  - Automated WASM build tooling (`tools/build-wasm.mjs`, `pnpm build:wasm`).
+
+- **WebAssembly Plugin Sandboxing (Wasmtime / WASI)**:
+  - Hardened execution runtime in `crates/lilia-plugin-api` powered by `wasmtime` 43.0 and `wasmtime-wasi` (preview 1).
+  - 32-bit isolated linear memory preventing out-of-bounds segfaults and host memory corruption.
+  - Linear memory quota enforcement via `wasmtime::ResourceLimiter` (`--plugin-memory-limit-mb`, default 64 MB).
+  - CPU fuel metering preventing runaway loops and algorithmic DoS (`--plugin-fuel-limit`, default 10,000,000 units).
+  - Thread-safe `WasmInstancePool` with fault-isolated instance eviction, ensuring guest traps or panics never crash the daemon or affect sibling requests.
+  - CLI packaging support for WASM targets (`wasm32-wasip1`, `wasm32-wasi`, `wasm32-unknown-none`) via `lilia plugin pack --target <TARGET>`.
+  - Fail-closed security policy flag on `lilia-daemon` (`--require-sandboxed-plugins`) rejecting native dynamic libraries before `dlopen` is attempted.
+  - Adversarial test suite (`crates/lilia-plugin-api/tests/wasm_sandboxing.rs`) verifying segfault resistance, panic isolation, fuel exhaustion traps, and memory quota enforcement.
+
+- **Documentation & Ecosystem**:
+  - Overhauled `docs/plugins.md` detailing native C-ABI vs. WebAssembly WASI sandbox comparison, daemon security flags, and guest ABI export specifications.
+  - Updated root `README.md` and `examples/README.md` with WebAssembly installation, quick start, and architectural guides.
+
+---
+
 ## [0.1.0-alpha.4] - 2026-10-29
 
 ### Fixed

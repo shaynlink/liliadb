@@ -4,6 +4,13 @@ All notable changes to the `liliadb` Python SDK will be documented in this file.
 
 ---
 
+## [0.1.0a5] - 2026-11-03
+
+### Changed
+- Workspace version alignment for v0.1.0-alpha.5.
+
+---
+
 ## [0.1.0a4] - 2026-10-29
 
 ### Changed
