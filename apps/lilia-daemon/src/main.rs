@@ -55,6 +55,15 @@ struct Arguments {
     /// Optional passphrase or key to enable AES-256-GCM encryption at rest.
     #[arg(long = "encryption-key")]
     encryption_key: Option<String>,
+    /// Require all loaded plugins to be executed in an isolated WebAssembly sandbox.
+    #[arg(long = "require-sandboxed-plugins")]
+    require_sandboxed_plugins: bool,
+    /// Maximum linear memory in megabytes for each WebAssembly plugin instance (default: 64).
+    #[arg(long = "plugin-memory-limit-mb", default_value = "64")]
+    plugin_memory_limit_mb: usize,
+    /// Maximum CPU fuel units per WebAssembly plugin invocation (default: 10,000,000).
+    #[arg(long = "plugin-fuel-limit", default_value = "10000000")]
+    plugin_fuel_limit: u64,
 }
 
 #[tokio::main]
@@ -215,7 +224,7 @@ fn load_plugins(arguments: &Arguments) -> anyhow::Result<Vec<lilia_plugin_api::L
                 &trusted_keys,
                 arguments.allow_unsigned_plugins,
             )?;
-            load_trusted_descriptor(&canonical_plugin, &manifest)
+            load_trusted_descriptor(&canonical_plugin, &manifest, arguments)
         })
         .collect()
 }
@@ -224,10 +233,38 @@ fn load_plugins(arguments: &Arguments) -> anyhow::Result<Vec<lilia_plugin_api::L
 fn load_trusted_descriptor(
     path: &Path,
     manifest: &lilia_plugin_api::PluginManifest,
+    arguments: &Arguments,
 ) -> anyhow::Result<lilia_plugin_api::LoadedPlugin> {
-    // Signature verification happens immediately before this call. Native plugins remain
-    // privileged code, as documented in SECURITY.md and docs/plugins.md.
-    unsafe { lilia_plugin_api::load_descriptor(path, manifest).map_err(Into::into) }
+    let is_wasm = lilia_plugin_api::is_wasm_target(&manifest.target)
+        || std::path::Path::new(&manifest.library)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("wasm"));
+    if arguments.require_sandboxed_plugins && !is_wasm {
+        anyhow::bail!(
+            "plugin `{}` is a native dynamic library; --require-sandboxed-plugins requires WebAssembly sandboxed plugins",
+            manifest.name
+        );
+    }
+    let wasm_config = lilia_plugin_api::WasmPluginConfig {
+        memory_limit_bytes: arguments.plugin_memory_limit_mb.saturating_mul(1024 * 1024),
+        fuel_limit: arguments.plugin_fuel_limit,
+    };
+    let plugin = unsafe {
+        lilia_plugin_api::load_descriptor_with_config(path, manifest, wasm_config)
+            .map_err(Into::<anyhow::Error>::into)?
+    };
+    if arguments.require_sandboxed_plugins && !plugin.is_sandboxed() {
+        anyhow::bail!(
+            "plugin `{}` is a native dynamic library; --require-sandboxed-plugins requires WebAssembly sandboxed plugins",
+            manifest.name
+        );
+    }
+    if plugin.is_sandboxed() {
+        info!(plugin = %plugin.name(), "loaded sandboxed WebAssembly plugin (Wasmtime)");
+    } else {
+        info!(plugin = %plugin.name(), "loaded native C-ABI plugin (libloading)");
+    }
+    Ok(plugin)
 }
 
 #[cfg(unix)]

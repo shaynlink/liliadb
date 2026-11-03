@@ -68,6 +68,7 @@ pub(crate) fn execute(command: PluginCommand, output: Output) -> anyhow::Result<
             version,
             capabilities,
             engine_requirement,
+            target,
             out_dir,
         } => {
             let default_dir = PathBuf::from(format!("./dist/{name}-{version}-package"));
@@ -77,6 +78,7 @@ pub(crate) fn execute(command: PluginCommand, output: Output) -> anyhow::Result<
                 version: version.clone(),
                 capabilities: capabilities.into_iter().map(Into::into).collect(),
                 engine_requirement,
+                target,
             };
             let packed = pack_plugin(&library, &target_out, &pack_opts)?;
             Ok(json!({
@@ -367,6 +369,7 @@ mod tests {
                 version: "1.0.0".into(),
                 capabilities: vec![CapabilityArg::Codec],
                 engine_requirement: None,
+                target: None,
                 out_dir: Some(pack_out.clone()),
             },
             Output::Json,

@@ -18,6 +18,9 @@ fn unsigned_plugins_require_explicit_development_mode() {
         http_port: None,
         http_bind: None,
         encryption_key: None,
+        require_sandboxed_plugins: false,
+        plugin_memory_limit_mb: 64,
+        plugin_fuel_limit: 10_000_000,
     };
     let error = load_plugins(&arguments).expect_err("unsigned mode must fail closed");
     assert!(error.to_string().contains("--development"));
@@ -37,6 +40,9 @@ fn production_rejects_plugin_root_and_inline_key_overrides() {
         http_port: None,
         http_bind: None,
         encryption_key: None,
+        require_sandboxed_plugins: false,
+        plugin_memory_limit_mb: 64,
+        plugin_fuel_limit: 10_000_000,
     };
     assert!(load_plugins(&arguments)
         .expect_err("root override must fail")
@@ -68,6 +74,9 @@ fn development_root_still_rejects_plugins_outside_it() {
         http_port: None,
         http_bind: None,
         encryption_key: None,
+        require_sandboxed_plugins: false,
+        plugin_memory_limit_mb: 64,
+        plugin_fuel_limit: 10_000_000,
     };
 
     assert!(load_plugins(&arguments)
@@ -728,4 +737,117 @@ async fn test_http_sse_watch_endpoint() {
         .to_str()
         .unwrap();
     assert!(content_type.contains("text/event-stream"));
+}
+
+#[test]
+fn require_sandboxed_plugins_accepts_wasm_plugin() {
+    const CODEC_WAT: &str = r#"
+(module
+  (memory (export "memory") 1)
+  (func (export "lilia_alloc") (param i32) (result i32) (i32.const 1024))
+  (func (export "lilia_dealloc") (param i32) (param i32))
+  (func (export "codec_encode") (param i32) (param i32) (param i32) (param i32) (param i32) (result i32) (i32.const 0))
+  (func (export "codec_decode") (param i32) (param i32) (param i32) (param i32) (param i32) (result i32) (i32.const 0))
+)
+"#;
+    let temp = tempfile::tempdir().unwrap();
+    let wasm_file = temp.path().join("plugin.wasm");
+    fs::write(&wasm_file, CODEC_WAT.as_bytes()).unwrap();
+
+    let pkg_out = temp.path().join("pkg");
+    let pack_opts = lilia_plugin_api::PackOptions {
+        name: "sandboxed-test".into(),
+        version: "1.0.0".into(),
+        capabilities: vec![lilia_plugin_api::Capability::Codec],
+        engine_requirement: None,
+        target: Some(lilia_plugin_api::WASM_TARGET_WASIP1.into()),
+    };
+    let packed = lilia_plugin_api::pack_plugin(&wasm_file, &pkg_out, &pack_opts).unwrap();
+
+    let sk = lilia_plugin_api::official_release_signing_key();
+    let vk = lilia_plugin_api::official_release_key();
+    lilia_plugin_api::sign_package(&packed, &sk).unwrap();
+
+    let root = temp.path().join("plugin_root");
+    let installed =
+        lilia_plugin_api::install_verified(&packed, &root, &[vk], false, false).unwrap();
+
+    let arguments = Arguments {
+        database: temp.path().join("db.lilia"),
+        endpoint: temp.path().join("ipc.sock"),
+        token_file: temp.path().join("token"),
+        plugins: vec![installed],
+        trusted_keys: Vec::new(),
+        plugin_root: Some(root),
+        allow_unsigned_plugins: true,
+        development: true,
+        http_port: None,
+        http_bind: None,
+        encryption_key: None,
+        require_sandboxed_plugins: true,
+        plugin_memory_limit_mb: 64,
+        plugin_fuel_limit: 10_000_000,
+    };
+
+    let plugins =
+        load_plugins(&arguments).expect("wasm plugin must be accepted when sandboxing required");
+    assert_eq!(plugins.len(), 1);
+    assert!(plugins[0].is_sandboxed());
+    assert_eq!(plugins[0].name(), "sandboxed-test");
+}
+
+#[test]
+fn require_sandboxed_plugins_rejects_native_plugin() {
+    let temp = tempfile::tempdir().unwrap();
+    let lib_file = temp.path().join(if cfg!(target_os = "windows") {
+        "plugin.dll"
+    } else if cfg!(target_os = "macos") {
+        "plugin.dylib"
+    } else {
+        "plugin.so"
+    });
+    fs::write(&lib_file, b"fake native shared library content").unwrap();
+
+    let pkg_out = temp.path().join("pkg");
+    let pack_opts = lilia_plugin_api::PackOptions {
+        name: "native-test".into(),
+        version: "1.0.0".into(),
+        capabilities: vec![lilia_plugin_api::Capability::Codec],
+        engine_requirement: None,
+        target: Some(lilia_plugin_api::host_target().into()),
+    };
+    let packed = lilia_plugin_api::pack_plugin(&lib_file, &pkg_out, &pack_opts).unwrap();
+
+    let sk = lilia_plugin_api::official_release_signing_key();
+    let vk = lilia_plugin_api::official_release_key();
+    lilia_plugin_api::sign_package(&packed, &sk).unwrap();
+
+    let root = temp.path().join("plugin_root");
+    let installed =
+        lilia_plugin_api::install_verified(&packed, &root, &[vk], false, false).unwrap();
+
+    let arguments = Arguments {
+        database: temp.path().join("db.lilia"),
+        endpoint: temp.path().join("ipc.sock"),
+        token_file: temp.path().join("token"),
+        plugins: vec![installed],
+        trusted_keys: Vec::new(),
+        plugin_root: Some(root),
+        allow_unsigned_plugins: true,
+        development: true,
+        http_port: None,
+        http_bind: None,
+        encryption_key: None,
+        require_sandboxed_plugins: true,
+        plugin_memory_limit_mb: 64,
+        plugin_fuel_limit: 10_000_000,
+    };
+
+    let err = load_plugins(&arguments)
+        .expect_err("native plugin must be rejected when sandboxing required");
+    assert!(
+        err.to_string()
+            .contains("requires WebAssembly sandboxed plugins"),
+        "error should reject native plugin: {err}"
+    );
 }

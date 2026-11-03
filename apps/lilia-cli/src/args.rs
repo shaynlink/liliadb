@@ -285,6 +285,8 @@ pub(crate) enum PluginCommand {
         #[arg(long)]
         engine_requirement: Option<String>,
         #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
         out_dir: Option<PathBuf>,
     },
     Sign {
