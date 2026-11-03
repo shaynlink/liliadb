@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
@@ -84,7 +85,7 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
 
 pub(crate) fn is_uri_or_memory(path: &Path) -> bool {
     let s = path.to_str().unwrap_or("");
-    s == ":memory:" || s.starts_with("file:")
+    s == ":memory:" || s.starts_with("file:") || s.contains("?vfs=")
 }
 
 pub(crate) fn prepare_parent(path: &Path) -> Result<()> {
@@ -178,9 +179,16 @@ pub(crate) fn store_version(version: u64) -> Result<i64> {
 }
 
 pub(crate) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-        })
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| {
+                i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+            })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now() as i64
+    }
 }

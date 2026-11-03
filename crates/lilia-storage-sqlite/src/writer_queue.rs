@@ -7,6 +7,7 @@ use lilia_core::{ErrorCode, LiliaError, Result};
 /// Bounded FIFO admission; capacity counts waiting writers, not the active writer.
 #[derive(Debug)]
 pub(crate) struct WriterQueue {
+    #[allow(dead_code)]
     capacity: usize,
     state: Mutex<State>,
     changed: Condvar,
@@ -15,7 +16,9 @@ pub(crate) struct WriterQueue {
 #[derive(Debug, Default)]
 struct State {
     active: bool,
+    #[allow(dead_code)]
     next: u64,
+    #[allow(dead_code)]
     waiting: VecDeque<u64>,
 }
 
@@ -44,6 +47,21 @@ impl WriterQueue {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn acquire(&self, _deadline: Option<Instant>) -> Result<Permit<'_>> {
+        let mut state = self.state.lock().map_err(|_| poisoned())?;
+        if state.active {
+            return Err(LiliaError::new(
+                ErrorCode::Busy,
+                "concurrent transaction already in progress",
+                true,
+            ));
+        }
+        state.active = true;
+        Ok(Permit(self))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn acquire(&self, deadline: Option<Instant>) -> Result<Permit<'_>> {
         let mut state = self.state.lock().map_err(|_| poisoned())?;
         if expired(deadline) {
@@ -102,10 +120,12 @@ impl Drop for Permit<'_> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn expired(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn timeout() -> LiliaError {
     LiliaError::new(ErrorCode::Timeout, "request expired in writer queue", true)
 }

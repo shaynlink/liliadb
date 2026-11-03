@@ -25,5 +25,10 @@ uuid.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_v2 = { package = "getrandom", version = "0.2", features = ["js"] }
+uuid = { workspace = true, features = ["js"] }
+
 [lints]
 workspace = true

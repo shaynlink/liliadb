@@ -173,12 +173,14 @@ fn configure_connection(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 struct Watchdog {
     stop_tx: Option<std::sync::mpsc::SyncSender<()>>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Watchdog {
     fn arm(interrupt: rusqlite::InterruptHandle, duration: Duration) -> Self {
         let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel::<()>(1);
@@ -200,12 +202,25 @@ impl Watchdog {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Watchdog {
     fn drop(&mut self) {
         drop(self.stop_tx.take());
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug)]
+struct Watchdog;
+
+#[cfg(target_arch = "wasm32")]
+impl Watchdog {
+    #[allow(clippy::unnecessary_wraps)]
+    fn arm(_interrupt: rusqlite::InterruptHandle, _duration: Duration) -> Self {
+        Self
     }
 }
 
@@ -238,7 +253,11 @@ impl Database {
         // Disable SQLite's commit-path checkpoint in favor of background work.
         connection.pragma_update(None, "wal_autocheckpoint", 0)?;
         migrate(&connection)?;
-        let reader_count = options.read_pool_size.max(1);
+        let reader_count = if cfg!(target_arch = "wasm32") {
+            0
+        } else {
+            options.read_pool_size.max(1)
+        };
         let mut readers = Vec::with_capacity(reader_count);
         for _ in 0..reader_count {
             let reader = open_connection(&options.path)?;
@@ -323,72 +342,85 @@ impl Database {
     }
 
     pub fn backup(&self, destination: impl AsRef<Path>) -> Result<()> {
-        // Admission covers validation, snapshotting and publication, not only SQL.
-        let source = self.lock_writer()?;
-        let destination = destination.as_ref();
-        if destination == self.path {
-            return Err(LiliaError::new(
-                ErrorCode::InvalidInput,
-                "backup destination must differ from the database path",
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = destination;
+            Err(LiliaError::new(
+                ErrorCode::Storage,
+                "backup is not supported on WebAssembly",
                 false,
-            ));
+            ))
         }
-        // Refuse every existing entry, including dangling symlinks and source aliases.
-        // Publication below also enforces this atomically against concurrent creators.
-        match std::fs::symlink_metadata(destination) {
-            Ok(_) => {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Admission covers validation, snapshotting and publication, not only SQL.
+            let source = self.lock_writer()?;
+            let destination = destination.as_ref();
+            if destination == self.path {
                 return Err(LiliaError::new(
                     ErrorCode::InvalidInput,
-                    "backup destination already exists",
+                    "backup destination must differ from the database path",
                     false,
-                ))
+                ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(backup_io(error)),
+            // Refuse every existing entry, including dangling symlinks and source aliases.
+            // Publication below also enforces this atomically against concurrent creators.
+            match std::fs::symlink_metadata(destination) {
+                Ok(_) => {
+                    return Err(LiliaError::new(
+                        ErrorCode::InvalidInput,
+                        "backup destination already exists",
+                        false,
+                    ))
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(backup_io(error)),
+            }
+            prepare_parent(destination)?;
+            let parent = destination
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            // A private sibling directory also protects SQLite's temporary sidecars.
+            let staging = tempfile::Builder::new()
+                .prefix(".lilia-backup-")
+                .tempdir_in(parent)
+                .map_err(backup_io)?;
+            #[cfg(windows)]
+            lilia_core::windows_security::secure_directory(staging.path()).map_err(backup_io)?;
+            let temporary = staging.path().join("snapshot.lilia");
+            let mut output = Connection::open(&temporary)?;
+            output.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+            output.pragma_update(None, "temp_store", "MEMORY")?;
+            secure_database_file(&temporary)?;
+            let backup = rusqlite::backup::Backup::new(&source, &mut output)?;
+            backup.run_to_completion(128, std::time::Duration::from_millis(10), None)?;
+            drop(backup);
+            let integrity: String =
+                output.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            output
+                .close()
+                .map_err(|(_, error)| LiliaError::from(error))?;
+            if integrity != "ok" {
+                return Err(LiliaError::new(
+                    ErrorCode::Corrupt,
+                    "backup integrity check failed",
+                    false,
+                ));
+            }
+            // Windows FlushFileBuffers requires a handle opened with write access.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&temporary)
+                .map_err(backup_io)?
+                .sync_all()
+                .map_err(backup_io)?;
+            // Unlike rename on Unix, hard_link never replaces an existing destination.
+            // Both names are on the same filesystem; only a complete snapshot becomes visible.
+            std::fs::hard_link(&temporary, destination).map_err(backup_io)?;
+            lilia_core::sync_directory(parent).map_err(backup_io)?;
+            Ok(())
         }
-        prepare_parent(destination)?;
-        let parent = destination
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        // A private sibling directory also protects SQLite's temporary sidecars.
-        let staging = tempfile::Builder::new()
-            .prefix(".lilia-backup-")
-            .tempdir_in(parent)
-            .map_err(backup_io)?;
-        #[cfg(windows)]
-        lilia_core::windows_security::secure_directory(staging.path()).map_err(backup_io)?;
-        let temporary = staging.path().join("snapshot.lilia");
-        let mut output = Connection::open(&temporary)?;
-        output.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
-        output.pragma_update(None, "temp_store", "MEMORY")?;
-        secure_database_file(&temporary)?;
-        let backup = rusqlite::backup::Backup::new(&source, &mut output)?;
-        backup.run_to_completion(128, std::time::Duration::from_millis(10), None)?;
-        drop(backup);
-        let integrity: String = output.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        output
-            .close()
-            .map_err(|(_, error)| LiliaError::from(error))?;
-        if integrity != "ok" {
-            return Err(LiliaError::new(
-                ErrorCode::Corrupt,
-                "backup integrity check failed",
-                false,
-            ));
-        }
-        // Windows FlushFileBuffers requires a handle opened with write access.
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&temporary)
-            .map_err(backup_io)?
-            .sync_all()
-            .map_err(backup_io)?;
-        // Unlike rename on Unix, hard_link never replaces an existing destination.
-        // Both names are on the same filesystem; only a complete snapshot becomes visible.
-        std::fs::hard_link(&temporary, destination).map_err(backup_io)?;
-        lilia_core::sync_directory(parent).map_err(backup_io)?;
-        Ok(())
     }
 
     pub fn batch(&self, operations: &[BatchOperation]) -> Result<Vec<MutationResult>> {
@@ -563,6 +595,9 @@ impl Database {
     }
 
     pub(crate) fn read_lock(&self) -> Result<WriterGuard<'_>> {
+        if self.resources.readers.is_empty() {
+            return self.writer_lock(None);
+        }
         let operation = self.lifecycle.enter()?;
         let index = self.resources.next_reader.fetch_add(1, Ordering::Relaxed)
             % self.resources.readers.len();
@@ -625,6 +660,7 @@ mod tests;
 mod recovery_tests;
 
 // Match Result::map_err's owned error callback without repeating conversion closures.
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::needless_pass_by_value)]
 fn backup_io(error: std::io::Error) -> LiliaError {
     LiliaError::new(ErrorCode::Io, error.to_string(), false)

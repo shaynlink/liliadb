@@ -1,13 +1,21 @@
 use std::path::Path;
-use std::sync::{mpsc, Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::{self, JoinHandle};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 
-use lilia_core::{ErrorCode, LiliaError, Result};
+#[cfg(not(target_arch = "wasm32"))]
+use lilia_core::LiliaError;
+use lilia_core::{ErrorCode, Result};
+#[cfg(not(target_arch = "wasm32"))]
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::CheckpointPolicy;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::storage::is_uri_or_memory;
 
 /// Background attempts only; explicit checkpoints are not included.
@@ -20,6 +28,7 @@ pub struct CheckpointStats {
     pub last_error: Option<ErrorCode>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub(crate) struct Checkpointer {
     wake: Option<mpsc::SyncSender<()>>,
@@ -27,6 +36,13 @@ pub(crate) struct Checkpointer {
     stats: Arc<Mutex<CheckpointStats>>,
 }
 
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug)]
+pub(crate) struct Checkpointer {
+    stats: Arc<Mutex<CheckpointStats>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl Checkpointer {
     pub(crate) fn start(path: &Path, policy: CheckpointPolicy, synchronous: &str) -> Result<Self> {
         let connection = if is_uri_or_memory(path) {
@@ -82,6 +98,29 @@ impl Checkpointer {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+impl Checkpointer {
+    pub(crate) fn start(
+        _path: &Path,
+        _policy: CheckpointPolicy,
+        _synchronous: &str,
+    ) -> Result<Self> {
+        Ok(Self {
+            stats: Arc::new(Mutex::new(CheckpointStats::default())),
+        })
+    }
+
+    pub(crate) fn notify(&self) {}
+
+    pub(crate) fn stats(&self) -> CheckpointStats {
+        *self
+            .stats
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Checkpointer {
     fn drop(&mut self) {
         // Disconnect wakes recv_timeout even for a very long configured interval.
@@ -92,6 +131,7 @@ impl Drop for Checkpointer {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run(
     connection: &Connection,
     page_size: u64,
@@ -140,6 +180,7 @@ fn run(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn maybe_checkpoint(
     connection: &Connection,
     page_size: u64,
@@ -156,6 +197,7 @@ fn maybe_checkpoint(
     state(connection, "PRAGMA wal_checkpoint(PASSIVE)").map(Some)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn state(connection: &Connection, pragma: &str) -> rusqlite::Result<(i64, i64, i64)> {
     connection.query_row(pragma, [], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))

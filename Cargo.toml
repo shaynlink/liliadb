@@ -10,6 +10,7 @@ members = [
   "crates/lilia-plugin-api",
   "crates/lilia-protocol",
   "crates/lilia-storage-sqlite",
+  "crates/lilia-wasm",
   "plugins/lilia-plugin-json",
   "plugins/lilia-plugin-kv",
   "plugins/lilia-plugin-codec",

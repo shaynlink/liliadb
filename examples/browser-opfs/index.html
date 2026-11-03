@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LiliaDB - Browser OPFS Demo</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        max-width: 800px;
+        margin: 40px auto;
+        padding: 0 20px;
+        line-height: 1.5;
+        background: #0f172a;
+        color: #f8fafc;
+      }
+      h1, h2 { color: #38bdf8; }
+      .card {
+        background: #1e293b;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+        border: 1px solid #334155;
+      }
+      button {
+        background: #0284c7;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-right: 8px;
+        margin-bottom: 8px;
+      }
+      button:hover { background: #0369a1; }
+      button:disabled { background: #475569; cursor: not-allowed; }
+      input, textarea {
+        background: #0f172a;
+        border: 1px solid #475569;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 12px;
+      }
+      pre {
+        background: #020617;
+        padding: 12px;
+        border-radius: 4px;
+        overflow-x: auto;
+        color: #a5f3fc;
+        font-size: 13px;
+        border: 1px solid #1e293b;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+        background: #065f46;
+        color: #6ee7b7;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🌸 LiliaDB in Browser (WASM + OPFS)</h1>
+    <p>Persistent local-first multimodel database running entirely client-side via WebAssembly and Origin Private File System (OPFS).</p>
+
+    <div class="card">
+      <h2>1. Database Connection</h2>
+      <p>Status: <span id="db-status" class="badge">Not Connected</span></p>
+      <button id="btn-open-opfs">Open OPFS Database (Persistent)</button>
+      <button id="btn-open-memory">Open In-Memory Database</button>
+      <button id="btn-close" disabled>Close Database</button>
+    </div>
+
+    <div class="card">
+      <h2>2. JSON Document Store & FTS5 Search</h2>
+      <input id="doc-title" placeholder="Document Title (e.g. Distributed Consensus)" />
+      <textarea id="doc-content" rows="3" placeholder="Document Content for FTS5 full-text indexing..."></textarea>
+      <button id="btn-add-doc" disabled>Add Document & Index</button>
+      <input id="search-query" placeholder="Search query (e.g. Consensus)" style="margin-top: 10px;" />
+      <button id="btn-search" disabled>Search FTS5</button>
+    </div>
+
+    <div class="card">
+      <h2>3. SQL Query Engine</h2>
+      <textarea id="sql-input" rows="2">SELECT id, json_extract(value, '$.title') as title FROM _lilia_json</textarea>
+      <button id="btn-run-sql" disabled>Execute SQL Query</button>
+    </div>
+
+    <div class="card">
+      <h2>Output Console</h2>
+      <pre id="output">Click "Open OPFS Database" to get started.</pre>
+    </div>
+
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

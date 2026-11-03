@@ -15,6 +15,7 @@
     "bench:compare": "node tools/benchmarks/run_comparative_suite.mjs --workload all",
     "graph": "nx graph",
     "prebuild": "node ./tools/build-prebuilds.mjs",
+    "build:wasm": "node ./tools/build-wasm.mjs",
     "lilia": "cargo run -p lilia-cli --"
   },
   "devDependencies": {

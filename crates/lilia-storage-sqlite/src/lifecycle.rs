@@ -1,5 +1,7 @@
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 use lilia_core::{ErrorCode, LiliaError, Result};
 
@@ -33,6 +35,27 @@ impl Lifecycle {
         Ok(Operation(self))
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn close(
+        self: &Arc<Self>,
+        _timeout: Duration,
+        cleanup: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let mut state = self.state.lock().map_err(|_| poisoned())?;
+        state.closing = true;
+        if state.active != 0 {
+            return Err(LiliaError::new(
+                ErrorCode::Busy,
+                "database has active operations",
+                true,
+            ));
+        }
+        let result = cleanup();
+        state.result = Some(result.clone());
+        result
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn close(
         self: &Arc<Self>,
         timeout: Duration,

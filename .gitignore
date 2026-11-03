@@ -16,8 +16,9 @@ release/
 *.asc
 !release-signing-public-key.asc
 
-# Node-API native prebuild binaries
+# Node-API native prebuild binaries and WebAssembly artifacts
 *.node
+packages/wasm/pkg/
 
 # Release and package distributions
 *.tgz
