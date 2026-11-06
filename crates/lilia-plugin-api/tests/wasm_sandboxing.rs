@@ -200,7 +200,8 @@ fn wasm_plugin_codec_end_to_end_sqlite_storage() {
     let plaintext = b"Hello, sandboxed WebAssembly storage!";
     let encoded = codec.encode(plaintext).expect("encode");
     assert_ne!(
-        encoded.as_ref(), plaintext,
+        encoded.as_ref(),
+        plaintext,
         "encoded data must differ from plaintext"
     );
     let decoded = codec.decode(&encoded).expect("decode");
