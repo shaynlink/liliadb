@@ -38,24 +38,30 @@ jobs:
             package: node-linux-arm64-gnu
             artifact: linux-arm64-gnu
     runs-on: ${{ matrix.runner }}
-    if: inputs.target == 'all' || inputs.target == matrix.target
     steps:
       - uses: actions/checkout@v4
+        if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
       - uses: dtolnay/rust-toolchain@1.91.1
+        if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
         with:
           targets: ${{ matrix.target }}
       - uses: pnpm/action-setup@v4
+        if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
         with:
           version: 11.5.2
       - uses: actions/setup-node@v4
+        if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
       - name: Build and stage prebuild
+        if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
         shell: bash
         run: node tools/build-prebuilds.mjs --target "${{ matrix.target }}" --pack --dest release
       - uses: actions/upload-artifact@v4
+        if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
         with:
           name: prebuild-${{ matrix.artifact }}
           path: |
