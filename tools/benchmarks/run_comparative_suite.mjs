@@ -56,15 +56,9 @@ async function main() {
     (existsSync(resolve(os.homedir(), ".deno/bin/deno"))
       ? resolve(os.homedir(), ".deno/bin/deno")
       : "deno");
-  const pyVenv =
-    process.env.PYTHON_VENV ||
-    (existsSync(resolve(process.cwd(), "tools/benchmarks/.venv/bin/python3"))
-      ? resolve(process.cwd(), "tools/benchmarks/.venv/bin/python3")
-      : "python3");
-
   console.log("\n" + "=".repeat(120));
   console.log("  LILIADB vs NATIVE SQLITE & ECOSYSTEM BENCHMARK SUITE");
-  console.log("  Comparing: LiliaDB (Rust/Node/IPC/HTTP) vs SQLite Native (C/Rust) vs Node/Bun/Deno vs Python");
+  console.log("  Comparing: LiliaDB (Rust/Node/IPC/HTTP) vs SQLite Native (C/Rust) vs Node/Bun/Deno");
   console.log("=".repeat(120));
   console.log(`  OS:         ${os.type()} ${os.release()} (${os.arch()})`);
   console.log(`  CPU:        ${cpuModel}`);
@@ -221,45 +215,9 @@ async function main() {
       console.log(`FAILED: ${err.message}`);
     }
 
-    // 6. Python (sqlite3 stdlib)
-    process.stdout.write("  [6/10] Python (sqlite3 stdlib)... ");
-    try {
-      const out = await runSubprocess("python3", [
-        "tools/benchmarks/bench_python_sqlite.py",
-        "--count", String(s.count),
-        "--batch-size", String(s.batchSize),
-        "--durability", options.durability,
-        "--json",
-      ]);
-      const res = JSON.parse(out);
-      res.category = "Python Ecosystem";
-      allResults.push(res);
-      console.log(`DONE: ${Math.round(res.throughput_ops_sec).toLocaleString()} op/s (p50: ${res.p50_us.toFixed(2)} µs)`);
-    } catch (err) {
-      console.log(`FAILED: ${err.message}`);
-    }
-
-    // 7. Python (apsw)
-    process.stdout.write("  [7/10] Python (apsw fast C-wrapper)... ");
-    try {
-      const out = await runSubprocess(pyVenv, [
-        "tools/benchmarks/bench_python_apsw.py",
-        "--count", String(s.count),
-        "--batch-size", String(s.batchSize),
-        "--durability", options.durability,
-        "--json",
-      ]);
-      const res = JSON.parse(out);
-      res.category = "Python Ecosystem";
-      allResults.push(res);
-      console.log(`DONE: ${Math.round(res.throughput_ops_sec).toLocaleString()} op/s (p50: ${res.p50_us.toFixed(2)} µs)`);
-    } catch (err) {
-      console.log(`FAILED: ${err.message}`);
-    }
-
-    // 8. LiliaDB Node-API Embedded (cleartext & aes)
+    // 6. LiliaDB Node-API Embedded (cleartext & aes)
     for (const codec of ["cleartext", "aes-256-gcm"]) {
-      process.stdout.write(`  [8/10] LiliaDB Node-API Embedded (${codec})... `);
+      process.stdout.write(`  [6/8] LiliaDB Node-API Embedded (${codec})... `);
       try {
         const res = await runNodeEmbeddedBenchmark(s.count, s.batchSize, codec);
         allResults.push({
@@ -286,9 +244,9 @@ async function main() {
       }
     }
 
-    // 9. LiliaDB Daemon IPC (cleartext & aes)
+    // 7. LiliaDB Daemon IPC (cleartext & aes)
     for (const codec of ["cleartext", "aes-256-gcm"]) {
-      process.stdout.write(`  [9/10] LiliaDB Daemon via IPC (${codec})... `);
+      process.stdout.write(`  [7/8] LiliaDB Daemon via IPC (${codec})... `);
       try {
         const res = await runDaemonIpcBenchmark(s.count, s.batchSize, codec);
         allResults.push({
@@ -315,9 +273,9 @@ async function main() {
       }
     }
 
-    // 10. LiliaDB Daemon HTTP Loopback (cleartext & aes)
+    // 8. LiliaDB Daemon HTTP Loopback (cleartext & aes)
     for (const codec of ["cleartext", "aes-256-gcm"]) {
-      process.stdout.write(`  [10/10] LiliaDB Daemon via HTTP (${codec})... `);
+      process.stdout.write(`  [8/8] LiliaDB Daemon via HTTP (${codec})... `);
       try {
         const res = await runDaemonHttpBenchmark(s.count, s.batchSize, codec);
         allResults.push({
@@ -383,7 +341,6 @@ async function main() {
     node: process.version,
     bun: "1.3.7",
     deno: "2.9.8",
-    python: "3.9.6",
     sqliteVersion: "3.51",
     durability: options.durability,
   });
@@ -423,7 +380,7 @@ function generateComparativeMarkdown(results, env) {
 **Date**: ${env.date}  
 **Plateforme**: ${env.os} (${env.arch})  
 **Processeur**: ${env.cpu}  
-**Runtimes**: Node.js ${env.node} | Bun ${env.bun} | Deno ${env.deno} | Python ${env.python}  
+**Runtimes**: Node.js ${env.node} | Bun ${env.bun} | Deno ${env.deno}  
 **Moteur SQLite**: SQLite ${env.sqliteVersion} (WAL, Durabilité: \`${env.durability.toUpperCase()}\`)  
 
 ---
@@ -448,10 +405,7 @@ Ce benchmark mesure les performances réelles d'écriture et d'ingestion sous de
    - \`bun:sqlite\` : implémentation native C intégrée ultra-optimisée de Bun.
 5. **Écosystème Deno** :
    - \`jsr:@db/sqlite\` : driver officiel moderne FFI de Deno.
-6. **Écosystème Python** :
-   - \`sqlite3\` : bibliothèque standard Python 3.9+.
-   - \`apsw\` (Another Python SQLite Wrapper) : extension C SQLite la plus performante de Python.
-7. **LiliaDB Out-of-Process** :
+6. **LiliaDB Out-of-Process** :
    - \`LiliaDB Daemon IPC\` (Unix Domain Socket).
    - \`LiliaDB Daemon HTTP Gateway\` (REST Loopback).
 
@@ -501,11 +455,7 @@ Ce benchmark mesure les performances réelles d'écriture et d'ingestion sous de
 - **Deno**:
   - \`jsr:@db/sqlite\` (basé sur FFI direct) atteint des performances exceptionnelles comparables à \`better-sqlite3\` et très proches du C pur.
 
-### 3. Écosystème Python
-- **Python standard (\`sqlite3\`)** : les wrappers PyObject et l'isolation transactionnelle ajoutent un surcoût modéré, le stabilisant autour de 5 000 - 6 000 ops/s en single-op.
-- **Python APSW (\`apsw\`)** : extension C ultra-fine sans abstraction superflue, APSW talonne le SQLite natif C avec des pointes à >13 000 ops/s en single-op et >300 000 ops/s en batch !
-
-### 4. Embedded vs Architecture Client-Serveur (Daemon IPC / HTTP)
+### 3. Embedded vs Architecture Client-Serveur (Daemon IPC / HTTP)
 - Le **Daemon LiliaDB IPC** (MessagePack via Unix Domain Socket) surpasse même certains wrappers haut niveau grâce au traitement asynchrone streamé, atteignant >5 000 ops/s en single-op et >160 000 ops/s en batch.
 - Le **Daemon LiliaDB HTTP Loopback** permet un accès universel depuis n'importe quel langage avec une pénalité de latence minime (<100 µs de surcoût par requête).
 
