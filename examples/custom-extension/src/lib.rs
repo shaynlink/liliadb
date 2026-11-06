@@ -1,7 +1,7 @@
-#![allow(unsafe_code)]
+#![allow(unsafe_code, clippy::unnecessary_literal_bound, clippy::borrow_as_ptr)]
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use lilia_plugin_api::{Capability, CodecDescriptorV1, PluginDescriptorV1};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 static PLUGIN_NAME: &[u8] = b"lilia-custom-codec\0";
 static CODEC_NAME: &[u8] = b"xor-rotate-codec\0";
@@ -117,6 +117,7 @@ pub unsafe extern "C" fn codec_decode(
 // -------------------------------------------------------------------------
 
 #[no_mangle]
+#[allow(clippy::missing_panics_doc, clippy::cast_sign_loss)]
 pub extern "C" fn lilia_alloc(size: i32) -> i32 {
     if size <= 0 {
         return 0;
@@ -127,6 +128,7 @@ pub extern "C" fn lilia_alloc(size: i32) -> i32 {
 }
 
 #[no_mangle]
+#[allow(clippy::missing_panics_doc, clippy::cast_sign_loss)]
 pub extern "C" fn lilia_dealloc(ptr: i32, size: i32) {
     if ptr <= 0 || size <= 0 {
         return;
@@ -230,7 +232,10 @@ mod tests {
             fn name(&self) -> &str {
                 "xor-rotate-codec"
             }
-            fn encode<'a>(&self, plaintext: &'a [u8]) -> lilia_core::Result<std::borrow::Cow<'a, [u8]>> {
+            fn encode<'a>(
+                &self,
+                plaintext: &'a [u8],
+            ) -> lilia_core::Result<std::borrow::Cow<'a, [u8]>> {
                 let mut out = vec![0u8; plaintext.len()];
                 let mut out_len = 0;
                 let res = unsafe {

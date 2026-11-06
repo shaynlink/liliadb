@@ -289,7 +289,8 @@ impl NativeDatabase {
         after: Option<String>,
         limit: u32,
     ) -> Result<String> {
-        let entries = self.inner
+        let entries = self
+            .inner
             .json_scan(&space, after.as_deref(), limit)
             .map_err(napi_error)?;
         serde_json::to_string(&entries)

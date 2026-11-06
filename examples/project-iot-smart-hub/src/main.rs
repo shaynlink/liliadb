@@ -1,3 +1,13 @@
+#![allow(
+    clippy::unreadable_literal,
+    clippy::struct_field_names,
+    clippy::doc_markdown,
+    clippy::get_first,
+    clippy::redundant_closure_for_method_calls,
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation
+)]
+
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -72,7 +82,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     // A. Heartbeat registration with TTL (detecting alive vs dead nodes)
     let esp32_hb_key = b"heartbeat:mcu_esp32_climate".to_vec();
-    let esp32_hb_val = json!({"status": "ALIVE", "wifi_rssi_dbm": -58}).to_string().into_bytes();
+    let esp32_hb_val = json!({"status": "ALIVE", "wifi_rssi_dbm": -58})
+        .to_string()
+        .into_bytes();
     // 2500 ms TTL
     db.batch(&[
         BatchOperation::KvSet {
@@ -85,7 +97,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         BatchOperation::KvSet {
             namespace: "heartbeats".into(),
             key: b"heartbeat:mcu_arduino_relay".to_vec(),
-            value: json!({"status": "ALIVE", "uart_baud": 115200}).to_string().into_bytes(),
+            value: json!({"status": "ALIVE", "uart_baud": 115200})
+                .to_string()
+                .into_bytes(),
             if_version: None,
             expires_at_ms: Some(now_ms + 2500),
         },
@@ -143,7 +157,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let is_healthy = db.integrity_check()?;
     println!(
         "  Storage integrity status: {}",
-        if is_healthy { "HEALTHY (WAL OK)" } else { "CORRUPT" }
+        if is_healthy {
+            "HEALTHY (WAL OK)"
+        } else {
+            "CORRUPT"
+        }
     );
 
     println!("\n[✓] Smart Home Edge Hub native Rust project completed successfully!");

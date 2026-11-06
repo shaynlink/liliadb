@@ -156,7 +156,7 @@ impl NativeStatement {
     }
 
     #[inline]
-    pub fn column_blob<'a>(&'a self, col: i32) -> &'a [u8] {
+    pub fn column_blob(&self, col: i32) -> &[u8] {
         let ptr = unsafe { ffi::sqlite3_column_blob(self.raw, col as c_int) };
         let len = unsafe { ffi::sqlite3_column_bytes(self.raw, col as c_int) };
         if ptr.is_null() || len <= 0 {
@@ -167,7 +167,7 @@ impl NativeStatement {
     }
 
     #[inline]
-    pub fn column_text<'a>(&'a self, col: i32) -> &'a str {
+    pub fn column_text(&self, col: i32) -> &str {
         let ptr = unsafe { ffi::sqlite3_column_text(self.raw, col as c_int) };
         let len = unsafe { ffi::sqlite3_column_bytes(self.raw, col as c_int) };
         if ptr.is_null() || len <= 0 {

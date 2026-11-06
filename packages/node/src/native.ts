@@ -136,7 +136,7 @@ export class EmbeddedClient {
       const wire = operations.map(toWireOperationMsgpack);
       const payload = encode(wire);
       const resBuffer = await nativeCall(this.native.batchMsgpack(payload));
-      const decoded = decode(resBuffer) as Array<{ version?: string | number | bigint | null; deleted: boolean }>;
+      const decoded = decode(resBuffer, { useBigInt64: true }) as Array<{ version?: string | number | bigint | null; deleted: boolean }>;
       return decoded.map(item => ({
         deleted: Boolean(item.deleted),
         version: item.version != null ? readVersion(item.version) : undefined,
@@ -152,7 +152,7 @@ export class EmbeddedClient {
       const wire = operations.map(toWireOperationMsgpack);
       const payload = encode(wire);
       const resBuffer = nativeSyncCall(() => this.native.batchMsgpackSync!(payload));
-      const decoded = decode(resBuffer) as Array<{ version?: string | number | bigint | null; deleted: boolean }>;
+      const decoded = decode(resBuffer, { useBigInt64: true }) as Array<{ version?: string | number | bigint | null; deleted: boolean }>;
       return decoded.map(item => ({
         deleted: Boolean(item.deleted),
         version: item.version != null ? readVersion(item.version) : undefined,
