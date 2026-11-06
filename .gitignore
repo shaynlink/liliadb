@@ -18,7 +18,6 @@ release/
 
 # Node-API native prebuild binaries and WebAssembly artifacts
 *.node
-packages/wasm/pkg/
 
 # Release and package distributions
 *.tgz

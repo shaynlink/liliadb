@@ -1,4 +1,9 @@
 fn main() {
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if target_arch == "wasm32" {
+        return;
+    }
+
     println!("cargo:rerun-if-changed=sqlite3/sqlite3.c");
     println!("cargo:rerun-if-changed=sqlite3/sqlite3.h");
 
