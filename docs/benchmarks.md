@@ -90,7 +90,7 @@ LiliaDB provides hardware-accelerated AES-256-GCM authenticated encryption at re
 
 ## 5. Ecosystem & Native SQLite Comparative Benchmarks
 
-For an exhaustive benchmark comparing **LiliaDB** against **SQLite Native (C / Rusqlite)**, the **Node.js, Bun, and Deno** ecosystems (`better-sqlite3`, `node:sqlite`, `bun:sqlite`, `@db/sqlite`), and the **Python** ecosystem (`sqlite3`, `apsw`), consult the dedicated report:
+For an exhaustive benchmark comparing **LiliaDB** against **SQLite Native (C / Rusqlite)**, and the **Node.js, Bun, and Deno** ecosystems (`better-sqlite3`, `node:sqlite`, `bun:sqlite`, `@db/sqlite`), consult the dedicated report:
 👉 **[Comparative Benchmark: LiliaDB vs Native SQLite & Ecosystems](benchmarks_comparison.md)**
 
 Run the full comparative suite locally anytime via:

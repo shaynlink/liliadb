@@ -6,7 +6,7 @@
 
 ## 1. Security Architecture & Network Model
 
-The HTTP gateway is engineered strictly for **local IPC replacement** (e.g., Python scripts, AI agent tools, sidecars, and local containers):
+The HTTP gateway is engineered strictly for **local IPC replacement** (e.g., AI agent tools, sidecars, CLI scripts, and local containers):
 
 1. **Loopback Only**: The server refuses to bind to non-loopback interfaces. Attempting to pass `--http-bind 0.0.0.0` or a public IP exits immediately with an error. Valid bindings are `127.0.0.1` (IPv4 loopback) or `::1` (IPv6 loopback).
 2. **Bearer Token Authentication**: Every `/v1/*` request requires a valid `Authorization: Bearer <TOKEN>` header (or an optional `?token=<TOKEN>` query parameter for SSE event streams).

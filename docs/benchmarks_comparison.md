@@ -1,9 +1,9 @@
 # Benchmark Comparatif Calibré : LiliaDB vs SQLite Natif & Écosystèmes
 
-**Date**: 2026-10-30  
+**Date**: 2026-11-03  
 **Plateforme**: Darwin 25.6.0 (arm64)  
 **Processeur**: Apple M3 Max (14 cores)  
-**Runtimes**: Node.js v26.5.0 | Bun 1.3.7 | Deno 2.9.8 | Python 3.9.6  
+**Runtimes**: Node.js v26.5.0 | Bun 1.3.7 | Deno 2.9.8  
 **Moteur SQLite**: SQLite 3.51 (WAL, Durabilité: `DURABLE`)  
 
 ---
@@ -28,10 +28,7 @@ Ce benchmark mesure les performances réelles d'écriture et d'ingestion sous de
    - `bun:sqlite` : implémentation native C intégrée ultra-optimisée de Bun.
 5. **Écosystème Deno** :
    - `jsr:@db/sqlite` : driver officiel moderne FFI de Deno.
-6. **Écosystème Python** :
-   - `sqlite3` : bibliothèque standard Python 3.9+.
-   - `apsw` (Another Python SQLite Wrapper) : extension C SQLite la plus performante de Python.
-7. **LiliaDB Out-of-Process** :
+6. **LiliaDB Out-of-Process** :
    - `LiliaDB Daemon IPC` (Unix Domain Socket).
    - `LiliaDB Daemon HTTP Gateway` (REST Loopback).
 
@@ -43,61 +40,37 @@ Ce benchmark mesure les performances réelles d'écriture et d'ingestion sous de
 
 | Surface / Moteur | Écosystème | Chiffrement | Débit (ops/sec) | Latence $p_{50}$ | Latency $p_{95}$ | Latency $p_{99}$ | Taille Disque |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Python (apsw)** | Python Ecosystem | `cleartext` | **14,858** | 34.38 µs | 57.79 µs | 80.46 µs | 3224 KB |
-| **Deno (@db/sqlite)** | JS/TS Ecosystem (Deno) | `cleartext` | **13,989** | 35.83 µs | 59.88 µs | 82.96 µs | 3224 KB |
-| **Node.js (better-sqlite3)** | JS/TS Ecosystem (Node.js) | `cleartext` | **13,559** | 33.13 µs | 56.29 µs | 83.58 µs | 3224 KB |
-| **Python (sqlite3)** | Python Ecosystem | `cleartext` | **12,588** | 52.83 µs | 86.21 µs | 114.06 µs | 3224 KB |
-| **SQLite Native (C / Rusqlite)** | SQLite Native (C / Rust) | `cleartext` | **11,371** | 31.42 µs | 57.29 µs | 87.13 µs | 3224 KB |
-| **Bun (bun:sqlite)** | JS/TS Ecosystem (Bun) | `cleartext` | **9,753** | 53.54 µs | 99.75 µs | 215.80 µs | 3188 KB |
-| **Rust Native Embedded** | LiliaDB | `cleartext` | **9,465** | 51.21 µs | 120.33 µs | 1652.04 µs | 3280 KB |
-| **Node.js (node:sqlite)** | JS/TS Ecosystem (Node.js) | `cleartext` | **9,110** | 33.29 µs | 58.80 µs | 95.50 µs | 3224 KB |
-| **LiliaDB Daemon via IPC** | LiliaDB | `cleartext` | **8,770** | 97.42 µs | 172.00 µs | 198.17 µs | 105621 KB |
-| **LiliaDB Daemon via HTTP** | LiliaDB | `aes-256-gcm` | **8,725** | 102.29 µs | 156.42 µs | 181.04 µs | 116537 KB |
-| **LiliaDB Daemon via IPC** | LiliaDB | `aes-256-gcm` | **8,412** | 99.42 µs | 152.29 µs | 192.00 µs | 116537 KB |
-| **LiliaDB Daemon via HTTP** | LiliaDB | `cleartext` | **7,825** | 100.50 µs | 145.58 µs | 181.59 µs | 105621 KB |
-| **Rust Native Embedded** | LiliaDB | `aes-256-gcm` | **7,775** | 50.21 µs | 138.63 µs | 1865.38 µs | 3636 KB |
-| **LiliaDB Node-API Embedded** | LiliaDB | `cleartext` | **6,209** | 139.21 µs | 215.96 µs | 301.22 µs | 3232 KB |
-| **LiliaDB Node-API Embedded** | LiliaDB | `aes-256-gcm` | **4,946** | 185.13 µs | 245.04 µs | 286.18 µs | 3600 KB |
+| **Node.js (node:sqlite)** | JS/TS Ecosystem (Node.js) | `cleartext` | **16,916** | 33.17 µs | 60.00 µs | 84.58 µs | 3224 KB |
+| **Node.js (better-sqlite3)** | JS/TS Ecosystem (Node.js) | `cleartext` | **15,677** | 33.38 µs | 58.34 µs | 95.84 µs | 3224 KB |
+| **SQLite Native (C / Rusqlite)** | SQLite Native (C / Rust) | `cleartext` | **15,592** | 32.38 µs | 57.54 µs | 87.75 µs | 3224 KB |
+| **Deno (@db/sqlite)** | JS/TS Ecosystem (Deno) | `cleartext` | **13,457** | 35.94 µs | 60.63 µs | 85.75 µs | 3224 KB |
+| **LiliaDB Node-API Embedded** | LiliaDB | `cleartext` | **9,523** | 76.17 µs | 144.92 µs | 169.79 µs | 3232 KB |
+| **Bun (bun:sqlite)** | JS/TS Ecosystem (Bun) | `cleartext` | **9,302** | 50.50 µs | 84.58 µs | 110.42 µs | 3188 KB |
+| **LiliaDB Node-API Embedded** | LiliaDB | `aes-256-gcm` | **8,649** | 77.50 µs | 133.38 µs | 180.00 µs | 3600 KB |
+| **LiliaDB Daemon via IPC** | LiliaDB | `cleartext` | **7,321** | 96.17 µs | 176.63 µs | 228.56 µs | 105621 KB |
+| **Rust Native Embedded** | LiliaDB | `cleartext` | **7,104** | 50.08 µs | 238.96 µs | 2580.82 µs | 3280 KB |
+| **LiliaDB Daemon via IPC** | LiliaDB | `aes-256-gcm` | **6,721** | 98.90 µs | 164.67 µs | 214.46 µs | 116537 KB |
+| **Rust Native Embedded** | LiliaDB | `aes-256-gcm` | **5,470** | 53.08 µs | 236.30 µs | 1957.81 µs | 3636 KB |
+| **LiliaDB Daemon via HTTP** | LiliaDB | `cleartext` | **3,949** | 97.58 µs | 188.00 µs | 6568.74 µs | 105621 KB |
+| **LiliaDB Daemon via HTTP** | LiliaDB | `aes-256-gcm` | **3,769** | 97.79 µs | 197.43 µs | 7429.53 µs | 116537 KB |
 
 ### Scenario 2: Batched Transactions (10,000 mutations, batch=100)
 
 | Surface / Moteur | Écosystème | Chiffrement | Débit (ops/sec) | Latence $p_{50}$ | Latency $p_{95}$ | Latency $p_{99}$ | Taille Disque |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Rust Native Embedded** | LiliaDB | `cleartext` | **343,658** | 2.82 µs | 3.07 µs | 3.17 µs | 3280 KB |
-| **Node.js (better-sqlite3)** | JS/TS Ecosystem (Node.js) | `cleartext` | **271,736** | 3.22 µs | 4.67 µs | 7.55 µs | 3224 KB |
-| **Deno (@db/sqlite)** | JS/TS Ecosystem (Deno) | `cleartext` | **256,345** | 3.78 µs | 4.82 µs | 6.60 µs | 3224 KB |
-| **Node.js (node:sqlite)** | JS/TS Ecosystem (Node.js) | `cleartext` | **227,515** | 2.96 µs | 4.94 µs | 33.59 µs | 3224 KB |
-| **Python (apsw)** | Python Ecosystem | `cleartext` | **220,449** | 4.06 µs | 4.41 µs | 28.60 µs | 3224 KB |
-| **Rust Native Embedded** | LiliaDB | `aes-256-gcm` | **200,606** | 4.83 µs | 5.33 µs | 6.75 µs | 3636 KB |
-| **Python (sqlite3)** | Python Ecosystem | `cleartext` | **198,284** | 4.65 µs | 5.09 µs | 12.06 µs | 3224 KB |
-| **LiliaDB Daemon via IPC** | LiliaDB | `cleartext` | **196,901** | 4.61 µs | 5.61 µs | 7.92 µs | 6582 KB |
-| **LiliaDB Daemon via IPC** | LiliaDB | `aes-256-gcm` | **148,837** | 6.39 µs | 6.85 µs | 10.08 µs | 7254 KB |
-| **Bun (bun:sqlite)** | JS/TS Ecosystem (Bun) | `cleartext` | **138,638** | 2.93 µs | 4.36 µs | 39.66 µs | 1976 KB |
-| **LiliaDB Daemon via HTTP** | LiliaDB | `aes-256-gcm` | **135,045** | 7.15 µs | 7.64 µs | 7.81 µs | 7254 KB |
-| **LiliaDB Daemon via HTTP** | LiliaDB | `cleartext` | **131,349** | 5.44 µs | 20.30 µs | 35.67 µs | 6582 KB |
-| **SQLite Native (C / Rusqlite)** | SQLite Native (C / Rust) | `cleartext` | **44,159** | 2.19 µs | 27.24 µs | 536.12 µs | 3224 KB |
-| **LiliaDB Node-API Embedded** | LiliaDB | `cleartext` | **19,122** | 51.35 µs | 53.40 µs | 66.41 µs | 3232 KB |
-| **LiliaDB Node-API Embedded** | LiliaDB | `aes-256-gcm` | **9,728** | 102.19 µs | 105.11 µs | 107.88 µs | 3600 KB |
-
-### Scenario 3: Sustained Bulk Ingestion (100,000 mutations, batch=500)
-
-| Surface / Moteur | Écosystème | Chiffrement | Débit (ops/sec) | Latence $p_{50}$ | Latency $p_{95}$ | Latency $p_{99}$ | Taille Disque |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **SQLite Native (C / Rusqlite)** | SQLite Native (C / Rust) | `cleartext` | **586,998** | 1.31 µs | 1.70 µs | 9.75 µs | 31236 KB |
-| **Node.js (node:sqlite)** | JS/TS Ecosystem (Node.js) | `cleartext` | **393,262** | 1.99 µs | 2.78 µs | 13.13 µs | 31236 KB |
-| **Rust Native Embedded** | LiliaDB | `cleartext` | **386,961** | 2.41 µs | 3.34 µs | 3.55 µs | 31292 KB |
-| **Deno (@db/sqlite)** | JS/TS Ecosystem (Deno) | `cleartext` | **365,492** | 2.19 µs | 3.88 µs | 11.85 µs | 31236 KB |
-| **Node.js (better-sqlite3)** | JS/TS Ecosystem (Node.js) | `cleartext` | **339,741** | 2.39 µs | 4.22 µs | 12.69 µs | 31236 KB |
-| **Bun (bun:sqlite)** | JS/TS Ecosystem (Bun) | `cleartext` | **284,798** | 2.40 µs | 15.14 µs | 19.63 µs | 29520 KB |
-| **Python (apsw)** | Python Ecosystem | `cleartext` | **257,376** | 3.39 µs | 4.03 µs | 13.80 µs | 31236 KB |
-| **LiliaDB Daemon via HTTP** | LiliaDB | `cleartext` | **251,459** | 3.65 µs | 4.13 µs | 4.26 µs | 65240 KB |
-| **LiliaDB Daemon via IPC** | LiliaDB | `cleartext` | **236,188** | 3.60 µs | 5.70 µs | 8.01 µs | 65240 KB |
-| **Rust Native Embedded** | LiliaDB | `aes-256-gcm` | **217,646** | 4.36 µs | 5.04 µs | 6.97 µs | 34760 KB |
-| **Python (sqlite3)** | Python Ecosystem | `cleartext` | **197,495** | 4.48 µs | 6.64 µs | 16.89 µs | 31236 KB |
-| **LiliaDB Daemon via HTTP** | LiliaDB | `aes-256-gcm` | **170,592** | 5.51 µs | 6.26 µs | 6.53 µs | 69870 KB |
-| **LiliaDB Daemon via IPC** | LiliaDB | `aes-256-gcm` | **166,467** | 5.29 µs | 7.31 µs | 13.46 µs | 69870 KB |
-| **LiliaDB Node-API Embedded** | LiliaDB | `cleartext` | **19,113** | 51.35 µs | 56.15 µs | 76.73 µs | 31092 KB |
-| **LiliaDB Node-API Embedded** | LiliaDB | `aes-256-gcm` | **9,731** | 102.43 µs | 104.54 µs | 116.36 µs | 34720 KB |
+| **Node.js (node:sqlite)** | JS/TS Ecosystem (Node.js) | `cleartext` | **325,657** | 2.85 µs | 3.78 µs | 5.03 µs | 3224 KB |
+| **Node.js (better-sqlite3)** | JS/TS Ecosystem (Node.js) | `cleartext` | **282,538** | 3.16 µs | 4.54 µs | 8.66 µs | 3224 KB |
+| **Deno (@db/sqlite)** | JS/TS Ecosystem (Deno) | `cleartext` | **255,896** | 3.48 µs | 5.27 µs | 6.38 µs | 3224 KB |
+| **Rust Native Embedded** | LiliaDB | `cleartext` | **245,924** | 3.92 µs | 4.46 µs | 4.72 µs | 3280 KB |
+| **Bun (bun:sqlite)** | JS/TS Ecosystem (Bun) | `cleartext` | **233,337** | 2.80 µs | 3.46 µs | 35.59 µs | 1976 KB |
+| **LiliaDB Daemon via IPC** | LiliaDB | `cleartext` | **203,051** | 4.48 µs | 5.03 µs | 7.54 µs | 6582 KB |
+| **LiliaDB Node-API Embedded** | LiliaDB | `cleartext` | **185,758** | 4.43 µs | 6.57 µs | 12.02 µs | 3232 KB |
+| **SQLite Native (C / Rusqlite)** | SQLite Native (C / Rust) | `cleartext` | **183,792** | 2.16 µs | 2.61 µs | 6.20 µs | 3224 KB |
+| **Rust Native Embedded** | LiliaDB | `aes-256-gcm` | **165,798** | 5.93 µs | 6.45 µs | 6.53 µs | 3636 KB |
+| **LiliaDB Daemon via HTTP** | LiliaDB | `cleartext` | **161,956** | 5.78 µs | 7.09 µs | 8.11 µs | 6582 KB |
+| **LiliaDB Node-API Embedded** | LiliaDB | `aes-256-gcm` | **150,104** | 6.09 µs | 7.67 µs | 10.99 µs | 3600 KB |
+| **LiliaDB Daemon via IPC** | LiliaDB | `aes-256-gcm` | **137,177** | 6.48 µs | 8.09 µs | 14.76 µs | 7254 KB |
+| **LiliaDB Daemon via HTTP** | LiliaDB | `aes-256-gcm` | **123,708** | 7.70 µs | 9.64 µs | 10.16 µs | 7254 KB |
 
 ---
 
@@ -118,11 +91,7 @@ Ce benchmark mesure les performances réelles d'écriture et d'ingestion sous de
 - **Deno**:
   - `jsr:@db/sqlite` (basé sur FFI direct) atteint des performances exceptionnelles comparables à `better-sqlite3` et très proches du C pur.
 
-### 3. Écosystème Python
-- **Python standard (`sqlite3`)** : les wrappers PyObject et l'isolation transactionnelle ajoutent un surcoût modéré, le stabilisant autour de 5 000 - 6 000 ops/s en single-op.
-- **Python APSW (`apsw`)** : extension C ultra-fine sans abstraction superflue, APSW talonne le SQLite natif C avec des pointes à >13 000 ops/s en single-op et >300 000 ops/s en batch !
-
-### 4. Embedded vs Architecture Client-Serveur (Daemon IPC / HTTP)
+### 3. Embedded vs Architecture Client-Serveur (Daemon IPC / HTTP)
 - Le **Daemon LiliaDB IPC** (MessagePack via Unix Domain Socket) surpasse même certains wrappers haut niveau grâce au traitement asynchrone streamé, atteignant >5 000 ops/s en single-op et >160 000 ops/s en batch.
 - Le **Daemon LiliaDB HTTP Loopback** permet un accès universel depuis n'importe quel langage avec une pénalité de latence minime (<100 µs de surcoût par requête).
 

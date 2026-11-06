@@ -145,44 +145,6 @@ cargo run --example sql -p lilia-storage-sqlite
 
 ---
 
-## Python Examples (`packages/python`)
-
-Zero-dependency official Python SDK connecting to `lilia-daemon` over the local HTTP gateway.
-
-See [`examples/python/README.md`](file:///Users/shayn/Development/liliadb/examples/python/README.md) for full instructions.
-
-### 1. Basic Key/Value Operations (`01_kv_basic.py`)
-Demonstrates:
-- Connecting to `lilia-daemon` over HTTP with Bearer token authentication
-- Setting and retrieving Key/Value records
-- Optimistic Concurrency Control (`if_version`)
-- Key expiration with TTL (`expires_at_ms`)
-
-### 2. JSON Document Store & Scans (`02_json_documents.py`)
-Demonstrates:
-- Storing and retrieving structured JSON objects
-- Transparent keyset auto-pagination generators (`client.json.scan()`)
-- Multi-model atomic batch mutations
-
-### 3. Declarative SQL Analytics (`03_sql_analytics.py`)
-Demonstrates:
-- Executing SQL queries over `lilia_json`
-- Analytical aggregations and filtering
-- Extracting results with `to_dicts()`
-
-### 4. AI Agent Memory & Sessions (`04_ai_agent_memory.py`)
-Demonstrates:
-- Building a stateful memory and session layer for AI agents using KV facts and JSON conversation logs
-
-### 5. Live Events & CDC Streaming (`05_cdc_live_events.py`)
-Demonstrates:
-- Subscribing to real-time database mutations over HTTP SSE via `client.watch()`
-- Filtering CDC events by namespace across KV, JSON, Graph, and FTS models
-- Live state synchronization for autonomous AI agents and cache invalidation
-- Graceful subscription management with `.unsubscribe()`
-
----
-
 ## WebAssembly & OPFS Examples (`@liliadb/wasm`)
 
 Zero-native-dependency SDK running in browsers, dedicated Web Workers, and Edge runtimes (Cloudflare Workers, Deno Deploy, Vercel Edge).
@@ -201,16 +163,76 @@ cd examples/browser-opfs
 pnpm dev
 ```
 
-### 2. Cloudflare Workers (`examples/cloudflare-worker/`)
-Edge Worker endpoint demonstrating:
-- In-memory LiliaDB instance created per request or cached across Worker warm invocations
-- Compiling WASM module at build time via Wrangler
-- Handling relational SQL queries and document storage at the Edge
-
-### 3. Deno & Deno Deploy (`examples/deno-edge/`)
+### 2. Deno & Deno Deploy (`examples/deno-edge/`)
 Deno script demonstrating:
 - Direct execution of `@liliadb/wasm` with TypeScript
 - Secondary index creation, lookups, and full-text search in Edge runtimes
 
+---
 
+## Plugin & Extension Development (`examples/custom-extension/`)
 
+Learn how to build, package, cryptographically sign, and distribute custom LiliaDB extensions:
+- Implementing the C-ABI v1.0 specification and `CodecDescriptorV1` in Rust
+- Exposing pluggable storage capabilities with transparent at-rest data transformation
+- Dual-target compilation: Native shared libraries (`.dylib` / `.so` / `.dll`) and WebAssembly sandboxed modules (`wasm32-wasip1`)
+- Complete CLI distribution lifecycle: `keygen`, `pack`, `sign`, `verify`, `trust`, and `install`
+- Transparent runtime usage in the standalone CLI (`--plugin`), background Daemon, and embedded Node.js
+
+**Run:**
+```sh
+# Run automated lifecycle test
+node examples/custom-extension/test-extension.mjs
+
+# Or run the complete shell walkthrough
+./examples/custom-extension/run-lifecycle.sh
+```
+
+---
+
+## Full-Featured Local Micro-Projects
+
+These runnable end-to-end applications showcase the power of LiliaDB by unifying all storage models (KV, JSON, Graph, FTS5, SQL, CDC, and Atomic Transactions) in concrete local-first scenarios.
+
+### 1. Second Brain & Knowledge Graph Software (`examples/project-knowledge-graph/`)
+An interactive, local-first software application (similar to Obsidian, Roam, or Notion):
+- **Interactive REPL Terminal Console**: Menu-driven interactive explorer (`npm start` or `node bin/knowledge.mjs`)
+- **Scriptable CLI**: Direct commands for automation (`knowledge-graph add`, `view`, `search`, `backlinks`, `reachability`, `stats`)
+- **Automatic Wikilink & Tag Parser**: Extracts `[[note_id]]` links and `#tags` to automatically build graph edges and node indexes
+- **Full-Text Search (FTS5)**: BM25 lexical search with snippet extraction across note contents
+- **Graph Engine**: Bi-directional wikilinks, 1-hop backlinks (`direction: "incoming"`), and multi-hop concept reachability
+- **KV with TTL**: Collaborative editor presence and ephemeral lock tokens
+- **Atomic Multi-Model Transactions (`db.batch`)**: Updating note documents, FTS index, and graph edges in a single ACID commit
+- **Declarative SQL**: Inbound graph degree analytics and author contribution reports
+
+**Run:**
+```sh
+# Launch interactive REPL console
+cd examples/project-knowledge-graph && npm start
+
+# Or run automated walkthrough demo
+node examples/project-knowledge-graph/bin/knowledge.mjs --demo
+
+# Or invoke scriptable CLI commands
+node examples/project-knowledge-graph/bin/knowledge.mjs search "ACID"
+```
+
+### 2. Smart Home Edge Hub & IoT Gateway (Low-Level Native Rust) (`examples/project-iot-smart-hub/`)
+A high-performance, 100% offline edge gateway written in **low-level native Rust** for Raspberry Pi, local SBCs, and microcontrollers (Arduino via UART, ESP32 via WiFi/MQTT, GPIO sensors, relays):
+- **Zero FFI / In-Process SQLite Engine**: Direct native Rust calls against `lilia-storage-sqlite` with balanced WAL durability
+- **Hardware Device Registry (JSON)**: Structured device specifications and secondary indexes
+- **Automation Graph**: Trigger pipelines (`Sensor -> TRIGGERS -> Rule -> CONTROLS -> Actuator`) and Zigbee/Matter mesh reachability
+- **KV with TTL**: Microcontroller heartbeats (automatic offline detection) and PIR interrupt debouncing
+- **Tokio Reactive CDC Worker (`db.subscribe()`)**: Sub-millisecond rule evaluation (< 200 µs) without polling loops
+- **FTS5 Search**: Diagnostic hardware incident logging and failure pattern analysis
+- **Atomic Batches (`db.batch()`)**: Synchronized relay actuation, event logging, and cycle counting in 1 commit
+- **Declarative SQL**: Real-time power consumption (Watts) breakdown by room and protocol distribution
+
+**Run:**
+```sh
+# Run in dev mode
+cargo run -p project-iot-smart-hub
+
+# Or run optimized release binary
+cargo run --release -p project-iot-smart-hub
+```

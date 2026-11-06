@@ -2,13 +2,12 @@
 
 [![CI](https://github.com/shaynlink/lilia/actions/workflows/ci.yml/badge.svg)](https://github.com/shaynlink/lilia/actions/workflows/ci.yml)
 [![Compat Runtimes](https://github.com/shaynlink/lilia/actions/workflows/compat-runtimes.yml/badge.svg)](https://github.com/shaynlink/lilia/actions/workflows/compat-runtimes.yml)
-[![PyPI version](https://img.shields.io/pypi/v/liliadb.svg)](https://pypi.org/project/liliadb/)
 [![npm version](https://img.shields.io/npm/v/@liliadb/node.svg)](https://www.npmjs.com/package/@liliadb/node)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 LiliaDB is a local-first multimodel embedded & daemon database written in Rust. It provides
 durable Key/Value, JSON documents, Graph, and Full-Text Search through the same SQLite ACID
-transaction boundary, with embedded Rust, Node.js, Bun, Deno, Python, CLI, and MCP entry points.
+transaction boundary, with embedded Rust, WebAssembly (browser OPFS & Edge), Node.js / Bun (C-API), CLI, Daemon, and MCP entry points.
 
 ---
 
@@ -19,9 +18,8 @@ This repository contains the `0.1.0-alpha.5` release featuring:
 - **WebAssembly Plugin Sandboxing**: Hardened, fault-isolated Wasmtime/WASI plugin runtime with isolated 32-bit linear memory, CPU fuel metering (`--plugin-fuel-limit`), strict memory quotas (`--plugin-memory-limit-mb`), and fail-closed daemon security policy (`--require-sandboxed-plugins`).
 - **Global Package Manager Distribution**:
   - **Official Homebrew Tap** (`brew tap liliadb/tap && brew install lilia`) with daemon background service support (`brew services start liliadb`).
-  - **Official PyPI Package** (`pip install liliadb`) with automated Trusted Publishing (OIDC) and zero external dependencies.
   - **Universal npm SDKs**: `@liliadb/node` for Node.js, Bun, and Deno with multi-platform prebuilds, and `@liliadb/wasm` for browsers and edge runtimes.
-- **Real-Time CDC & Live Event Streaming**: Sub-millisecond reactive subscriptions via `db.watch()` in Node/Bun/Deno, `client.watch()` in Python, and Server-Sent Events (`/v1/watch` SSE) over HTTP.
+- **Real-Time CDC & Live Event Streaming**: Sub-millisecond reactive subscriptions via `db.watch()` in Node/Bun/Deno, and Server-Sent Events (`/v1/watch` SSE) over HTTP.
 - **Graph & Full-Text Search (FTS5)**: Embedded graph traversal (`setNode`, `addEdge`, `neighbors`, `reachability`) and BM25-ranked full-text search with highlighting and snippets across all entry points.
 - **Encryption at Rest**: Native authenticated encryption (AES-256-GCM AEAD) via `plugins/lilia-plugin-codec`, ensuring zero plaintext is stored on disk or in WAL frames, with transparent decryption across KV, JSON, and SQL views.
 - **Declarative SQL Engine**: Integrated via `plugins/lilia-plugin-sql`, providing read/write SQL queries, preconfigured views (`lilia_kv`, `lilia_json`, `lilia_graph_nodes`, `lilia_graph_edges`), and custom scalar functions.
@@ -46,14 +44,7 @@ brew install lilia
 brew services start liliadb
 ```
 
-### 2. Python (PyPI)
-Install the official zero-dependency Python SDK:
-
-```bash
-pip install liliadb
-```
-
-### 3. JavaScript / TypeScript
+### 2. JavaScript / TypeScript (Node.js, Bun, WebAssembly)
 
 **Native Node-API (Node.js, Bun, Deno):**
 ```bash
@@ -118,23 +109,6 @@ const admins = await db.sql.query("SELECT id, value FROM lilia_json WHERE space 
 await db.close();
 ```
 
-### Python SDK (`liliadb`)
-```python
-from liliadb import LiliaClient
-
-# Connect to local daemon via HTTP REST gateway
-client = LiliaClient(endpoint="http://127.0.0.1:4444", token="my-token")
-
-# JSON document store
-client.json.put("customers", "cust_1", {"name": "Grace Hopper", "status": "active"})
-doc = client.json.get("customers", "cust_1")
-print(doc.value)
-
-# Key/Value store
-client.kv.set("configs", "theme", "dark")
-entry = client.kv.get("configs", "theme")
-```
-
 ### WebAssembly & OPFS Browser SDK (`@liliadb/wasm`)
 ```typescript
 import { Database } from "@liliadb/wasm";
@@ -174,12 +148,6 @@ await db.json.put("orders", "ord_100", { total: 49.99 });
 
 // Cleanup
 sub.unsubscribe();
-```
-
-**Python:**
-```python
-with client.watch(namespace="orders", callback=lambda e: print("Event:", e.type, e.id)) as sub:
-    client.json.put("orders", "ord_100", {"total": 49.99})
 ```
 
 **HTTP Server-Sent Events (SSE):**
@@ -321,11 +289,13 @@ Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) an
 - `packages/`:
   - `@liliadb/node`: Universal Node.js, Bun, and Deno SDK (`packages/node`) and native prebuilds (`packages/node-*`).
   - `@liliadb/wasm`: WebAssembly and OPFS browser / edge SDK (`packages/wasm`).
-  - `liliadb`: Official zero-dependency Python SDK (`packages/python`).
 - `Formula/`: Homebrew packaging (`Formula/liliadb.rb`, `Formula/lilia.rb`).
-- `examples/`: Runnable examples for Node.js, Bun, Python, and native Rust.
+- `examples/`: Runnable examples for Node.js, Bun, WebAssembly, and native Rust, including:
+  - Custom Extension plugin development & signing lifecycle (`examples/custom-extension/`).
+  - Second Brain & Knowledge Graph Engine (`examples/project-knowledge-graph/`).
+  - Smart Home Edge Hub & IoT Gateway (`examples/project-iot-smart-hub/`).
 
-Documentation: [Architecture](docs/architecture.md) | [Node.js SDK](docs/node_sdk.md) | [Python SDK](docs/python_sdk.md) | [HTTP REST API](docs/http_api.md) | [Benchmarks](docs/benchmarks.md) | [Comparative Benchmarks](docs/benchmarks_comparison.md) | [Plugins](docs/plugins.md) | [Security Policy](SECURITY.md)
+Documentation: [Architecture](docs/architecture.md) | [Node.js SDK](docs/node_sdk.md) | [HTTP REST API](docs/http_api.md) | [Benchmarks](docs/benchmarks.md) | [Comparative Benchmarks](docs/benchmarks_comparison.md) | [Plugins](docs/plugins.md) | [Security Policy](SECURITY.md)
 
 ---
 
