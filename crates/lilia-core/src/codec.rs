@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::Result;
 
 /// Extension point for at-rest value encoding.
@@ -8,7 +10,7 @@ pub trait ValueCodec: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     /// Returns a codec-specific error when encoding cannot be completed.
-    fn encode(&self, plaintext: &[u8]) -> Result<Vec<u8>>;
+    fn encode<'a>(&self, plaintext: &'a [u8]) -> Result<Cow<'a, [u8]>>;
 
     /// Decode a persisted value.
     ///
@@ -26,8 +28,8 @@ impl ValueCodec for IdentityCodec {
         "identity"
     }
 
-    fn encode(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        Ok(plaintext.to_vec())
+    fn encode<'a>(&self, plaintext: &'a [u8]) -> Result<Cow<'a, [u8]>> {
+        Ok(Cow::Borrowed(plaintext))
     }
 
     fn decode(&self, encoded: &[u8]) -> Result<Vec<u8>> {
@@ -84,7 +86,7 @@ impl ValueCodec for Aes256GcmCodec {
         "aes-256-gcm"
     }
 
-    fn encode(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
+    fn encode<'a>(&self, plaintext: &'a [u8]) -> Result<Cow<'a, [u8]>> {
         use crate::{ErrorCode, LiliaError};
         use aes_gcm::aead::Aead;
 
@@ -102,7 +104,7 @@ impl ValueCodec for Aes256GcmCodec {
         let mut encoded = Vec::with_capacity(Self::NONCE_LEN + ciphertext.len());
         encoded.extend_from_slice(&nonce_bytes);
         encoded.extend_from_slice(&ciphertext);
-        Ok(encoded)
+        Ok(Cow::Owned(encoded))
     }
 
     fn decode(&self, encoded: &[u8]) -> Result<Vec<u8>> {
@@ -139,7 +141,7 @@ mod tests {
         let codec = IdentityCodec;
         let data = b"hello liliadb";
         let encoded = codec.encode(data).unwrap();
-        assert_eq!(encoded, data);
+        assert_eq!(encoded.as_ref(), data);
         let decoded = codec.decode(&encoded).unwrap();
         assert_eq!(decoded, data);
     }
@@ -149,7 +151,7 @@ mod tests {
         let codec = Aes256GcmCodec::from_passphrase("test-secret-passphrase");
         let plaintext = b"multi-model encrypted state at rest with zero data leaks";
         let encoded = codec.encode(plaintext).unwrap();
-        assert_ne!(&encoded, plaintext);
+        assert_ne!(encoded.as_ref(), plaintext);
         assert!(encoded.len() >= plaintext.len() + 28);
 
         let decoded = codec.decode(&encoded).unwrap();
@@ -160,11 +162,12 @@ mod tests {
     fn test_aes_codec_tampering_rejected() {
         let codec = Aes256GcmCodec::from_passphrase("test-secret-passphrase");
         let plaintext = b"tamper test payload";
-        let mut encoded = codec.encode(plaintext).unwrap();
+        let encoded = codec.encode(plaintext).unwrap();
+        let mut corrupted = encoded.into_owned();
         // Flip one byte in ciphertext
-        let len = encoded.len();
-        encoded[len - 1] ^= 0xFF;
-        let result = codec.decode(&encoded);
+        let len = corrupted.len();
+        corrupted[len - 1] ^= 0xFF;
+        let result = codec.decode(&corrupted);
         assert!(result.is_err());
     }
 }

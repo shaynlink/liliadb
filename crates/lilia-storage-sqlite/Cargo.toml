@@ -15,8 +15,14 @@ name = "lilia_bench"
 path = "src/bin/lilia_bench.rs"
 required-features = ["bench-bin"]
 
+[[bin]]
+name = "bench_rusqlite"
+path = "src/bin/bench_rusqlite.rs"
+required-features = ["bench-bin"]
+
 [dependencies]
 lilia-core = { path = "../lilia-core", features = ["sqlite-errors"] }
+lilia-sqlite-native = { path = "../lilia-sqlite-native" }
 base64.workspace = true
 clap = { workspace = true, features = ["derive"], optional = true }
 hex.workspace = true

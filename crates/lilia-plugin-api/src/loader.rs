@@ -498,7 +498,7 @@ impl lilia_core::ValueCodec for PluginCodec {
         &self.name
     }
 
-    fn encode(&self, plaintext: &[u8]) -> lilia_core::Result<Vec<u8>> {
+    fn encode<'a>(&self, plaintext: &'a [u8]) -> lilia_core::Result<std::borrow::Cow<'a, [u8]>> {
         match &self.inner {
             CodecInner::Native { descriptor, .. } => {
                 let encode_fn = descriptor.encode.ok_or_else(|| {
@@ -545,12 +545,12 @@ impl lilia_core::ValueCodec for PluginCodec {
                     ));
                 }
                 out.truncate(out_len);
-                Ok(out)
+                Ok(std::borrow::Cow::Owned(out))
             }
             #[cfg(not(target_arch = "wasm32"))]
             CodecInner::Wasm { pool } => {
                 let mut instance = pool.acquire()?;
-                instance.encode(plaintext)
+                instance.encode(plaintext).map(std::borrow::Cow::Owned)
             }
         }
     }

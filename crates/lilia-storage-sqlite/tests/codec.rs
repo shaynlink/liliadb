@@ -12,8 +12,10 @@ impl ValueCodec for MockRot13Codec {
         "rot13"
     }
 
-    fn encode(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        Ok(plaintext.iter().map(|b| b.wrapping_add(13)).collect())
+    fn encode<'a>(&self, plaintext: &'a [u8]) -> Result<std::borrow::Cow<'a, [u8]>> {
+        Ok(std::borrow::Cow::Owned(
+            plaintext.iter().map(|b| b.wrapping_add(13)).collect(),
+        ))
     }
 
     fn decode(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {

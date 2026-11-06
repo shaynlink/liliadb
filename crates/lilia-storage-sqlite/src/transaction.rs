@@ -19,21 +19,44 @@ pub(crate) fn apply(
             expires_at_ms,
         } => {
             validate_name("namespace", namespace)?;
-            let current = kv_version(tx, namespace, key)?;
-            assert_version(current, *if_version)?;
-            let version = current.unwrap_or(0) + 1;
             let stored_value = codec.encode(value)?;
-            let mut stmt = tx.prepare_cached(
-                "INSERT INTO _lilia_kv(namespace,key,value,version,expires_at_ms) VALUES(?1,?2,?3,?4,?5)
-                 ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value,version=excluded.version,expires_at_ms=excluded.expires_at_ms",
-            )?;
-            stmt.execute(params![
-                namespace,
-                key,
-                stored_value,
-                store_version(version)?,
-                expires_at_ms
-            ])?;
+            let version = match if_version {
+                None => {
+                    let mut stmt = tx.prepare_cached(
+                        "INSERT INTO _lilia_kv(namespace,key,value,version,expires_at_ms) \
+                         VALUES(?1,?2,?3,1,?4) \
+                         ON CONFLICT(namespace,key) DO UPDATE SET \
+                           value=excluded.value, \
+                           version=_lilia_kv.version + 1, \
+                           expires_at_ms=excluded.expires_at_ms \
+                         RETURNING version;",
+                    )?;
+                    let v: i64 = stmt.query_row(
+                        params![namespace, key, stored_value.as_ref(), expires_at_ms],
+                        |r| r.get(0),
+                    )?;
+                    u64::try_from(v).map_err(|e| {
+                        LiliaError::new(ErrorCode::Storage, format!("invalid version: {e}"), false)
+                    })?
+                }
+                Some(expected) => {
+                    let current = kv_version(tx, namespace, key)?;
+                    assert_version(current, Some(*expected))?;
+                    let next_version = current.unwrap_or(0) + 1;
+                    let mut stmt = tx.prepare_cached(
+                        "INSERT INTO _lilia_kv(namespace,key,value,version,expires_at_ms) VALUES(?1,?2,?3,?4,?5) \
+                         ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value,version=excluded.version,expires_at_ms=excluded.expires_at_ms",
+                    )?;
+                    stmt.execute(params![
+                        namespace,
+                        key,
+                        stored_value.as_ref(),
+                        store_version(next_version)?,
+                        expires_at_ms
+                    ])?;
+                    next_version
+                }
+            };
             Ok(MutationResult {
                 version: Some(version),
                 deleted: false,
@@ -63,9 +86,6 @@ pub(crate) fn apply(
         } => {
             validate_name("space", space)?;
             validate_name("id", id)?;
-            let current = json_version(tx, space, id)?;
-            assert_version(current, *if_version)?;
-            let version = current.unwrap_or(0) + 1;
             let encoded = if codec.name() == "identity" {
                 serde_json::to_string(value).map_err(|error| {
                     LiliaError::new(ErrorCode::InvalidInput, error.to_string(), false)
@@ -83,11 +103,30 @@ pub(crate) fn apply(
                 }))
                 .map_err(|error| LiliaError::new(ErrorCode::Storage, error.to_string(), false))?
             };
-            let mut stmt = tx.prepare_cached(
-                "INSERT INTO _lilia_json(space,id,value,version) VALUES(?1,?2,?3,?4)
-                 ON CONFLICT(space,id) DO UPDATE SET value=excluded.value,version=excluded.version",
-            )?;
-            stmt.execute(params![space, id, encoded, store_version(version)?])?;
+            let version = match if_version {
+                None => {
+                    let mut stmt = tx.prepare_cached(
+                        "INSERT INTO _lilia_json(space,id,value,version) VALUES(?1,?2,?3,1) \
+                         ON CONFLICT(space,id) DO UPDATE SET value=excluded.value,version=_lilia_json.version + 1 \
+                         RETURNING version;",
+                    )?;
+                    let v: i64 = stmt.query_row(params![space, id, encoded], |r| r.get(0))?;
+                    u64::try_from(v).map_err(|e| {
+                        LiliaError::new(ErrorCode::Storage, format!("invalid version: {e}"), false)
+                    })?
+                }
+                Some(expected) => {
+                    let current = json_version(tx, space, id)?;
+                    assert_version(current, Some(*expected))?;
+                    let next_version = current.unwrap_or(0) + 1;
+                    let mut stmt = tx.prepare_cached(
+                        "INSERT INTO _lilia_json(space,id,value,version) VALUES(?1,?2,?3,?4) \
+                         ON CONFLICT(space,id) DO UPDATE SET value=excluded.value,version=excluded.version",
+                    )?;
+                    stmt.execute(params![space, id, encoded, store_version(next_version)?])?;
+                    next_version
+                }
+            };
             update_json_indexes(tx, space, id, value)?;
             Ok(MutationResult {
                 version: Some(version),

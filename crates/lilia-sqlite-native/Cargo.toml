@@ -1,0 +1,16 @@
+[package]
+name = "lilia-sqlite-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lilia-core = { path = "../lilia-core" }
+
+[build-dependencies]
+cc = { version = "1.2", features = ["parallel"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

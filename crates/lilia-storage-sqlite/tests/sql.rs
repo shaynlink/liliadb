@@ -13,8 +13,10 @@ impl ValueCodec for TestXorCodec {
         "test-xor"
     }
 
-    fn encode(&self, plaintext: &[u8]) -> LiliaResult<Vec<u8>> {
-        Ok(plaintext.iter().map(|b| b ^ self.key).collect())
+    fn encode<'a>(&self, plaintext: &'a [u8]) -> LiliaResult<std::borrow::Cow<'a, [u8]>> {
+        Ok(std::borrow::Cow::Owned(
+            plaintext.iter().map(|b| b ^ self.key).collect(),
+        ))
     }
 
     fn decode(&self, ciphertext: &[u8]) -> LiliaResult<Vec<u8>> {

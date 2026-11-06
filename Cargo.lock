@@ -367,6 +367,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "005ec2760ca554fae18df7a11195552ec576cd665632a881bc011d5bb2fd4d80"
 dependencies = [
  "find-msvc-tools",
+ "jobserver",
+ "libc",
  "shlex",
 ]
 
@@ -1571,6 +1573,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jobserver"
+version = "0.1.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
+dependencies = [
+ "getrandom 0.4.3",
+ "libc",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1624,8 +1636,6 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 [[package]]
 name = "libsqlite3-sys"
 version = "0.38.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
 dependencies = [
  "cc",
  "pkg-config",
@@ -1735,6 +1745,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "rmp-serde",
  "serde_json",
  "tokio",
 ]
@@ -1812,6 +1823,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lilia-sqlite-native"
+version = "0.1.0-alpha.5"
+dependencies = [
+ "cc",
+ "lilia-core",
+ "tempfile",
+]
+
+[[package]]
 name = "lilia-storage-sqlite"
 version = "0.1.0-alpha.5"
 dependencies = [
@@ -1821,6 +1841,7 @@ dependencies = [
  "hex",
  "js-sys",
  "lilia-core",
+ "lilia-sqlite-native",
  "rusqlite",
  "serde",
  "serde_json",

@@ -9,6 +9,7 @@ members = [
   "crates/lilia-node-native",
   "crates/lilia-plugin-api",
   "crates/lilia-protocol",
+  "crates/lilia-sqlite-native",
   "crates/lilia-storage-sqlite",
   "crates/lilia-wasm",
   "plugins/lilia-plugin-json",
@@ -71,3 +72,7 @@ missing_debug_implementations = "warn"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+
+[patch.crates-io]
+libsqlite3-sys = { path = "crates/libsqlite3-sys" }
+

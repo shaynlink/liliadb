@@ -470,95 +470,97 @@ impl Database {
             .map(|operation| apply(&transaction, operation, self.codec.as_ref()))
             .collect::<Result<Vec<_>>>()?;
         transaction.commit()?;
-        for (op, res) in operations.iter().zip(&results) {
-            let evt = match op {
-                BatchOperation::KvSet { namespace, key, .. } => {
-                    Some(lilia_core::DatabaseEvent::KvMutated {
-                        namespace: namespace.clone(),
-                        key: key.clone(),
-                        version: res.version,
-                        deleted: false,
-                    })
-                }
-                BatchOperation::KvDelete { namespace, key, .. } => {
-                    Some(lilia_core::DatabaseEvent::KvMutated {
-                        namespace: namespace.clone(),
-                        key: key.clone(),
-                        version: None,
-                        deleted: true,
-                    })
-                }
-                BatchOperation::JsonPut { space, id, .. } => {
-                    Some(lilia_core::DatabaseEvent::JsonMutated {
-                        space: space.clone(),
-                        id: id.clone(),
-                        version: res.version,
-                        deleted: false,
-                    })
-                }
-                BatchOperation::JsonDelete { space, id, .. } => {
-                    Some(lilia_core::DatabaseEvent::JsonMutated {
-                        space: space.clone(),
-                        id: id.clone(),
-                        version: None,
-                        deleted: true,
-                    })
-                }
-                BatchOperation::GraphSetNode { graph, id, .. } => {
-                    Some(lilia_core::DatabaseEvent::GraphNodeMutated {
+        if self.events.receiver_count() > 0 {
+            for (op, res) in operations.iter().zip(&results) {
+                let evt = match op {
+                    BatchOperation::KvSet { namespace, key, .. } => {
+                        Some(lilia_core::DatabaseEvent::KvMutated {
+                            namespace: namespace.clone(),
+                            key: key.clone(),
+                            version: res.version,
+                            deleted: false,
+                        })
+                    }
+                    BatchOperation::KvDelete { namespace, key, .. } => {
+                        Some(lilia_core::DatabaseEvent::KvMutated {
+                            namespace: namespace.clone(),
+                            key: key.clone(),
+                            version: None,
+                            deleted: true,
+                        })
+                    }
+                    BatchOperation::JsonPut { space, id, .. } => {
+                        Some(lilia_core::DatabaseEvent::JsonMutated {
+                            space: space.clone(),
+                            id: id.clone(),
+                            version: res.version,
+                            deleted: false,
+                        })
+                    }
+                    BatchOperation::JsonDelete { space, id, .. } => {
+                        Some(lilia_core::DatabaseEvent::JsonMutated {
+                            space: space.clone(),
+                            id: id.clone(),
+                            version: None,
+                            deleted: true,
+                        })
+                    }
+                    BatchOperation::GraphSetNode { graph, id, .. } => {
+                        Some(lilia_core::DatabaseEvent::GraphNodeMutated {
+                            graph: graph.clone(),
+                            id: id.clone(),
+                            deleted: false,
+                        })
+                    }
+                    BatchOperation::GraphDeleteNode { graph, id } => {
+                        Some(lilia_core::DatabaseEvent::GraphNodeMutated {
+                            graph: graph.clone(),
+                            id: id.clone(),
+                            deleted: true,
+                        })
+                    }
+                    BatchOperation::GraphAddEdge {
+                        graph,
+                        source,
+                        target,
+                        kind,
+                    } => Some(lilia_core::DatabaseEvent::GraphEdgeMutated {
                         graph: graph.clone(),
-                        id: id.clone(),
+                        source: source.clone(),
+                        target: target.clone(),
+                        kind: kind.clone(),
                         deleted: false,
-                    })
-                }
-                BatchOperation::GraphDeleteNode { graph, id } => {
-                    Some(lilia_core::DatabaseEvent::GraphNodeMutated {
+                    }),
+                    BatchOperation::GraphRemoveEdge {
+                        graph,
+                        source,
+                        target,
+                        kind,
+                    } => Some(lilia_core::DatabaseEvent::GraphEdgeMutated {
                         graph: graph.clone(),
-                        id: id.clone(),
+                        source: source.clone(),
+                        target: target.clone(),
+                        kind: kind.clone(),
                         deleted: true,
-                    })
-                }
-                BatchOperation::GraphAddEdge {
-                    graph,
-                    source,
-                    target,
-                    kind,
-                } => Some(lilia_core::DatabaseEvent::GraphEdgeMutated {
-                    graph: graph.clone(),
-                    source: source.clone(),
-                    target: target.clone(),
-                    kind: kind.clone(),
-                    deleted: false,
-                }),
-                BatchOperation::GraphRemoveEdge {
-                    graph,
-                    source,
-                    target,
-                    kind,
-                } => Some(lilia_core::DatabaseEvent::GraphEdgeMutated {
-                    graph: graph.clone(),
-                    source: source.clone(),
-                    target: target.clone(),
-                    kind: kind.clone(),
-                    deleted: true,
-                }),
-                BatchOperation::FtsIndex {
-                    collection, doc_id, ..
-                } => Some(lilia_core::DatabaseEvent::FtsMutated {
-                    collection: collection.clone(),
-                    doc_id: doc_id.clone(),
-                    deleted: false,
-                }),
-                BatchOperation::FtsDelete { collection, doc_id } => {
-                    Some(lilia_core::DatabaseEvent::FtsMutated {
+                    }),
+                    BatchOperation::FtsIndex {
+                        collection, doc_id, ..
+                    } => Some(lilia_core::DatabaseEvent::FtsMutated {
                         collection: collection.clone(),
                         doc_id: doc_id.clone(),
-                        deleted: true,
-                    })
+                        deleted: false,
+                    }),
+                    BatchOperation::FtsDelete { collection, doc_id } => {
+                        Some(lilia_core::DatabaseEvent::FtsMutated {
+                            collection: collection.clone(),
+                            doc_id: doc_id.clone(),
+                            deleted: true,
+                        })
+                    }
+                };
+                if let Some(event) = evt {
+                    let _ = self.events.send(event);
                 }
-            };
-            if let Some(event) = evt {
-                let _ = self.events.send(event);
             }
         }
         drop(watchdog);

@@ -254,7 +254,7 @@ mod tests {
             fn name(&self) -> &str {
                 "aes-256-gcm"
             }
-            fn encode(&self, plaintext: &[u8]) -> lilia_core::Result<Vec<u8>> {
+            fn encode<'a>(&self, plaintext: &'a [u8]) -> lilia_core::Result<std::borrow::Cow<'a, [u8]>> {
                 let mut out = vec![0u8; plaintext.len() + 64];
                 let mut out_len = 0;
                 let res = unsafe {
@@ -268,7 +268,7 @@ mod tests {
                 };
                 assert_eq!(res, 0);
                 out.truncate(out_len);
-                Ok(out)
+                Ok(std::borrow::Cow::Owned(out))
             }
             fn decode(&self, ciphertext: &[u8]) -> lilia_core::Result<Vec<u8>> {
                 let mut out = vec![0u8; ciphertext.len()];
