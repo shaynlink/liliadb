@@ -150,6 +150,22 @@ impl NativeDatabase {
     }
 
     #[napi]
+    pub fn kv_get_sync(&self, namespace: String, key: Buffer) -> Result<Option<NativeKvEntry>> {
+        self.inner
+            .kv_get(&namespace, &key)
+            .map(|entry| {
+                entry.map(|entry| NativeKvEntry {
+                    namespace: entry.namespace,
+                    key: entry.key.into(),
+                    value: entry.value.into(),
+                    version: entry.version.to_string(),
+                    expires_at_ms: entry.expires_at_ms,
+                })
+            })
+            .map_err(napi_error)
+    }
+
+    #[napi]
     pub async fn json_get(&self, space: String, id: String) -> Result<Option<String>> {
         let database = Arc::clone(&self.inner);
         tokio::task::spawn_blocking(move || {
@@ -172,6 +188,26 @@ impl NativeDatabase {
         })
         .await
         .map_err(join_error)?
+    }
+
+    #[napi]
+    pub fn json_get_sync(&self, space: String, id: String) -> Result<Option<String>> {
+        self.inner
+            .json_get(&space, &id)
+            .and_then(|entry| {
+                entry
+                    .map(|entry| {
+                        serde_json::to_string(&entry).map_err(|error| {
+                            lilia_core::LiliaError::new(
+                                lilia_core::ErrorCode::Storage,
+                                error.to_string(),
+                                false,
+                            )
+                        })
+                    })
+                    .transpose()
+            })
+            .map_err(napi_error)
     }
 
     #[napi]
@@ -204,6 +240,30 @@ impl NativeDatabase {
     }
 
     #[napi]
+    pub fn kv_scan_sync(
+        &self,
+        namespace: String,
+        after: Option<Buffer>,
+        limit: u32,
+    ) -> Result<Vec<NativeKvEntry>> {
+        self.inner
+            .kv_scan(&namespace, after.as_deref(), limit)
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| NativeKvEntry {
+                        namespace: entry.namespace,
+                        key: entry.key.into(),
+                        value: entry.value.into(),
+                        version: entry.version.to_string(),
+                        expires_at_ms: entry.expires_at_ms,
+                    })
+                    .collect()
+            })
+            .map_err(napi_error)
+    }
+
+    #[napi]
     pub async fn json_scan(
         &self,
         space: String,
@@ -220,6 +280,20 @@ impl NativeDatabase {
         })
         .await
         .map_err(join_error)?
+    }
+
+    #[napi]
+    pub fn json_scan_sync(
+        &self,
+        space: String,
+        after: Option<String>,
+        limit: u32,
+    ) -> Result<String> {
+        let entries = self.inner
+            .json_scan(&space, after.as_deref(), limit)
+            .map_err(napi_error)?;
+        serde_json::to_string(&entries)
+            .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))
     }
 
     #[napi]
@@ -317,6 +391,31 @@ impl NativeDatabase {
     }
 
     #[napi]
+    pub async fn batch_msgpack(&self, payload: Buffer) -> Result<Buffer> {
+        let database = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || {
+            let operations: Vec<BatchOperation> = rmp_serde::from_slice(&payload)
+                .map_err(|error| Error::new(Status::InvalidArg, error.to_string()))?;
+            let result = database.batch(&operations).map_err(napi_error)?;
+            let bytes = rmp_serde::to_vec_named(&result)
+                .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
+            Ok(Buffer::from(bytes))
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    #[napi]
+    pub fn batch_msgpack_sync(&self, payload: Buffer) -> Result<Buffer> {
+        let operations: Vec<BatchOperation> = rmp_serde::from_slice(&payload)
+            .map_err(|error| Error::new(Status::InvalidArg, error.to_string()))?;
+        let result = self.inner.batch(&operations).map_err(napi_error)?;
+        let bytes = rmp_serde::to_vec_named(&result)
+            .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
+        Ok(Buffer::from(bytes))
+    }
+
+    #[napi]
     pub async fn integrity_check(&self) -> Result<bool> {
         let database = Arc::clone(&self.inner);
         tokio::task::spawn_blocking(move || database.integrity_check().map_err(napi_error))
@@ -347,6 +446,18 @@ impl NativeDatabase {
         })
         .await
         .map_err(join_error)?
+    }
+
+    #[napi]
+    pub fn sql_query_sync(&self, sql: String, params_json: Option<String>) -> Result<String> {
+        let params: Vec<serde_json::Value> = match params_json {
+            Some(ref s) if !s.trim().is_empty() => serde_json::from_str(s)
+                .map_err(|e| Error::new(Status::InvalidArg, e.to_string()))?,
+            _ => Vec::new(),
+        };
+        let result = self.inner.sql_query(&sql, &params).map_err(napi_error)?;
+        serde_json::to_string(&result)
+            .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))
     }
 
     #[napi]

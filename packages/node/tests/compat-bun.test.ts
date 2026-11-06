@@ -73,6 +73,44 @@ test("Bun: embedded client executes KV, JSON and SQL mutations", async () => {
   }
 });
 
+test("Bun: embedded synchronous db.sync client executes KV, JSON and SQL mutations", async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "bun-sync-")));
+  const dbPath = join(dir, "sync.lilia");
+
+  try {
+    const db = await Database.open({ path: dbPath });
+
+    // Sync KV
+    const key = new TextEncoder().encode("user:sync");
+    const val = new TextEncoder().encode("Bob");
+    const setRes = db.sync.kv.set("users", key, val);
+    assert.equal(setRes.version, 1n);
+
+    const getRes = db.sync.kv.get("users", key);
+    assert.ok(getRes !== undefined);
+    assert.equal(new TextDecoder().decode(getRes.value), "Bob");
+
+    // Sync JSON
+    const putRes = db.sync.json.put("items", "i1", { name: "Gadget", price: 99 });
+    assert.equal(putRes.version, 1n);
+
+    const doc = db.sync.json.get("items", "i1");
+    assert.ok(doc !== undefined);
+    assert.equal((doc.value as Record<string, unknown>).name, "Gadget");
+
+    // Sync SQL
+    const sqlRes = db.sync.sql.query<{ id: string; name: string }>(
+      "SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'items'"
+    );
+    assert.equal(sqlRes.length, 1);
+    assert.equal(sqlRes[0]?.name, "Gadget");
+
+    await db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("Bun: daemon client connects over Unix domain socket IPC", async () => {
   if (!daemonBinary) {
     console.warn("Skipping Bun daemon test: lilia-daemon binary not found");

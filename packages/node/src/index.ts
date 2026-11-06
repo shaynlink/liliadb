@@ -53,6 +53,43 @@ export class Database {
     return new Database(client);
   }
 
+  get sync() {
+    if (!(this.client instanceof EmbeddedClient)) {
+      throw new Error("Synchronous operations are only supported in embedded mode");
+    }
+    const client = this.client;
+    if (this.closed) throw lifecycleError("CLOSED", "database is closing or closed", false);
+    return {
+      kv: {
+        get: (namespace: string, key: Uint8Array): KvEntry | undefined => client.kvGetSync(namespace, key),
+        set: (namespace: string, key: Uint8Array, value: Uint8Array, options: { ifVersion?: bigint; expiresAtMs?: number } = {}): MutationResult =>
+          client.batchSync([{ model: "kv_set", namespace, key, value, ...options }])[0]!,
+        delete: (namespace: string, key: Uint8Array, options: { ifVersion?: bigint } = {}): MutationResult =>
+          client.batchSync([{ model: "kv_delete", namespace, key, ...options }])[0]!,
+        scan: (namespace: string, options: { after?: Uint8Array; limit?: number } = {}): KvEntry[] =>
+          client.kvScanSync(namespace, options.after, options.limit ?? 100),
+      },
+      json: {
+        get: (space: string, id: string): JsonEntry | undefined => client.jsonGetSync(space, id),
+        put: (space: string, id: string, value: JsonEntry["value"], options: { ifVersion?: bigint } = {}): MutationResult =>
+          client.batchSync([{ model: "json_put", space, id, value, ...options }])[0]!,
+        delete: (space: string, id: string, options: { ifVersion?: bigint } = {}): MutationResult =>
+          client.batchSync([{ model: "json_delete", space, id, ...options }])[0]!,
+        scan: (space: string, options: { after?: string; limit?: number } = {}): JsonEntry[] =>
+          client.jsonScanSync(space, options.after, options.limit ?? 100),
+      },
+      batch: (operations: readonly BatchOperation[]): MutationResult[] => client.batchSync(operations),
+      sql: {
+        query: <T = Record<string, unknown>>(sql: string, params: JsonValue[] = []): T[] =>
+          client.sqlQuerySync(sql, params).records as T[],
+        execute: (sql: string, params: JsonValue[] = []): { rowsAffected: number } =>
+          ({ rowsAffected: client.sqlQuerySync(sql, params).rowsAffected }),
+        raw: <T = Record<string, unknown>>(sql: string, params: JsonValue[] = []): SqlQueryResult<T> =>
+          client.sqlQuerySync(sql, params) as SqlQueryResult<T>,
+      },
+    };
+  }
+
   readonly kv = {
     get: (namespace: string, key: Uint8Array): Promise<KvEntry | undefined> => this.run(client => client.kvGet(namespace, key)),
     set: async (namespace: string, key: Uint8Array, value: Uint8Array, options: { ifVersion?: bigint; expiresAtMs?: number } = {}): Promise<MutationResult> =>

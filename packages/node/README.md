@@ -65,6 +65,23 @@ const db = await Database.open({
 });
 ```
 
+#### Synchronous API (`db.sync`)
+For latency-critical applications requiring sub-10-microsecond access without Promise / event loop overhead, the embedded client exposes a direct synchronous API:
+
+```ts
+// Direct synchronous execution on the V8 / Bun thread (> 200,000 op/s)
+db.sync.kv.set("cache", key, value);
+const entry = db.sync.kv.get("cache", key);
+
+db.sync.json.put("users", "u1", { name: "Alice" });
+const doc = db.sync.json.get("users", "u1");
+
+const results = db.sync.batch([
+  { model: "kv_set", namespace: "cache", key, value },
+  { model: "json_put", space: "users", id: "u2", value: { name: "Bob" } },
+]);
+```
+
 ### Daemon Mode
 Connects over local IPC to an isolated `lilia-daemon` process:
 ```ts

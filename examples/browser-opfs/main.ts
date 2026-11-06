@@ -17,7 +17,13 @@ const searchQueryInput = document.getElementById("search-query") as HTMLInputEle
 const sqlInput = document.getElementById("sql-input") as HTMLTextAreaElement;
 
 function log(msg: string, data?: unknown) {
-  const line = data ? `${msg}\n${JSON.stringify(data, null, 2)}` : msg;
+  const line = data
+    ? `${msg}\n${JSON.stringify(
+        data,
+        (_key, value) => (typeof value === "bigint" ? value.toString() : value),
+        2
+      )}`
+    : msg;
   outputEl.textContent = `${new Date().toLocaleTimeString()} - ${line}\n\n${outputEl.textContent}`;
 }
 

@@ -11,7 +11,10 @@ import { Database, LiliaError, type DatabaseMode, type JsonEntry, type KvEntry }
 import { existsSync } from "node:fs";
 
 const candidateNative = [
-  new URL("../../../target/debug/lilia_node_native.node", import.meta.url).pathname,
+  new URL("../../../target/release/liblilia_node_native.dylib", import.meta.url).pathname,
+  new URL("../../../target/release/liblilia_node_native.so", import.meta.url).pathname,
+  new URL("../../../target/release/lilia_node_native.dll", import.meta.url).pathname,
+  new URL("../../../packages/node-darwin-arm64/lilia_node_native.node", import.meta.url).pathname,
   new URL("../../../target/debug/liblilia_node_native.dylib", import.meta.url).pathname,
   new URL("../../../target/debug/liblilia_node_native.so", import.meta.url).pathname,
   new URL("../../../target/debug/lilia_node_native.dll", import.meta.url).pathname,
@@ -76,6 +79,76 @@ test("embedded KV, JSON, and rollback conformance", { skip: !nativePath }, async
   const directory = await mkdtemp(join(tmpdir(), "lilia-node-"));
   try { await conformance("embedded", join(directory, "embedded.lilia")); }
   finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("embedded synchronous db.sync KV, JSON, SQL and batch conformance", { skip: !nativePath }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lilia-sync-"));
+  const path = join(directory, "sync.lilia");
+  try {
+    const db = await Database.open({ path });
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+
+    // 1. Sync KV
+    const setRes = db.sync.kv.set("cfg", enc.encode("k1"), enc.encode("v1"));
+    assert.equal(setRes.version, 1n);
+    assert.equal(setRes.deleted, false);
+
+    const getRes = db.sync.kv.get("cfg", enc.encode("k1"));
+    assert.ok(getRes !== undefined);
+    assert.equal(dec.decode(getRes.value), "v1");
+    assert.equal(getRes.version, 1n);
+
+    const scanRes = db.sync.kv.scan("cfg");
+    assert.equal(scanRes.length, 1);
+    assert.equal(dec.decode(scanRes[0]!.value), "v1");
+
+    const delRes = db.sync.kv.delete("cfg", enc.encode("k1"));
+    assert.equal(delRes.deleted, true);
+    assert.equal(db.sync.kv.get("cfg", enc.encode("k1")), undefined);
+
+    // 2. Sync JSON
+    const putRes = db.sync.json.put("docs", "d1", { title: "Fast", count: 42 });
+    assert.equal(putRes.version, 1n);
+
+    const doc = db.sync.json.get("docs", "d1");
+    assert.ok(doc !== undefined);
+    assert.deepEqual(doc.value, { title: "Fast", count: 42 });
+
+    const scanJson = db.sync.json.scan("docs");
+    assert.equal(scanJson.length, 1);
+    assert.equal(scanJson[0]!.id, "d1");
+
+    // 3. Sync SQL
+    const sqlRows = db.sync.sql.query<{ id: string; version: number }>(
+      "SELECT id, version FROM lilia_json WHERE space = ?1",
+      ["docs"]
+    );
+    assert.equal(sqlRows.length, 1);
+    assert.equal(sqlRows[0]?.id, "d1");
+
+    const sqlExec = db.sync.sql.execute(
+      "UPDATE _lilia_json SET version = version + 1 WHERE space = ?1 AND id = ?2",
+      ["docs", "d1"]
+    );
+    assert.equal(sqlExec.rowsAffected, 1);
+
+    const updatedDoc = db.sync.json.get("docs", "d1");
+    assert.equal(updatedDoc?.version, 2n);
+
+    // 4. Sync Batch
+    const batchRes = db.sync.batch([
+      { model: "kv_set", namespace: "b", key: enc.encode("k_a"), value: enc.encode("v_a") },
+      { model: "json_put", space: "b", id: "j_a", value: { ok: true } },
+    ]);
+    assert.equal(batchRes.length, 2);
+    assert.equal(batchRes[0]?.deleted, false);
+    assert.equal(batchRes[1]?.deleted, false);
+
+    await db.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("daemon KV and JSON conformance", { skip: !daemonBinary }, async () => {

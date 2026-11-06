@@ -16,6 +16,7 @@
     "graph": "nx graph",
     "prebuild": "node ./tools/build-prebuilds.mjs",
     "build:wasm": "node ./tools/build-wasm.mjs",
+    "example:browser": "pnpm --filter example-browser-opfs dev",
     "lilia": "cargo run -p lilia-cli --"
   },
   "devDependencies": {

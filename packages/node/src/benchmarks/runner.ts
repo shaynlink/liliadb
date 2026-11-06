@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { runRustBenchmark } from "./drivers/rust_embedded.js";
-import { runNodeEmbeddedBenchmark } from "./drivers/node_embedded.js";
+import { runNodeEmbeddedBenchmark, runNodeEmbeddedSyncBenchmark } from "./drivers/node_embedded.js";
 import { runDaemonIpcBenchmark } from "./drivers/daemon_ipc.js";
 import { runDaemonHttpBenchmark } from "./drivers/daemon_http.js";
 import {
@@ -114,7 +114,7 @@ async function main(): Promise<void> {
       }
     }
 
-    // 2. Node-API Embedded
+    // 2. Node-API Embedded (Async)
     if (options.surfaces.includes("node")) {
       for (const codec of options.codecs) {
         process.stdout.write(
@@ -122,6 +122,24 @@ async function main(): Promise<void> {
         );
         try {
           const res = await runNodeEmbeddedBenchmark(w.count, w.batchSize, codec);
+          allResults.push(res);
+          console.log(
+            `DONE: ${Math.round(res.throughputOpsSec)} op/s (p50: ${res.p50Us.toFixed(2)} µs)`
+          );
+        } catch (err) {
+          console.log(`ERROR: ${(err as Error).message}`);
+        }
+      }
+    }
+
+    // 2b. Node-API Embedded (Sync)
+    if (options.surfaces.includes("node-sync") || options.surfaces.includes("node")) {
+      for (const codec of options.codecs) {
+        process.stdout.write(
+          `  - [Node-API Sync Embedded] running ${w.count} (${codec})... `
+        );
+        try {
+          const res = await runNodeEmbeddedSyncBenchmark(w.count, w.batchSize, codec);
           allResults.push(res);
           console.log(
             `DONE: ${Math.round(res.throughputOpsSec)} op/s (p50: ${res.p50Us.toFixed(2)} µs)`

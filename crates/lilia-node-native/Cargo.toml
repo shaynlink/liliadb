@@ -14,6 +14,7 @@ lilia-storage-sqlite = { path = "../lilia-storage-sqlite" }
 napi.workspace = true
 napi-derive.workspace = true
 serde_json.workspace = true
+rmp-serde.workspace = true
 tokio.workspace = true
 
 [build-dependencies]

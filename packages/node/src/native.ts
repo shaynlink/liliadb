@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { existsSync, copyFileSync } from "node:fs";
+import { encode, decode } from "@msgpack/msgpack";
 import type {
   BatchOperation,
   DatabaseEvent,
@@ -21,18 +22,25 @@ interface NativeFtsHit { collection: string; doc_id?: string; docId?: string; sn
 interface NativeSubscriptionHandle { unsubscribe(): void }
 interface NativeDatabaseHandle {
   kvGet(namespace: string, key: Buffer): Promise<NativeKvEntry | null>;
+  kvGetSync?(namespace: string, key: Buffer): NativeKvEntry | null;
   kvScan(namespace: string, after: Buffer | undefined, limit: number): Promise<NativeKvEntry[]>;
+  kvScanSync?(namespace: string, after: Buffer | undefined, limit: number): NativeKvEntry[];
   jsonGet(space: string, id: string): Promise<string | null>;
+  jsonGetSync?(space: string, id: string): string | null;
   jsonScan(space: string, after: string | undefined, limit: number): Promise<string>;
+  jsonScanSync?(space: string, after: string | undefined, limit: number): string;
   jsonCreateIndex(space: string, name: string, path: string): Promise<void>;
   jsonDropIndex(space: string, name: string): Promise<boolean>;
   jsonListIndexes(space: string): Promise<string>;
   jsonScanByIndex(space: string, indexName: string, value: string, after: string | undefined, limit: number): Promise<string>;
   jsonFind(space: string, queryJson: string, after: string | undefined, limit: number): Promise<string>;
   batch(operations: string): Promise<string>;
+  batchMsgpack?(payload: Uint8Array): Promise<Buffer>;
+  batchMsgpackSync?(payload: Uint8Array): Buffer;
   integrityCheck(): Promise<boolean>;
   backup(destination: string): Promise<void>;
   sqlQuery(sql: string, paramsJson?: string): Promise<string>;
+  sqlQuerySync?(sql: string, paramsJson?: string): string;
   graphNeighbors(graph: string, node: string, direction: string | undefined, kind: string | undefined): Promise<string[]>;
   graphReachability(graph: string, startNodes: string[], direction: string | undefined): Promise<string[]>;
   ftsSearch(collection: string, query: string, limit: number | undefined): Promise<NativeFtsHit[]>;
@@ -56,8 +64,23 @@ export class EmbeddedClient {
     return entry ? mapKv(entry) : undefined;
   }
 
+  kvGetSync(namespace: string, key: Uint8Array): KvEntry | undefined {
+    if (this.native.kvGetSync) {
+      const entry = nativeSyncCall(() => this.native.kvGetSync!(namespace, Buffer.from(key)));
+      return entry ? mapKv(entry) : undefined;
+    }
+    throw new Error("kvGetSync is not supported by current native module");
+  }
+
   async kvScan(namespace: string, after: Uint8Array | undefined, limit: number): Promise<KvEntry[]> {
     return (await nativeCall(this.native.kvScan(namespace, after ? Buffer.from(after) : undefined, limit))).map(mapKv);
+  }
+
+  kvScanSync(namespace: string, after: Uint8Array | undefined, limit: number): KvEntry[] {
+    if (this.native.kvScanSync) {
+      return nativeSyncCall(() => this.native.kvScanSync!(namespace, after ? Buffer.from(after) : undefined, limit)).map(mapKv);
+    }
+    throw new Error("kvScanSync is not supported by current native module");
   }
 
   async jsonGet(space: string, id: string): Promise<JsonEntry | undefined> {
@@ -65,8 +88,23 @@ export class EmbeddedClient {
     return entry ? parseJsonEntry(entry) : undefined;
   }
 
+  jsonGetSync(space: string, id: string): JsonEntry | undefined {
+    if (this.native.jsonGetSync) {
+      const entry = nativeSyncCall(() => this.native.jsonGetSync!(space, id));
+      return entry ? parseJsonEntry(entry) : undefined;
+    }
+    throw new Error("jsonGetSync is not supported by current native module");
+  }
+
   async jsonScan(space: string, after: string | undefined, limit: number): Promise<JsonEntry[]> {
     return (JSON.parse(await nativeCall(this.native.jsonScan(space, after, limit))) as Array<Record<string, unknown>>).map(mapJson);
+  }
+
+  jsonScanSync(space: string, after: string | undefined, limit: number): JsonEntry[] {
+    if (this.native.jsonScanSync) {
+      return (JSON.parse(nativeSyncCall(() => this.native.jsonScanSync!(space, after, limit))) as Array<Record<string, unknown>>).map(mapJson);
+    }
+    throw new Error("jsonScanSync is not supported by current native module");
   }
 
   async jsonCreateIndex(space: string, name: string, path: string): Promise<void> {
@@ -94,14 +132,46 @@ export class EmbeddedClient {
   }
 
   async batch(operations: readonly BatchOperation[]): Promise<MutationResult[]> {
+    if (this.native.batchMsgpack) {
+      const wire = operations.map(toWireOperationMsgpack);
+      const payload = encode(wire);
+      const resBuffer = await nativeCall(this.native.batchMsgpack(payload));
+      const decoded = decode(resBuffer) as Array<{ version?: string | number | bigint | null; deleted: boolean }>;
+      return decoded.map(item => ({
+        deleted: Boolean(item.deleted),
+        version: item.version != null ? readVersion(item.version) : undefined,
+      }));
+    }
     const wire = operations.map(toNativeWire);
     const result = JSON.parse(await nativeCall(this.native.batch(JSON.stringify(wire)))) as Array<{ version?: string | null; deleted: boolean }>;
     return result.map(item => ({ ...item, version: item.version == null ? undefined : readVersion(item.version) }));
   }
 
+  batchSync(operations: readonly BatchOperation[]): MutationResult[] {
+    if (this.native.batchMsgpackSync) {
+      const wire = operations.map(toWireOperationMsgpack);
+      const payload = encode(wire);
+      const resBuffer = nativeSyncCall(() => this.native.batchMsgpackSync!(payload));
+      const decoded = decode(resBuffer) as Array<{ version?: string | number | bigint | null; deleted: boolean }>;
+      return decoded.map(item => ({
+        deleted: Boolean(item.deleted),
+        version: item.version != null ? readVersion(item.version) : undefined,
+      }));
+    }
+    throw new Error("batchSync is not supported by current native module");
+  }
+
   async sqlQuery(sql: string, params: unknown[] = []): Promise<SqlQueryResult> {
     const raw = await nativeCall(this.native.sqlQuery(sql, JSON.stringify(params)));
     return mapSqlQueryResult(JSON.parse(raw) as Record<string, unknown>);
+  }
+
+  sqlQuerySync(sql: string, params: unknown[] = []): SqlQueryResult {
+    if (this.native.sqlQuerySync) {
+      const raw = nativeSyncCall(() => this.native.sqlQuerySync!(sql, JSON.stringify(params)));
+      return mapSqlQueryResult(JSON.parse(raw) as Record<string, unknown>);
+    }
+    throw new Error("sqlQuerySync is not supported by current native module");
   }
 
   async graphNeighbors(graph: string, node: string, direction?: GraphDirection, kind?: string): Promise<string[]> {
@@ -164,16 +234,34 @@ async function nativeCall<T>(operation: Promise<T>): Promise<T> {
   }
 }
 
+function nativeSyncCall<T>(operation: () => T): T {
+  try { return operation(); }
+  catch (error) {
+    if (error instanceof Error) {
+      let shape;
+      try { shape = JSON.parse(error.message); } catch { throw error; }
+      if (typeof shape?.code === "string" && typeof shape?.message === "string") throw new LiliaError(shape);
+    }
+    throw error;
+  }
+}
+
 function loadNative(): NativeModule {
   let explicit = process.env.LILIA_NATIVE_PATH;
   if (!explicit) {
+    const platform = nativePackagePlatform();
     const candidates = [
-      new URL("../../../target/debug/liblilia_node_native.dylib", import.meta.url).pathname,
-      new URL("../../../target/debug/liblilia_node_native.so", import.meta.url).pathname,
-      new URL("../../../target/debug/lilia_node_native.dll", import.meta.url).pathname,
+      // 1. Release builds from target/
       new URL("../../../target/release/liblilia_node_native.dylib", import.meta.url).pathname,
       new URL("../../../target/release/liblilia_node_native.so", import.meta.url).pathname,
       new URL("../../../target/release/lilia_node_native.dll", import.meta.url).pathname,
+      // 2. Local workspace prebuilds
+      new URL(`../../node-${platform}/lilia_node_native.node`, import.meta.url).pathname,
+      new URL(`../lilia-node-native.${platform}.node`, import.meta.url).pathname,
+      // 3. Debug builds from target/
+      new URL("../../../target/debug/liblilia_node_native.dylib", import.meta.url).pathname,
+      new URL("../../../target/debug/liblilia_node_native.so", import.meta.url).pathname,
+      new URL("../../../target/debug/lilia_node_native.dll", import.meta.url).pathname,
     ];
     for (const candidate of candidates) {
       if (existsSync(candidate)) {
@@ -213,6 +301,86 @@ function parseJsonEntry(value: string): JsonEntry { return mapJson(JSON.parse(va
 function mapJson(entry: Record<string, unknown>): JsonEntry {
   return { space: String(entry.space), id: String(entry.id), value: entry.value as JsonEntry["value"], version: readVersion(entry.version) };
 }
+
+function toWireOperationMsgpack(op: BatchOperation): Record<string, unknown> {
+  switch (op.model) {
+    case "kv_set":
+      return {
+        model: "kv_set",
+        namespace: op.namespace,
+        key: op.key,
+        value: op.value,
+        if_version: op.ifVersion != null ? checkedVersion(op.ifVersion)?.toString() : undefined,
+        expires_at_ms: op.expiresAtMs != null ? checkedExpiry(op.expiresAtMs) : undefined,
+      };
+    case "kv_delete":
+      return {
+        model: "kv_delete",
+        namespace: op.namespace,
+        key: op.key,
+        if_version: op.ifVersion != null ? checkedVersion(op.ifVersion)?.toString() : undefined,
+      };
+    case "json_put":
+      return {
+        model: "json_put",
+        space: op.space,
+        id: op.id,
+        value: op.value,
+        if_version: op.ifVersion != null ? checkedVersion(op.ifVersion)?.toString() : undefined,
+      };
+    case "json_delete":
+      return {
+        model: "json_delete",
+        space: op.space,
+        id: op.id,
+        if_version: op.ifVersion != null ? checkedVersion(op.ifVersion)?.toString() : undefined,
+      };
+    case "graph_set_node":
+      return {
+        model: "graph_set_node",
+        graph: op.graph,
+        id: op.id,
+        kind: op.kind,
+        metadata: op.metadata ?? {},
+      };
+    case "graph_delete_node":
+      return {
+        model: "graph_delete_node",
+        graph: op.graph,
+        id: op.id,
+      };
+    case "graph_add_edge":
+      return {
+        model: "graph_add_edge",
+        graph: op.graph,
+        source: op.source,
+        target: op.target,
+        kind: op.kind,
+      };
+    case "graph_remove_edge":
+      return {
+        model: "graph_remove_edge",
+        graph: op.graph,
+        source: op.source,
+        target: op.target,
+        kind: op.kind,
+      };
+    case "fts_index":
+      return {
+        model: "fts_index",
+        collection: op.collection,
+        doc_id: op.docId,
+        content: op.content,
+      };
+    case "fts_delete":
+      return {
+        model: "fts_delete",
+        collection: op.collection,
+        doc_id: op.docId,
+      };
+  }
+}
+
 function toNativeWire(operation: BatchOperation): Record<string, unknown> {
   const result = { ...operation } as Record<string, unknown>;
   if ("ifVersion" in operation) {
@@ -241,17 +409,25 @@ export function mapSqlQueryResult<T = Record<string, unknown>>(raw: Record<strin
   const columns = (raw.columns as string[]) ?? [];
   const rows = (raw.rows as JsonValue[][]) ?? [];
   const rowsAffected = Number(raw.rows_affected ?? 0);
-  const records: T[] = rows.map(row => {
-    const obj: Record<string, unknown> = {};
-    for (let i = 0; i < columns.length; i++) {
-      const col = columns[i];
-      if (col !== undefined) {
-        obj[col] = row[i];
+  let cachedRecords: T[] | undefined;
+  return {
+    columns,
+    rows,
+    rowsAffected,
+    get records(): T[] {
+      if (cachedRecords === undefined) {
+        cachedRecords = rows.map(row => {
+          const obj: Record<string, unknown> = {};
+          for (let i = 0; i < columns.length; i++) {
+            const col = columns[i];
+            if (col !== undefined) obj[col] = row[i];
+          }
+          return obj as T;
+        });
       }
-    }
-    return obj as T;
-  });
-  return { columns, rows, rowsAffected, records };
+      return cachedRecords;
+    },
+  };
 }
 
 export function mapDatabaseEvent(raw: unknown): DatabaseEvent | undefined {
