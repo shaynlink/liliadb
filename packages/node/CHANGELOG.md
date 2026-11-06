@@ -4,6 +4,18 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 
 ---
 
+## [0.1.0-alpha.6] - 2026-11-06
+
+### Added
+- Synchronous embedded accessors (`getSync`, `setSync`, `deleteSync`, `batchSync`, `batchMsgpackSync`) via Node-API for zero-async-overhead embedded workloads.
+- Keyset streaming driver benchmark in `packages/node/src/benchmarks/drivers/node_embedded.ts`.
+- Dedicated Bun compatibility test suite in `packages/node/tests/compat-bun.test.ts`.
+
+### Changed
+- Native bindings optimization via direct SQLite statement evaluation and BigInt 64-bit decoding alignment.
+
+---
+
 ## [0.1.0-alpha.5] - 2026-11-03
 
 ### Changed

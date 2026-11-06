@@ -11,9 +11,9 @@ transaction boundary, with embedded Rust, WebAssembly (browser OPFS & Edge), Nod
 
 ---
 
-## Status: v0.1.0-alpha.5
+## Status: v0.1.0-alpha.6
 
-This repository contains the `0.1.0-alpha.5` release featuring:
+This repository contains the `0.1.0-alpha.6` release featuring:
 - **WebAssembly & OPFS (Origin Private File System)**: `@liliadb/wasm` bringing 100% multimodel database capabilities directly into web browsers (with high-speed OPFS SAHPool zero-copy persistence and dedicated Web Worker bridge) and Edge runtimes (Cloudflare Workers, Deno Deploy, Vercel Edge).
 - **WebAssembly Plugin Sandboxing**: Hardened, fault-isolated Wasmtime/WASI plugin runtime with isolated 32-bit linear memory, CPU fuel metering (`--plugin-fuel-limit`), strict memory quotas (`--plugin-memory-limit-mb`), and fail-closed daemon security policy (`--require-sandboxed-plugins`).
 - **Global Package Manager Distribution**:

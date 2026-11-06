@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.0-alpha.6] - 2026-11-06
+
+### Added
+- **Interactive Micro-Projects & Real-World Use Cases**:
+  - **Interactive Terminal Knowledge Graph** (`examples/project-knowledge-graph`): Complete CLI application and interactive terminal REPL demonstrating multimodel graph exploration, bidirectional edge tracking, semantic attribute queries, JSON serialization, and ASCII hierarchy visualization.
+  - **Native Rust IoT Edge Hub** (`examples/project-iot-smart-hub`): High-throughput edge telemetry ingestion hub showcasing atomic batch writes, MCU heartbeat tracking with TTL expiration, threshold-triggered reactive alerts, and SQLite WAL storage integrity verification (`db.integrity_check()`).
+
+- **Custom Extension Lifecycle & Plugin Tooling**:
+  - Comprehensive reference guide and complete extension lifecycle implementation in `examples/custom-extension`.
+  - Reference custom XOR/rotation codec plugin demonstrating C-ABI initialization (`lilia_plugin_init_v1`), dynamic memory allocation hooks (`lilia_alloc`, `lilia_dealloc`), and capability negotiation.
+  - End-to-end automated lifecycle verification scripts (`run-lifecycle.sh`, `test-extension.mjs`) testing dynamic compilation, packaging, daemon registration, and live SQLite storage encryption/decryption.
+
+- **Synchronous Accessors & Performance Benchmarking**:
+  - Added synchronous method suite to `@liliadb/node` (`getSync`, `setSync`, `deleteSync`, `batchSync`, `batchMsgpackSync`) via N-API for latency-sensitive embedded workloads.
+  - Dedicated keyset streaming performance benchmarks in `packages/node/src/benchmarks/drivers/node_embedded.ts` and automated runner integration for memory-constant async iterator evaluation.
+  - Expanded cross-runtime test verification with a dedicated Bun compatibility test suite (`packages/node/tests/compat-bun.test.ts`).
+
+### Changed & Performance
+- **Native SQLite Transaction Engine Acceleration**:
+  - Replaced high-overhead abstraction layers with direct SQLite FFI bindings in `crates/lilia-sqlite-native` and `crates/libsqlite3-sys`.
+  - Zero-copy borrowing for codec transformation (`Cow<'a, [u8]>`) eliminating superfluous heap allocations during read/write cycles.
+  - Accelerated transaction writes, prepared statement slot caching, and reduced per-operation latency overhead (benchmarked and validated in `crates/lilia-storage-sqlite/src/bin/bench_rusqlite.rs`).
+
+---
+
 ## [0.1.0-alpha.5] - 2026-11-03
 
 ### Added
