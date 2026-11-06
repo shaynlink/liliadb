@@ -16,6 +16,8 @@ members = [
   "plugins/lilia-plugin-kv",
   "plugins/lilia-plugin-codec",
   "plugins/lilia-plugin-sql",
+  "examples/custom-extension",
+  "examples/project-iot-smart-hub",
 ]
 
 [workspace.package]

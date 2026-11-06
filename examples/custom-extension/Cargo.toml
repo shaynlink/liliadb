@@ -1,0 +1,23 @@
+[package]
+name = "lilia-plugin-custom-extension"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sample custom extension plugin for LiliaDB"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lilia-plugin-api = { path = "../../crates/lilia-plugin-api" }
+
+[dev-dependencies]
+lilia-core = { path = "../../crates/lilia-core" }
+lilia-storage-sqlite = { path = "../../crates/lilia-storage-sqlite" }
+rusqlite.workspace = true
+serde_json.workspace = true
+tempfile = "3.27.0"
+
+[lints]
+workspace = true
