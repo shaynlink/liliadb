@@ -7,7 +7,6 @@ fn main() {
         .file("sqlite3/sqlite3.c")
         .include("sqlite3")
         .opt_level(3)
-        .flag("-flto")
         .flag("-DSQLITE_CORE")
         .flag("-DSQLITE_DEFAULT_MEMSTATUS=0")
         .flag("-DSQLITE_THREADSAFE=2")

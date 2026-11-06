@@ -150,7 +150,6 @@ mod build_bundled {
         let mut cfg = cc::Build::new();
         cfg.file(format!("{lib_name}/sqlite3.c"))
             .opt_level(3)
-            .flag("-flto")
             .flag("-DSQLITE_CORE")
             .flag("-DSQLITE_DEFAULT_FOREIGN_KEYS=1")
             .flag("-DSQLITE_DEFAULT_MEMSTATUS=0")
