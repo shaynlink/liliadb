@@ -8,6 +8,10 @@ repository.workspace = true
 
 [dependencies]
 lilia-core = { path = "../lilia-core" }
+tracing.workspace = true
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+sqlite-wasm-rs = "0.5.5"
 
 [build-dependencies]
 cc = { version = "1.2", features = ["parallel"] }

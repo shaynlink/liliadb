@@ -6,10 +6,15 @@ fn main() {
 
     println!("cargo:rerun-if-changed=sqlite3/sqlite3.c");
     println!("cargo:rerun-if-changed=sqlite3/sqlite3.h");
+    println!("cargo:rerun-if-changed=sqlite3/sqlite3ext.h");
+    println!("cargo:rerun-if-changed=sqlite3/ext/series.c");
+    println!("cargo:rerun-if-changed=sqlite3/ext/decimal.c");
 
     let mut build = cc::Build::new();
     build
         .file("sqlite3/sqlite3.c")
+        .file("sqlite3/ext/series.c")
+        .file("sqlite3/ext/decimal.c")
         .include("sqlite3")
         .opt_level(3)
         .flag("-DSQLITE_CORE")
@@ -23,6 +28,12 @@ fn main() {
         .flag("-DSQLITE_ENABLE_JSON1")
         .flag("-DSQLITE_ENABLE_FTS5")
         .flag("-DSQLITE_ENABLE_RTREE")
+        .flag("-DSQLITE_ENABLE_GEOPOLY")
+        .flag("-DSQLITE_ENABLE_CARRAY")
+        .flag("-DSQLITE_ENABLE_SESSION")
+        .flag("-DSQLITE_ENABLE_PREUPDATE_HOOK")
+        .flag("-DSQLITE_ENABLE_DBSTAT_VTAB")
+        .flag("-DSQLITE_ENABLE_BYTECODE_VTAB")
         .flag("-DSQLITE_USE_URI=1")
         .flag("-DHAVE_USLEEP=1")
         .flag("-DHAVE_ISNAN=1")

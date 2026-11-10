@@ -7,12 +7,22 @@ use std::ptr;
 use lilia_core::{ErrorCode, LiliaError, Result};
 
 use crate::ffi;
+use crate::function::{NativeContext, NativeValue};
 use crate::slots::{StatementSlots, StmtSlot};
 use crate::statement::NativeStatement;
+use crate::transaction::NativeTransaction;
 
 pub struct NativeConnection {
     raw: *mut ffi::sqlite3,
     slots: StatementSlots,
+}
+
+impl std::fmt::Debug for NativeConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeConnection")
+            .field("raw", &self.raw)
+            .finish()
+    }
 }
 
 unsafe impl Send for NativeConnection {}
@@ -36,6 +46,11 @@ impl InterruptHandle {
 }
 
 impl NativeConnection {
+    /// Open a new SQLite connection with default parameters for utilities and testing.
+    pub fn open_file(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open(path.as_ref(), "NORMAL", 0, 5000)
+    }
+
     /// Open a new SQLite connection with high-performance parameters.
     pub fn open(
         path: &Path,
@@ -43,6 +58,19 @@ impl NativeConnection {
         mmap_size: u64,
         busy_timeout_ms: i32,
     ) -> Result<Self> {
+        Self::open_with_config(path, synchronous, mmap_size, busy_timeout_ms, -65536)
+    }
+
+    /// Open a new SQLite connection with explicit cache and durability parameters.
+    pub fn open_with_config(
+        path: &Path,
+        synchronous: &str,
+        mmap_size: u64,
+        busy_timeout_ms: i32,
+        cache_size_kib: i32,
+    ) -> Result<Self> {
+        crate::logging::ensure_sqlite_initialized();
+
         let path_str = path.to_str().ok_or_else(|| {
             LiliaError::new(ErrorCode::InvalidInput, "invalid path encoding", false)
         })?;
@@ -93,7 +121,7 @@ impl NativeConnection {
         conn.exec("PRAGMA journal_mode = WAL;")?;
         conn.exec(&format!("PRAGMA synchronous = {synchronous};"))?;
         conn.exec("PRAGMA temp_store = MEMORY;")?;
-        conn.exec("PRAGMA cache_size = -65536;")?;
+        conn.exec(&format!("PRAGMA cache_size = {cache_size_kib};"))?;
         if mmap_size > 0 {
             conn.exec(&format!("PRAGMA mmap_size = {mmap_size};"))?;
         }
@@ -138,10 +166,9 @@ impl NativeConnection {
                 unsafe { ffi::sqlite3_free(err_msg.cast()) };
                 msg
             };
-            return Err(LiliaError::new(
-                ErrorCode::Storage,
-                format!("sqlite_exec failed: {detail}"),
-                false,
+            return Err(ffi::sqlite_code_to_lilia(
+                rc,
+                format!("sqlite_exec failed: {detail} (rc={rc})"),
             ));
         }
         Ok(())
@@ -169,10 +196,9 @@ impl NativeConnection {
         };
         if rc != ffi::SQLITE_OK || stmt.is_null() {
             let err = unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(self.raw)).to_string_lossy() };
-            return Err(LiliaError::new(
-                ErrorCode::Storage,
+            return Err(ffi::sqlite_code_to_lilia(
+                rc,
                 format!("sqlite prepare failed: {err} (rc={rc})"),
-                false,
             ));
         }
         Ok(unsafe { NativeStatement::from_raw(stmt) })
@@ -201,6 +227,143 @@ impl NativeConnection {
     #[inline]
     pub fn rollback(&self) -> Result<()> {
         self.exec("ROLLBACK;")
+    }
+
+    #[inline]
+    pub fn transaction(&mut self) -> Result<NativeTransaction<'_>> {
+        NativeTransaction::new(self)
+    }
+
+    #[inline]
+    pub fn pragma_update(&self, name: &str, val: impl std::fmt::Display) -> Result<()> {
+        let sql = if name.trim_start().to_uppercase().starts_with("PRAGMA ") {
+            format!("{name} = {val};")
+        } else {
+            format!("PRAGMA {name} = {val};")
+        };
+        self.exec(&sql)
+    }
+
+    pub fn query_int(&self, sql: &str) -> Result<i64> {
+        let mut stmt = self.prepare(sql)?;
+        if stmt.step()? {
+            Ok(stmt.column_int64(0))
+        } else {
+            Ok(0)
+        }
+    }
+
+    pub fn pragma_query_int(&self, pragma: &str) -> Result<i64> {
+        let trimmed = pragma.trim_start();
+        let sql = if trimmed.to_uppercase().starts_with("PRAGMA ")
+            || trimmed.to_uppercase().starts_with("SELECT ")
+        {
+            pragma.to_string()
+        } else {
+            format!("PRAGMA {pragma};")
+        };
+        self.query_int(&sql)
+    }
+
+    pub fn wal_checkpoint(&self, mode: c_int) -> Result<(i32, i32, i32)> {
+        let mut log = 0;
+        let mut ckpt = 0;
+        let rc = unsafe {
+            ffi::sqlite3_wal_checkpoint_v2(self.raw, ptr::null(), mode, &mut log, &mut ckpt)
+        };
+        if rc == ffi::SQLITE_OK || rc == ffi::SQLITE_BUSY {
+            let busy = if rc == ffi::SQLITE_BUSY { 1 } else { 0 };
+            Ok((busy, log, ckpt))
+        } else {
+            let err = unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(self.raw)).to_string_lossy() };
+            Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("wal_checkpoint failed: {err} (rc={rc})"),
+                false,
+            ))
+        }
+    }
+
+    pub fn cache_flush(&self) -> Result<()> {
+        let rc = unsafe { ffi::sqlite3_db_cacheflush(self.raw) };
+        if rc == ffi::SQLITE_OK {
+            Ok(())
+        } else {
+            let err = unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(self.raw)).to_string_lossy() };
+            Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("cache_flush failed: {err} (rc={rc})"),
+                false,
+            ))
+        }
+    }
+
+    pub fn register_scalar_function<F>(&self, name: &str, n_arg: i32, f: F) -> Result<()>
+    where
+        F: Fn(&NativeContext, &[NativeValue]) -> Result<()> + Send + Sync + 'static,
+    {
+        let c_name = CString::new(name).map_err(|e| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("null byte in function name: {e}"),
+                false,
+            )
+        })?;
+
+        let boxed_f = Box::new(f);
+        let app_ptr = Box::into_raw(boxed_f);
+
+        unsafe extern "C" fn x_func<F>(
+            ctx: *mut ffi::sqlite3_context,
+            argc: c_int,
+            argv: *mut *mut ffi::sqlite3_value,
+        ) where
+            F: Fn(&NativeContext, &[NativeValue]) -> Result<()> + Send + Sync + 'static,
+        {
+            let user_data = ffi::sqlite3_user_data(ctx);
+            let closure = &*(user_data.cast::<F>());
+            let n = argc as usize;
+            let mut values = Vec::with_capacity(n);
+            for i in 0..n {
+                let val_ptr = *argv.add(i);
+                values.push(NativeValue::from_raw(val_ptr));
+            }
+            let native_ctx = NativeContext::from_raw(ctx);
+            if let Err(e) = closure(&native_ctx, &values) {
+                native_ctx.set_result_error(&e.to_string());
+            }
+        }
+
+        unsafe extern "C" fn x_destroy<F>(p: *mut std::ffi::c_void) {
+            if !p.is_null() {
+                drop(Box::from_raw(p.cast::<F>()));
+            }
+        }
+
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                self.raw,
+                c_name.as_ptr(),
+                n_arg as c_int,
+                ffi::SQLITE_UTF8 as c_int | ffi::SQLITE_DETERMINISTIC,
+                app_ptr.cast::<std::ffi::c_void>(),
+                Some(x_func::<F>),
+                None,
+                None,
+                Some(x_destroy::<F>),
+            )
+        };
+
+        if rc != ffi::SQLITE_OK {
+            unsafe { drop(Box::from_raw(app_ptr)) };
+            return Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("failed to register scalar function {name}: rc={rc}"),
+                false,
+            ));
+        }
+
+        Ok(())
     }
 
     #[inline]
