@@ -1,0 +1,217 @@
+{
+  "name": "lilia-vscode",
+  "displayName": "LiliaDB",
+  "description": "Visual Studio Code extension for LiliaDB: manage, modify, visualize, and apply commands via daemon or embedded database files.",
+  "version": "0.1.0-alpha.6",
+  "publisher": "liliadb",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shaynlink/lilia"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "Database",
+    "Developer Tools"
+  ],
+  "type": "module",
+  "main": "./dist/extension.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -w -p tsconfig.json",
+    "test": "node --test dist/tests/**/*.test.js",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "package": "vsce package --no-dependencies"
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:lilia-explorer"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "liliadb-sidebar",
+          "title": "LiliaDB",
+          "icon": "media/database.svg"
+        }
+      ]
+    },
+    "views": {
+      "liliadb-sidebar": [
+        {
+          "id": "lilia-explorer",
+          "name": "LiliaDB Explorer"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "lilia.openDatabaseFile",
+        "title": "Open Database File (Embedded)",
+        "category": "LiliaDB",
+        "icon": "$(file-submodule)"
+      },
+      {
+        "command": "lilia.connectDaemon",
+        "title": "Connect to Daemon",
+        "category": "LiliaDB",
+        "icon": "$(radio-tower)"
+      },
+      {
+        "command": "lilia.switchMode",
+        "title": "Switch Mode (Embedded / Daemon)",
+        "category": "LiliaDB",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "lilia.disconnect",
+        "title": "Disconnect",
+        "category": "LiliaDB",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "lilia.refresh",
+        "title": "Refresh Explorer",
+        "category": "LiliaDB",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "lilia.openVisualizer",
+        "title": "Open Data Visualizer",
+        "category": "LiliaDB",
+        "icon": "$(table)"
+      },
+      {
+        "command": "lilia.openConsole",
+        "title": "Open Command & Query Console",
+        "category": "LiliaDB",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "lilia.executeActiveFile",
+        "title": "Run in LiliaDB",
+        "category": "LiliaDB",
+        "icon": "$(play)"
+      },
+      {
+        "command": "lilia.newJson",
+        "title": "New JSON Document...",
+        "category": "LiliaDB",
+        "icon": "$(add)"
+      },
+      {
+        "command": "lilia.newKv",
+        "title": "New KV Entry...",
+        "category": "LiliaDB",
+        "icon": "$(add)"
+      },
+      {
+        "command": "lilia.doctor",
+        "title": "Run Integrity Check (Doctor)",
+        "category": "LiliaDB",
+        "icon": "$(pass)"
+      },
+      {
+        "command": "lilia.backup",
+        "title": "Create Backup...",
+        "category": "LiliaDB",
+        "icon": "$(archive)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "lilia.openVisualizer",
+          "when": "view == lilia-explorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lilia.openConsole",
+          "when": "view == lilia-explorer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "lilia.switchMode",
+          "when": "view == lilia-explorer",
+          "group": "navigation@3"
+        },
+        {
+          "command": "lilia.refresh",
+          "when": "view == lilia-explorer",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "lilia.openVisualizer",
+          "when": "view == lilia-explorer && viewItem =~ /^(space|namespace|graph|fts)/",
+          "group": "inline"
+        },
+        {
+          "command": "lilia.newJson",
+          "when": "view == lilia-explorer && viewItem == space",
+          "group": "1_modification"
+        },
+        {
+          "command": "lilia.newKv",
+          "when": "view == lilia-explorer && viewItem == namespace",
+          "group": "1_modification"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "lilia.executeActiveFile",
+          "when": "resourceExtname =~ /\\.(sql|lilia\\.json|json)$/",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "LiliaDB",
+      "properties": {
+        "liliadb.defaultMode": {
+          "type": "string",
+          "enum": [
+            "embedded",
+            "daemon"
+          ],
+          "default": "embedded",
+          "description": "Default connection mode when opening databases."
+        },
+        "liliadb.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically detect and connect to .lilia databases found in the workspace."
+        },
+        "liliadb.daemonEndpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Custom socket/pipe path or HTTP URL for the Lilia daemon."
+        },
+        "liliadb.daemonTokenFile": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the authorization token file for daemon communication."
+        },
+        "liliadb.pageSize": {
+          "type": "number",
+          "default": 50,
+          "description": "Number of records per page in the visualizer."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@liliadb/node": "workspace:*",
+    "@msgpack/msgpack": "3.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "6.0.2"
+  }
+}

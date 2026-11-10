@@ -1,0 +1,18 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run LiliaDB Extension (F5)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/apps/lilia-vscode",
+        "${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/apps/lilia-vscode/dist/**/*.js"
+      ],
+      "preLaunchTask": "build-lilia-vscode"
+    }
+  ]
+}

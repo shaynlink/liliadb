@@ -1,0 +1,13 @@
+{
+  "name": "lilia-vscode",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/lilia-vscode/src",
+  "implicitDependencies": ["liliadb-node"],
+  "targets": {
+    "build": { "executor": "nx:run-script", "options": { "script": "build" } },
+    "test": { "executor": "nx:run-script", "options": { "script": "test" } },
+    "lint": { "executor": "nx:run-script", "options": { "script": "lint" } }
+  },
+  "tags": ["scope:apps", "type:application", "lang:typescript"]
+}

@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-lilia-vscode",
+      "type": "shell",
+      "command": "pnpm --filter lilia-vscode build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$tsc"
+    }
+  ]
+}

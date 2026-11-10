@@ -1,0 +1,8 @@
+.vscode/**
+.vscode-test/**
+src/**
+!src/extension.ts
+tsconfig.json
+**/*.map
+media/*.png
+media/*.jpg
