@@ -10,7 +10,7 @@
     "build": { "cache": true, "inputs": ["production", "^production"], "dependsOn": ["^build"] },
     "test": { "cache": true, "inputs": ["default", "^production"], "dependsOn": ["^build"] },
     "lint": { "cache": true, "inputs": ["default", "^production"] },
-    "bench": { "cache": true, "inputs": ["production", "^production"] }
+    "bench*": { "cache": false, "inputs": ["production", "^production"], "parallelism": false }
   },
   "analytics": false
 }

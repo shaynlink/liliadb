@@ -1,17 +1,21 @@
 import { createRequire } from "node:module";
-import { existsSync, copyFileSync } from "node:fs";
+import { existsSync, copyFileSync, statSync } from "node:fs";
 import { encode, decode } from "@msgpack/msgpack";
 import type {
   BatchOperation,
   DatabaseEvent,
   FtsHit,
   GraphDirection,
+  HybridHit,
   JsonEntry,
   JsonIndexInfo,
   JsonValue,
   KvEntry,
   MutationResult,
   SqlQueryResult,
+  VectorElementType,
+  VectorHit,
+  VectorMetric,
   WatchSubscription,
 } from "./types.js";
 import { LiliaError } from "./types.js";
@@ -19,6 +23,8 @@ import { checkedVersion, checkedExpiry, readVersion } from "./version.js";
 
 interface NativeKvEntry { namespace: string; key: Buffer; value: Buffer; version: string; expiresAtMs?: number }
 interface NativeFtsHit { collection: string; doc_id?: string; docId?: string; snippet: string; rank: number }
+interface NativeVectorHit { collection: string; id: string; distance: number }
+interface NativeHybridHit { id: string; rrf_score?: number; rrfScore?: number; fts_rank?: number; ftsRank?: number; fts_snippet?: string; ftsSnippet?: string; vector_rank?: number; vectorRank?: number; vector_distance?: number; vectorDistance?: number }
 interface NativeSubscriptionHandle { unsubscribe(): void }
 interface NativeDatabaseHandle {
   kvGet(namespace: string, key: Buffer): Promise<NativeKvEntry | null>;
@@ -44,6 +50,9 @@ interface NativeDatabaseHandle {
   graphNeighbors(graph: string, node: string, direction: string | undefined, kind: string | undefined): Promise<string[]>;
   graphReachability(graph: string, startNodes: string[], direction: string | undefined): Promise<string[]>;
   ftsSearch(collection: string, query: string, limit: number | undefined): Promise<NativeFtsHit[]>;
+  vectorGet(collection: string, id: string): Promise<Buffer | null>;
+  vectorSearch(collection: string, query: Buffer, dim: number, elementType: string | undefined, metric: string | undefined, limit: number | undefined): Promise<NativeVectorHit[]>;
+  hybridSearch(collection: string, ftsQuery: string | undefined, vectorQuery: Buffer | undefined, dim: number | undefined, elementType: string | undefined, metric: string | undefined, rrfK: number | undefined, ftsWeight: number | undefined, vectorWeight: number | undefined, limit: number | undefined): Promise<NativeHybridHit[]>;
   watch(callback: (event: string) => void, namespace?: string): Promise<NativeSubscriptionHandle>;
   close(timeoutMs?: number): Promise<void>;
 }
@@ -54,13 +63,14 @@ const require = createRequire(import.meta.url);
 export class EmbeddedClient {
   private constructor(private readonly native: NativeDatabaseHandle) {}
 
-  static async open(options: Record<string, unknown>): Promise<EmbeddedClient> {
+  static async open(options: Record<string, unknown>, signal?: AbortSignal): Promise<EmbeddedClient> {
+    signal?.throwIfAborted();
     const module = loadNative();
-    return new EmbeddedClient(await nativeCall(module.NativeDatabase.open(options)));
+    return new EmbeddedClient(await nativeCall(module.NativeDatabase.open(options), signal));
   }
 
-  async kvGet(namespace: string, key: Uint8Array): Promise<KvEntry | undefined> {
-    const entry = await nativeCall(this.native.kvGet(namespace, Buffer.from(key)));
+  async kvGet(namespace: string, key: Uint8Array, signal?: AbortSignal): Promise<KvEntry | undefined> {
+    const entry = await nativeCall(this.native.kvGet(namespace, Buffer.from(key)), signal);
     return entry ? mapKv(entry) : undefined;
   }
 
@@ -72,8 +82,8 @@ export class EmbeddedClient {
     throw new Error("kvGetSync is not supported by current native module");
   }
 
-  async kvScan(namespace: string, after: Uint8Array | undefined, limit: number): Promise<KvEntry[]> {
-    return (await nativeCall(this.native.kvScan(namespace, after ? Buffer.from(after) : undefined, limit))).map(mapKv);
+  async kvScan(namespace: string, after: Uint8Array | undefined, limit: number, signal?: AbortSignal): Promise<KvEntry[]> {
+    return (await nativeCall(this.native.kvScan(namespace, after ? Buffer.from(after) : undefined, limit), signal)).map(mapKv);
   }
 
   kvScanSync(namespace: string, after: Uint8Array | undefined, limit: number): KvEntry[] {
@@ -83,59 +93,59 @@ export class EmbeddedClient {
     throw new Error("kvScanSync is not supported by current native module");
   }
 
-  async jsonGet(space: string, id: string): Promise<JsonEntry | undefined> {
-    const entry = await nativeCall(this.native.jsonGet(space, id));
-    return entry ? parseJsonEntry(entry) : undefined;
+  async jsonGet<T = JsonValue>(space: string, id: string, signal?: AbortSignal): Promise<JsonEntry<T> | undefined> {
+    const entry = await nativeCall(this.native.jsonGet(space, id), signal);
+    return entry ? parseJsonEntry<T>(entry) : undefined;
   }
 
-  jsonGetSync(space: string, id: string): JsonEntry | undefined {
+  jsonGetSync<T = JsonValue>(space: string, id: string): JsonEntry<T> | undefined {
     if (this.native.jsonGetSync) {
       const entry = nativeSyncCall(() => this.native.jsonGetSync!(space, id));
-      return entry ? parseJsonEntry(entry) : undefined;
+      return entry ? parseJsonEntry<T>(entry) : undefined;
     }
     throw new Error("jsonGetSync is not supported by current native module");
   }
 
-  async jsonScan(space: string, after: string | undefined, limit: number): Promise<JsonEntry[]> {
-    return (JSON.parse(await nativeCall(this.native.jsonScan(space, after, limit))) as Array<Record<string, unknown>>).map(mapJson);
+  async jsonScan<T = JsonValue>(space: string, after: string | undefined, limit: number, signal?: AbortSignal): Promise<JsonEntry<T>[]> {
+    return (JSON.parse(await nativeCall(this.native.jsonScan(space, after, limit), signal)) as Array<Record<string, unknown>>).map(mapJson<T>);
   }
 
-  jsonScanSync(space: string, after: string | undefined, limit: number): JsonEntry[] {
+  jsonScanSync<T = JsonValue>(space: string, after: string | undefined, limit: number): JsonEntry<T>[] {
     if (this.native.jsonScanSync) {
-      return (JSON.parse(nativeSyncCall(() => this.native.jsonScanSync!(space, after, limit))) as Array<Record<string, unknown>>).map(mapJson);
+      return (JSON.parse(nativeSyncCall(() => this.native.jsonScanSync!(space, after, limit))) as Array<Record<string, unknown>>).map(mapJson<T>);
     }
     throw new Error("jsonScanSync is not supported by current native module");
   }
 
-  async jsonCreateIndex(space: string, name: string, path: string): Promise<void> {
-    await nativeCall(this.native.jsonCreateIndex(space, name, path));
+  async jsonCreateIndex(space: string, name: string, path: string, signal?: AbortSignal): Promise<void> {
+    await nativeCall(this.native.jsonCreateIndex(space, name, path), signal);
   }
 
-  async jsonDropIndex(space: string, name: string): Promise<boolean> {
-    return nativeCall(this.native.jsonDropIndex(space, name));
+  async jsonDropIndex(space: string, name: string, signal?: AbortSignal): Promise<boolean> {
+    return nativeCall(this.native.jsonDropIndex(space, name), signal);
   }
 
-  async jsonListIndexes(space: string): Promise<JsonIndexInfo[]> {
-    const raw = await nativeCall(this.native.jsonListIndexes(space));
+  async jsonListIndexes(space: string, signal?: AbortSignal): Promise<JsonIndexInfo[]> {
+    const raw = await nativeCall(this.native.jsonListIndexes(space), signal);
     const list = JSON.parse(raw) as Array<{ space: string; index_name: string; json_path: string }>;
     return list.map(item => ({ space: item.space, indexName: item.index_name, jsonPath: item.json_path }));
   }
 
-  async jsonScanByIndex(space: string, indexName: string, value: string, after: string | undefined, limit: number): Promise<JsonEntry[]> {
-    const raw = await nativeCall(this.native.jsonScanByIndex(space, indexName, value, after, limit));
-    return (JSON.parse(raw) as Array<Record<string, unknown>>).map(mapJson);
+  async jsonScanByIndex<T = JsonValue>(space: string, indexName: string, value: string, after: string | undefined, limit: number, signal?: AbortSignal): Promise<JsonEntry<T>[]> {
+    const raw = await nativeCall(this.native.jsonScanByIndex(space, indexName, value, after, limit), signal);
+    return (JSON.parse(raw) as Array<Record<string, unknown>>).map(mapJson<T>);
   }
 
-  async jsonFind(space: string, query: Record<string, JsonValue>, after: string | undefined, limit: number): Promise<JsonEntry[]> {
-    const raw = await nativeCall(this.native.jsonFind(space, JSON.stringify(query), after, limit));
-    return (JSON.parse(raw) as Array<Record<string, unknown>>).map(mapJson);
+  async jsonFind<T = JsonValue>(space: string, query: Record<string, JsonValue>, after: string | undefined, limit: number, signal?: AbortSignal): Promise<JsonEntry<T>[]> {
+    const raw = await nativeCall(this.native.jsonFind(space, JSON.stringify(query), after, limit), signal);
+    return (JSON.parse(raw) as Array<Record<string, unknown>>).map(mapJson<T>);
   }
 
-  async batch(operations: readonly BatchOperation[]): Promise<MutationResult[]> {
+  async batch(operations: readonly BatchOperation[], signal?: AbortSignal): Promise<MutationResult[]> {
     if (this.native.batchMsgpack) {
       const wire = operations.map(toWireOperationMsgpack);
       const payload = encode(wire);
-      const resBuffer = await nativeCall(this.native.batchMsgpack(payload));
+      const resBuffer = await nativeCall(this.native.batchMsgpack(payload), signal);
       const decoded = decode(resBuffer, { useBigInt64: true }) as Array<{ version?: string | number | bigint | null; deleted: boolean }>;
       return decoded.map(item => ({
         deleted: Boolean(item.deleted),
@@ -143,7 +153,7 @@ export class EmbeddedClient {
       }));
     }
     const wire = operations.map(toNativeWire);
-    const result = JSON.parse(await nativeCall(this.native.batch(JSON.stringify(wire)))) as Array<{ version?: string | null; deleted: boolean }>;
+    const result = JSON.parse(await nativeCall(this.native.batch(JSON.stringify(wire)), signal)) as Array<{ version?: string | null; deleted: boolean }>;
     return result.map(item => ({ ...item, version: item.version == null ? undefined : readVersion(item.version) }));
   }
 
@@ -161,29 +171,29 @@ export class EmbeddedClient {
     throw new Error("batchSync is not supported by current native module");
   }
 
-  async sqlQuery(sql: string, params: unknown[] = []): Promise<SqlQueryResult> {
-    const raw = await nativeCall(this.native.sqlQuery(sql, JSON.stringify(params)));
-    return mapSqlQueryResult(JSON.parse(raw) as Record<string, unknown>);
+  async sqlQuery<T = Record<string, unknown>>(sql: string, params: unknown[] = [], signal?: AbortSignal): Promise<SqlQueryResult<T>> {
+    const raw = await nativeCall(this.native.sqlQuery(sql, JSON.stringify(params)), signal);
+    return mapSqlQueryResult<T>(JSON.parse(raw) as Record<string, unknown>);
   }
 
-  sqlQuerySync(sql: string, params: unknown[] = []): SqlQueryResult {
+  sqlQuerySync<T = Record<string, unknown>>(sql: string, params: unknown[] = []): SqlQueryResult<T> {
     if (this.native.sqlQuerySync) {
       const raw = nativeSyncCall(() => this.native.sqlQuerySync!(sql, JSON.stringify(params)));
-      return mapSqlQueryResult(JSON.parse(raw) as Record<string, unknown>);
+      return mapSqlQueryResult<T>(JSON.parse(raw) as Record<string, unknown>);
     }
     throw new Error("sqlQuerySync is not supported by current native module");
   }
 
-  async graphNeighbors(graph: string, node: string, direction?: GraphDirection, kind?: string): Promise<string[]> {
-    return nativeCall(this.native.graphNeighbors(graph, node, direction, kind));
+  async graphNeighbors(graph: string, node: string, direction?: GraphDirection, kind?: string, signal?: AbortSignal): Promise<string[]> {
+    return nativeCall(this.native.graphNeighbors(graph, node, direction, kind), signal);
   }
 
-  async graphReachability(graph: string, startNodes: string[], direction?: GraphDirection): Promise<string[]> {
-    return nativeCall(this.native.graphReachability(graph, startNodes, direction));
+  async graphReachability(graph: string, startNodes: string[], direction?: GraphDirection, signal?: AbortSignal): Promise<string[]> {
+    return nativeCall(this.native.graphReachability(graph, startNodes, direction), signal);
   }
 
-  async ftsSearch(collection: string, query: string, limit?: number): Promise<FtsHit[]> {
-    const hits = await nativeCall(this.native.ftsSearch(collection, query, limit));
+  async ftsSearch(collection: string, query: string, limit?: number, signal?: AbortSignal): Promise<FtsHit[]> {
+    const hits = await nativeCall(this.native.ftsSearch(collection, query, limit), signal);
     return hits.map(h => ({
       collection: h.collection,
       docId: h.docId ?? h.doc_id ?? "",
@@ -192,12 +202,80 @@ export class EmbeddedClient {
     }));
   }
 
-  integrityCheck(): Promise<boolean> { return nativeCall(this.native.integrityCheck()); }
-  backup(destination: string): Promise<void> { return nativeCall(this.native.backup(destination)); }
+  async vectorGet(collection: string, id: string, signal?: AbortSignal): Promise<Uint8Array | null> {
+    const buf = await nativeCall(this.native.vectorGet(collection, id), signal);
+    return buf ? new Uint8Array(buf) : null;
+  }
+
+  async vectorSearch(
+    collection: string,
+    query: Float32Array | number[] | Uint8Array,
+    dim?: number,
+    elementType?: VectorElementType,
+    metric?: VectorMetric,
+    limit?: number,
+    signal?: AbortSignal
+  ): Promise<VectorHit[]> {
+    const raw = vectorToBytes(query, elementType);
+    const d = dim ?? (query instanceof Uint8Array ? query.byteLength / 4 : query.length);
+    const hits = await nativeCall(
+      this.native.vectorSearch(collection, Buffer.from(raw), d, elementType, metric, limit),
+      signal
+    );
+    return hits.map(h => ({ collection: h.collection, id: h.id, distance: h.distance }));
+  }
+
+  async hybridSearch(
+    collection: string,
+    options: {
+      query?: string;
+      vector?: Float32Array | number[] | Uint8Array;
+      dim?: number;
+      elementType?: VectorElementType;
+      metric?: VectorMetric;
+      rrfK?: number;
+      ftsWeight?: number;
+      vectorWeight?: number;
+      limit?: number;
+      signal?: AbortSignal;
+    } = {}
+  ): Promise<HybridHit[]> {
+    const vecBuf = options.vector ? Buffer.from(vectorToBytes(options.vector, options.elementType)) : undefined;
+    const d = options.dim ?? (options.vector ? (options.vector instanceof Uint8Array ? options.vector.byteLength / 4 : options.vector.length) : undefined);
+    const hits = await nativeCall(
+      this.native.hybridSearch(
+        collection,
+        options.query,
+        vecBuf,
+        d,
+        options.elementType,
+        options.metric,
+        options.rrfK,
+        options.ftsWeight,
+        options.vectorWeight,
+        options.limit
+      ),
+      options.signal
+    );
+    return hits.map(h => ({
+      id: h.id,
+      rrfScore: h.rrfScore ?? h.rrf_score ?? 0,
+      ftsRank: h.ftsRank ?? h.fts_rank,
+      ftsSnippet: h.ftsSnippet ?? h.fts_snippet,
+      vectorRank: h.vectorRank ?? h.vector_rank,
+      vectorDistance: h.vectorDistance ?? h.vector_distance,
+    }));
+  }
+
+  integrityCheck(signal?: AbortSignal): Promise<boolean> { return nativeCall(this.native.integrityCheck(), signal); }
+  backup(destination: string, signal?: AbortSignal): Promise<void> { return nativeCall(this.native.backup(destination), signal); }
+
   async watch(
     namespace: string | undefined,
-    callback: (event: DatabaseEvent) => void
+    callback: (event: DatabaseEvent) => void,
+    options?: { signal?: AbortSignal }
   ): Promise<WatchSubscription> {
+    options?.signal?.throwIfAborted();
     const handle = await nativeCall(
       this.native.watch((...args: unknown[]) => {
         const rawJson = args.length > 1 ? args[1] : args[0];
@@ -208,30 +286,80 @@ export class EmbeddedClient {
             callback(event);
           }
         } catch {}
-      }, namespace)
+      }, namespace),
+      options?.signal
     );
 
+    let unsubscribed = false;
+    const doUnsubscribe = () => {
+      if (!unsubscribed) {
+        unsubscribed = true;
+        handle.unsubscribe();
+      }
+    };
+
     const sub = (() => {
-      handle.unsubscribe();
+      doUnsubscribe();
     }) as WatchSubscription;
     sub.unsubscribe = () => {
-      handle.unsubscribe();
+      doUnsubscribe();
     };
+    sub[Symbol.dispose] = () => {
+      doUnsubscribe();
+    };
+    sub[Symbol.asyncDispose] = async () => {
+      doUnsubscribe();
+    };
+
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        doUnsubscribe();
+      } else {
+        options.signal.addEventListener("abort", () => doUnsubscribe(), { once: true });
+      }
+    }
+
     return sub;
   }
+
   close(timeoutMs?: number): Promise<void> { return nativeCall(this.native.close(timeoutMs)); }
 }
 
-async function nativeCall<T>(operation: Promise<T>): Promise<T> {
-  try { return await operation; }
-  catch (error) {
-    if (error instanceof Error) {
-      let shape;
-      try { shape = JSON.parse(error.message); } catch { throw error; }
-      if (typeof shape?.code === "string" && typeof shape?.message === "string") throw new LiliaError(shape);
+async function nativeCall<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  if (!signal) {
+    try {
+      return await operation;
+    } catch (error) {
+      handleNativeError(error);
     }
-    throw error;
   }
+
+  const resolvers = Promise.withResolvers<T>();
+  const onAbort = () => {
+    resolvers.reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+
+  operation
+    .then(resolvers.resolve, resolvers.reject)
+    .finally(() => signal.removeEventListener("abort", onAbort));
+
+  try {
+    return await resolvers.promise;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    handleNativeError(error);
+  }
+}
+
+function handleNativeError(error: unknown): never {
+  if (error instanceof Error) {
+    let shape;
+    try { shape = JSON.parse(error.message); } catch { throw error; }
+    if (typeof shape?.code === "string" && typeof shape?.message === "string") throw new LiliaError(shape);
+  }
+  throw error;
 }
 
 function nativeSyncCall<T>(operation: () => T): T {
@@ -273,9 +401,13 @@ function loadNative(): NativeModule {
   if (explicit) {
     if (!explicit.endsWith(".node")) {
       const nodePath = `${explicit}.node`;
-      if (!existsSync(nodePath)) {
-        try { copyFileSync(explicit, nodePath); } catch {}
-      }
+      try {
+        const srcStat = statSync(explicit);
+        const destStat = existsSync(nodePath) ? statSync(nodePath) : null;
+        if (!destStat || srcStat.mtimeMs > destStat.mtimeMs) {
+          copyFileSync(explicit, nodePath);
+        }
+      } catch {}
       if (existsSync(nodePath)) {
         explicit = nodePath;
       }
@@ -297,9 +429,9 @@ function nativePackagePlatform(): string {
 function mapKv(entry: NativeKvEntry): KvEntry {
   return { namespace: entry.namespace, key: entry.key, value: entry.value, version: readVersion(entry.version), expiresAtMs: entry.expiresAtMs };
 }
-function parseJsonEntry(value: string): JsonEntry { return mapJson(JSON.parse(value) as Record<string, unknown>); }
-function mapJson(entry: Record<string, unknown>): JsonEntry {
-  return { space: String(entry.space), id: String(entry.id), value: entry.value as JsonEntry["value"], version: readVersion(entry.version) };
+function parseJsonEntry<T = JsonValue>(value: string): JsonEntry<T> { return mapJson<T>(JSON.parse(value) as Record<string, unknown>); }
+function mapJson<T = JsonValue>(entry: Record<string, unknown>): JsonEntry<T> {
+  return { space: String(entry.space), id: String(entry.id), value: entry.value as T, version: readVersion(entry.version) };
 }
 
 function toWireOperationMsgpack(op: BatchOperation): Record<string, unknown> {
@@ -378,6 +510,21 @@ function toWireOperationMsgpack(op: BatchOperation): Record<string, unknown> {
         collection: op.collection,
         doc_id: op.docId,
       };
+    case "vector_set":
+      return {
+        model: "vector_set",
+        collection: op.collection,
+        id: op.id,
+        dim: op.dim,
+        element_type: op.elementType ?? "float32",
+        vector: vectorToBytes(op.vector, op.elementType),
+      };
+    case "vector_delete":
+      return {
+        model: "vector_delete",
+        collection: op.collection,
+        id: op.id,
+      };
   }
 }
 
@@ -401,6 +548,10 @@ function toNativeWire(operation: BatchOperation): Record<string, unknown> {
   if (operation.model === "fts_index" || operation.model === "fts_delete") {
     result.doc_id = operation.docId;
     delete result.docId;
+  }
+  if (operation.model === "vector_set") {
+    result.element_type = operation.elementType ?? "float32";
+    result.vector = [...vectorToBytes(operation.vector, operation.elementType)];
   }
   return result;
 }
@@ -487,5 +638,48 @@ export function mapDatabaseEvent(raw: unknown): DatabaseEvent | undefined {
       deleted: Boolean(item.deleted),
     };
   }
+  if (type === "vector_mutated") {
+    return {
+      type: "vector_mutated",
+      collection: String(item.collection),
+      id: String(item.id),
+      deleted: Boolean(item.deleted),
+    };
+  }
   return undefined;
+}
+
+export function vectorToBytes(
+  v: Float32Array | number[] | Uint8Array,
+  elementType?: VectorElementType
+): Uint8Array {
+  if (v instanceof Uint8Array) return v;
+  if (elementType === "int8") {
+    let maxAbs = 0;
+    for (let i = 0; i < v.length; i++) {
+      const abs = Math.abs(v[i]!);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+    const scale = maxAbs === 0 ? 1.0 : maxAbs / 127.0;
+    const invScale = 1.0 / scale;
+    const quantized = new Int8Array(v.length);
+    for (let i = 0; i < v.length; i++) {
+      quantized[i] = Math.max(-128, Math.min(127, Math.round(v[i]! * invScale)));
+    }
+    return new Uint8Array(quantized.buffer, quantized.byteOffset, quantized.byteLength);
+  } else if (elementType === "bit") {
+    const numBytes = Math.ceil(v.length / 8);
+    const packed = new Uint8Array(numBytes);
+    for (let i = 0; i < v.length; i++) {
+      if (v[i]! > 0) {
+        const byteIdx = Math.floor(i / 8);
+        const bitIdx = 7 - (i % 8);
+        packed[byteIdx]! |= 1 << bitIdx;
+      }
+    }
+    return packed;
+  } else {
+    const f32 = v instanceof Float32Array ? v : new Float32Array(v);
+    return new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
+  }
 }

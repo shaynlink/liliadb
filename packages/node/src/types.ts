@@ -14,6 +14,7 @@ export interface OpenOptions {
   readPoolSize?: number;
   checkpointPolicy?: { walBytes?: number; intervalMs?: number };
   encryptionKey?: string;
+  signal?: AbortSignal;
 }
 
 export interface KvEntry {
@@ -24,10 +25,10 @@ export interface KvEntry {
   expiresAtMs?: number;
 }
 
-export interface JsonEntry {
+export interface JsonEntry<T = JsonValue> {
   space: string;
   id: string;
-  value: JsonValue;
+  value: T;
   version: bigint;
 }
 
@@ -42,16 +43,67 @@ export interface CreateIndexOptions {
   path?: string;
 }
 
+export interface KvGetOptions {
+  signal?: AbortSignal;
+}
+
+export interface KvSetOptions {
+  ifVersion?: bigint;
+  expiresAtMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface KvDeleteOptions {
+  ifVersion?: bigint;
+  signal?: AbortSignal;
+}
+
+export interface KvScanOptions {
+  after?: Uint8Array | string;
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+export interface JsonGetOptions {
+  signal?: AbortSignal;
+}
+
+export interface JsonPutOptions {
+  ifVersion?: bigint;
+  signal?: AbortSignal;
+}
+
+export interface JsonDeleteOptions {
+  ifVersion?: bigint;
+  signal?: AbortSignal;
+}
+
+export interface JsonScanOptions {
+  after?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}
+
 export interface JsonFindOptions {
   after?: string;
   limit?: number;
+  signal?: AbortSignal;
 }
-
 
 export interface ScanStreamOptions<T = string | Uint8Array> {
   after?: T;
   limit?: number;
   batchSize?: number;
+  signal?: AbortSignal;
+}
+
+export interface WatchOptions {
+  signal?: AbortSignal;
+}
+
+export interface CloseOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export type GraphDirection = "outgoing" | "incoming" | "both";
@@ -61,6 +113,24 @@ export interface FtsHit {
   docId: string;
   snippet: string;
   rank: number;
+}
+
+export type VectorElementType = "float32" | "int8" | "bit";
+export type VectorMetric = "cosine" | "l2" | "dot" | "hamming";
+
+export interface VectorHit {
+  collection: string;
+  id: string;
+  distance: number;
+}
+
+export interface HybridHit {
+  id: string;
+  rrfScore: number;
+  ftsRank?: number;
+  ftsSnippet?: string;
+  vectorRank?: number;
+  vectorDistance?: number;
 }
 
 export type BatchOperation =
@@ -73,18 +143,23 @@ export type BatchOperation =
   | { model: "graph_add_edge"; graph: string; source: string; target: string; kind: string }
   | { model: "graph_remove_edge"; graph: string; source: string; target: string; kind: string }
   | { model: "fts_index"; collection: string; docId: string; content: string }
-  | { model: "fts_delete"; collection: string; docId: string };
+  | { model: "fts_delete"; collection: string; docId: string }
+  | { model: "vector_set"; collection: string; id: string; dim: number; elementType?: VectorElementType; vector: Uint8Array | number[] | Float32Array }
+  | { model: "vector_delete"; collection: string; id: string };
 
 export type DatabaseEvent =
   | { type: "kv_mutated"; namespace: string; key: Uint8Array; version?: bigint; deleted: boolean }
   | { type: "json_mutated"; space: string; id: string; version?: bigint; deleted: boolean }
   | { type: "graph_node_mutated"; graph: string; id: string; deleted: boolean }
   | { type: "graph_edge_mutated"; graph: string; source: string; target: string; kind: string; deleted: boolean }
-  | { type: "fts_mutated"; collection: string; docId: string; deleted: boolean };
+  | { type: "fts_mutated"; collection: string; docId: string; deleted: boolean }
+  | { type: "vector_mutated"; collection: string; id: string; deleted: boolean };
 
-export interface WatchSubscription {
+export interface WatchSubscription extends Disposable, AsyncDisposable {
   unsubscribe(): void | Promise<void>;
   (): void | Promise<void>;
+  [Symbol.dispose](): void;
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
 export interface MutationResult { version?: bigint; deleted: boolean }
@@ -94,6 +169,24 @@ export interface SqlQueryResult<T = Record<string, unknown>> {
   rows: JsonValue[][];
   rowsAffected: number;
   records: T[];
+}
+
+export interface SqlQueryOptions {
+  signal?: AbortSignal;
+}
+
+export interface SqlFunction {
+  <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: JsonValue[]): Promise<T[]>;
+  query<T = Record<string, unknown>>(sql: string, params?: JsonValue[], options?: SqlQueryOptions): Promise<T[]>;
+  execute(sql: string, params?: JsonValue[], options?: SqlQueryOptions): Promise<{ rowsAffected: number }>;
+  raw<T = Record<string, unknown>>(sql: string, params?: JsonValue[], options?: SqlQueryOptions): Promise<SqlQueryResult<T>>;
+}
+
+export interface SyncSqlFunction {
+  <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: JsonValue[]): T[];
+  query<T = Record<string, unknown>>(sql: string, params?: JsonValue[]): T[];
+  execute(sql: string, params?: JsonValue[]): { rowsAffected: number };
+  raw<T = Record<string, unknown>>(sql: string, params?: JsonValue[]): SqlQueryResult<T>;
 }
 
 export interface LiliaErrorShape {
@@ -110,12 +203,41 @@ export class LiliaError extends Error {
   readonly details?: JsonValue;
   readonly requestId?: string;
 
-  constructor(shape: Partial<LiliaErrorShape> & { message: string }) {
-    super(shape.message);
+  constructor(shape: Partial<LiliaErrorShape> & { message: string; cause?: unknown }) {
+    super(shape.message, { cause: shape.cause });
     this.name = "LiliaError";
     this.code = shape.code ?? "UNKNOWN";
     this.retryable = shape.retryable ?? false;
     this.details = shape.details;
     this.requestId = shape.request_id;
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, LiliaError);
+    }
   }
+
+  static isLiliaError(value: unknown): value is LiliaError {
+    return value instanceof LiliaError;
+  }
+}
+
+export function isKvEntry(value: unknown): value is KvEntry {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.namespace === "string" &&
+    candidate.key instanceof Uint8Array &&
+    candidate.value instanceof Uint8Array &&
+    typeof candidate.version === "bigint"
+  );
+}
+
+export function isJsonEntry<T = JsonValue>(value: unknown): value is JsonEntry<T> {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.space === "string" &&
+    typeof candidate.id === "string" &&
+    typeof candidate.version === "bigint" &&
+    "value" in candidate
+  );
 }

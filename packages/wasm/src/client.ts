@@ -6,12 +6,16 @@ import type {
   BatchOperation,
   FtsHit,
   GraphDirection,
+  HybridHit,
   JsonEntry,
   JsonIndexInfo,
   JsonValue,
   KvEntry,
   MutationResult,
   SqlQueryResult,
+  VectorElementType,
+  VectorHit,
+  VectorMetric,
   WasmOpenOptions,
 } from "./types.js";
 import { LiliaError } from "./types.js";
@@ -296,6 +300,75 @@ export class DirectWasmClient {
     }
   }
 
+  async vectorGet(collection: string, id: string): Promise<Uint8Array | null> {
+    try {
+      const res = this.native.vector_get(collection, id);
+      return res ? new Uint8Array(res) : null;
+    } catch (error) {
+      throw parseWasmError(error);
+    }
+  }
+
+  async vectorSearch(
+    collection: string,
+    query: Float32Array | number[] | Uint8Array,
+    dim?: number,
+    elementType?: VectorElementType,
+    metric?: VectorMetric,
+    limit?: number
+  ): Promise<VectorHit[]> {
+    try {
+      const raw = vectorToBytes(query, elementType);
+      const d = dim ?? (query instanceof Uint8Array ? query.byteLength / 4 : query.length);
+      const hits = (this.native.vector_search(
+        collection,
+        raw,
+        d,
+        elementType,
+        metric,
+        limit
+      ) ?? []) as VectorHit[];
+      return hits;
+    } catch (error) {
+      throw parseWasmError(error);
+    }
+  }
+
+  async hybridSearch(
+    collection: string,
+    options: {
+      query?: string;
+      vector?: Float32Array | number[] | Uint8Array;
+      dim?: number;
+      elementType?: VectorElementType;
+      metric?: VectorMetric;
+      rrfK?: number;
+      ftsWeight?: number;
+      vectorWeight?: number;
+      limit?: number;
+    } = {}
+  ): Promise<HybridHit[]> {
+    try {
+      const raw = options.vector ? vectorToBytes(options.vector, options.elementType) : undefined;
+      const d = options.dim ?? (options.vector ? (options.vector instanceof Uint8Array ? options.vector.byteLength / 4 : options.vector.length) : undefined);
+      const hits = (this.native.hybrid_search(
+        collection,
+        options.query,
+        raw,
+        d,
+        options.elementType,
+        options.metric,
+        options.rrfK,
+        options.ftsWeight,
+        options.vectorWeight,
+        options.limit
+      ) ?? []) as HybridHit[];
+      return hits;
+    } catch (error) {
+      throw parseWasmError(error);
+    }
+  }
+
   async sqlQuery(
     sql: string,
     params: unknown[] = []
@@ -355,7 +428,46 @@ function toWireOperation(operation: BatchOperation): Record<string, unknown> {
     result.doc_id = operation.docId;
     delete result.docId;
   }
+  if (operation.model === "vector_set") {
+    result.element_type = operation.elementType ?? "float32";
+    result.vector = [...vectorToBytes(operation.vector, operation.elementType)];
+  }
   return result;
+}
+
+export function vectorToBytes(
+  v: Float32Array | number[] | Uint8Array,
+  elementType?: VectorElementType
+): Uint8Array {
+  if (v instanceof Uint8Array) return v;
+  if (elementType === "int8") {
+    let maxAbs = 0;
+    for (let i = 0; i < v.length; i++) {
+      const abs = Math.abs(v[i]!);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+    const scale = maxAbs === 0 ? 1.0 : maxAbs / 127.0;
+    const invScale = 1.0 / scale;
+    const quantized = new Int8Array(v.length);
+    for (let i = 0; i < v.length; i++) {
+      quantized[i] = Math.max(-128, Math.min(127, Math.round(v[i]! * invScale)));
+    }
+    return new Uint8Array(quantized.buffer, quantized.byteOffset, quantized.byteLength);
+  } else if (elementType === "bit") {
+    const numBytes = Math.ceil(v.length / 8);
+    const packed = new Uint8Array(numBytes);
+    for (let i = 0; i < v.length; i++) {
+      if (v[i]! > 0) {
+        const byteIdx = Math.floor(i / 8);
+        const bitIdx = 7 - (i % 8);
+        packed[byteIdx]! |= 1 << bitIdx;
+      }
+    }
+    return packed;
+  } else {
+    const f32 = v instanceof Float32Array ? v : new Float32Array(v);
+    return new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
+  }
 }
 
 export function mapSqlQueryResult<T = Record<string, unknown>>(

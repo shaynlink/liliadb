@@ -3,7 +3,7 @@ import { mkdtemp, realpath, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { command, bounded } from './process.mjs';
-import { cli, daemon, mcp, sdk } from './adapters.mjs';
+import { cli, daemon, sdk } from './adapters.mjs';
 import { Database } from '../../packages/node/dist/index.js';
 import { precision } from './versions.mjs';
 
@@ -49,13 +49,6 @@ try {
   const parseError = JSON.parse(malformed.stderr).error;
   assert.equal(parseError.code, 'INVALID_INPUT');
   assert.equal(typeof parseError.request_id, 'string');
-  const server = await mcp(executable('lilia-mcp'), join(directory, 'mcp.lilia'));
-  try {
-    await check('MCP stdio', server.execute);
-    await assert.rejects(server.execute({ op: 'json_get', space: 'docs', id: 'a', database: 'unknown' }), error => error.code === 'UNAUTHORIZED' && typeof error.request_id === 'string');
-    await assert.rejects(server.execute({ op: 'batch', operations: [{ model: 'json_put' }] }), error => error.code === 'INVALID_INPUT' && typeof error.request_id === 'string');
-  }
-  finally { await server.close(); }
-  console.log(`Conformance passed: 5 surfaces × ${fixtures.length} shared steps`);
+  console.log(`Conformance passed: 4 surfaces × ${fixtures.length} shared steps`);
   await precision(directory, executable);
 } finally { await rm(directory, { recursive: true, force: true }); }

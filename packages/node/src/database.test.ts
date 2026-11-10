@@ -6,7 +6,15 @@ import { connect } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import test from "node:test";
 
-import { Database, LiliaError, type DatabaseMode, type JsonEntry, type KvEntry } from "./index.js";
+import {
+  Database,
+  LiliaError,
+  isKvEntry,
+  isJsonEntry,
+  type DatabaseMode,
+  type JsonEntry,
+  type KvEntry,
+} from "./index.js";
 
 import { existsSync } from "node:fs";
 
@@ -159,7 +167,7 @@ test("daemon KV and JSON conformance", { skip: !daemonBinary }, async () => {
   let daemon: ChildProcess | undefined;
   try {
     daemon = spawn(daemonBinary!, ["--database", path, "--endpoint", endpoint, "--token-file", tokenFile], {
-      stdio: "ignore",
+      stdio: ["ignore", "inherit", "inherit"],
     });
     await waitUntilReady(tokenFile, endpoint, daemon);
     await conformance("daemon", path, endpoint, tokenFile);
@@ -340,6 +348,23 @@ async function conformance(mode: DatabaseMode, path: string, endpoint?: string, 
     assert.equal(hits.length, 1);
     assert.equal(hits[0]?.docId, "art1");
 
+    // Verify Vector & Hybrid Search
+    await database.vector.set("docs", "vec1", [1.0, 0.0, 0.0]);
+    await database.vector.set("docs", "vec2", [0.0, 1.0, 0.0]);
+    const vecHits = await database.vector.search("docs", [0.95, 0.05, 0.0], { limit: 1 });
+    assert.equal(vecHits.length, 1);
+    assert.equal(vecHits[0]?.id, "vec1");
+
+    await database.vector.set("articles", "art1", [1.0, 0.0, 0.0]);
+    const hybridHits = await database.hybrid.search("articles", {
+      query: "hello",
+      vector: [1.0, 0.0, 0.0],
+      limit: 5,
+    });
+    assert.equal(hybridHits.length, 1);
+    assert.equal(hybridHits[0]?.id, "art1");
+    assert.ok(hybridHits[0]?.rrfScore > 0);
+
     // Verify JSON Indexing & find
     await database.json.put("users", "u1", { name: "Alice", role: "admin", level: 10, active: true });
     await database.json.put("users", "u2", { name: "Bob", role: "member", level: 5, active: true });
@@ -472,6 +497,186 @@ test("scanStream and createReadStream paginate across batches and respect limits
     empty.push(entry);
   }
   assert.equal(empty.length, 0);
+});
+
+test("explicit resource management with await using closes database automatically", { skip: !nativePath }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lilia-using-"));
+  const path = join(directory, "using.lilia");
+  try {
+    let dbRef!: Database;
+    {
+      await using db = await Database.open({ path });
+      dbRef = db;
+      await db.json.put("test", "id1", { val: 123 });
+      const doc = await db.json.get<{ val: number }>("test", "id1");
+      assert.equal(doc?.value?.val, 123);
+    }
+    // db should now be closed automatically upon exiting the scope!
+    await assert.rejects(dbRef.json.get("test", "id1"), (err: unknown) =>
+      err instanceof LiliaError && err.code === "CLOSED"
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicit resource management with using auto-unsubscribes watch", { skip: !nativePath }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lilia-sub-"));
+  const path = join(directory, "sub.lilia");
+  try {
+    await using db = await Database.open({ path });
+    const events: any[] = [];
+    {
+      using sub = await db.watch("orders", (event) => events.push(event));
+      assert.ok(typeof sub[Symbol.dispose] === "function");
+      await db.json.put("orders", "o1", { amount: 100 });
+      for (let i = 0; i < 20 && events.length === 0; i++) {
+        await new Promise(r => setTimeout(r, 20));
+      }
+      assert.equal(events.length, 1);
+    }
+    // Out of scope: sub was synchronously disposed via using!
+    await db.json.put("orders", "o2", { amount: 200 });
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(events.length, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQL tagged template literals parameterize queries safely", { skip: !nativePath }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lilia-sql-tag-"));
+  const path = join(directory, "tag.lilia");
+  try {
+    await using db = await Database.open({ path });
+    await db.json.put("users", "u1", { name: "Alice", role: "admin" });
+    await db.json.put("users", "u2", { name: "Bob", role: "guest" });
+
+    interface UserRow {
+      id: string;
+      name: string;
+    }
+
+    // Async tagged template
+    const role = "admin";
+    const rows = await db.sql<UserRow>`SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'users' AND json_extract(value, '$.role') = ${role}`;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.name, "Alice");
+
+    // Sync tagged template
+    const syncRows = db.sync.sql<UserRow>`SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'users' AND json_extract(value, '$.role') = ${"guest"}`;
+    assert.equal(syncRows.length, 1);
+    assert.equal(syncRows[0]?.name, "Bob");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("AbortSignal cancels operations proactively", { skip: !nativePath }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lilia-abort-"));
+  const path = join(directory, "abort.lilia");
+  try {
+    await using db = await Database.open({ path });
+
+    // 1. Pre-aborted signal throws immediately
+    const preAborted = AbortSignal.abort(new Error("pre-aborted"));
+    await assert.rejects(
+      db.json.get("test", "id", { signal: preAborted }),
+      /pre-aborted/
+    );
+
+    // 2. AbortSignal in watch auto-unsubscribes
+    const controller = new AbortController();
+    const events: any[] = [];
+    await db.watch("auto", (e) => events.push(e), { signal: controller.signal });
+    await db.json.put("auto", "1", { ok: 1 });
+    for (let i = 0; i < 20 && events.length === 0; i++) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    assert.equal(events.length, 1);
+
+    // Abort controller
+    controller.abort();
+    await db.json.put("auto", "2", { ok: 2 });
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(events.length, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("WHATWG ReadableStream streams entries according to web standards", { skip: !nativePath }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lilia-webstream-"));
+  const path = join(directory, "ws.lilia");
+  try {
+    await using db = await Database.open({ path });
+    for (let i = 0; i < 10; i++) {
+      await db.json.put("items", `id_${i}`, { index: i });
+    }
+
+    // 1. JSON readableStream
+    const jsonStream = db.json.readableStream<{ index: number }>("items", { batchSize: 3 });
+    assert.ok(jsonStream instanceof ReadableStream);
+    const jsonItems: { index: number }[] = [];
+    for await (const doc of jsonStream) {
+      jsonItems.push(doc.value);
+    }
+    assert.equal(jsonItems.length, 10);
+    assert.equal(jsonItems[0]?.index, 0);
+    assert.equal(jsonItems[9]?.index, 9);
+
+    // 2. KV readableStream
+    await db.kv.set("cache", "k1", "v1");
+    await db.kv.set("cache", "k2", "v2");
+    const kvStream = db.kv.readableStream("cache", { batchSize: 1 });
+    assert.ok(kvStream instanceof ReadableStream);
+    const kvEntries: KvEntry[] = [];
+    for await (const entry of kvStream) {
+      kvEntries.push(entry);
+    }
+    assert.equal(kvEntries.length, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("KV string ergonomics and type guards conform to standards", { skip: !nativePath }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lilia-ergonomics-"));
+  const path = join(directory, "ergo.lilia");
+  try {
+    await using db = await Database.open({ path });
+
+    // Async KV string key & value
+    await db.kv.set("users", "user:alice", "developer");
+    const entry = await db.kv.get("users", "user:alice");
+    assert.ok(entry !== undefined);
+    assert.ok(isKvEntry(entry));
+    assert.equal(new TextDecoder().decode(entry.value), "developer");
+
+    // Sync KV string key & value
+    db.sync.kv.set("users", "user:bob", "designer");
+    const syncEntry = db.sync.kv.get("users", "user:bob");
+    assert.ok(syncEntry !== undefined);
+    assert.ok(isKvEntry(syncEntry));
+    assert.equal(new TextDecoder().decode(syncEntry.value), "designer");
+
+    // Generic JSON entry and isJsonEntry
+    interface Profile { name: string; age: number }
+    await db.json.put<Profile>("profiles", "p1", { name: "Alice", age: 30 });
+    const profileDoc = await db.json.get<Profile>("profiles", "p1");
+    assert.ok(profileDoc !== undefined);
+    assert.ok(isJsonEntry(profileDoc));
+    assert.equal(profileDoc.value.name, "Alice");
+    assert.equal(profileDoc.value.age, 30);
+
+    // LiliaError cause support
+    const err = new LiliaError({ message: "top error", cause: new Error("underlying") });
+    assert.ok(LiliaError.isLiliaError(err));
+    assert.equal(err.name, "LiliaError");
+    assert.ok(err.cause instanceof Error);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 async function waitUntilReady(tokenFile: string, endpoint: string, daemon: ChildProcess): Promise<void> {

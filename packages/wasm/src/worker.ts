@@ -103,6 +103,28 @@ self.onmessage = async (event: MessageEvent) => {
         result = await client.ftsSearch(payload.collection, payload.query, payload.limit);
         break;
 
+      case "vectorGet":
+        if (!client) throw new Error("Database not opened");
+        result = await client.vectorGet(payload.collection, payload.id);
+        break;
+
+      case "vectorSearch":
+        if (!client) throw new Error("Database not opened");
+        result = await client.vectorSearch(
+          payload.collection,
+          payload.query,
+          payload.dim,
+          payload.elementType,
+          payload.metric,
+          payload.limit
+        );
+        break;
+
+      case "hybridSearch":
+        if (!client) throw new Error("Database not opened");
+        result = await client.hybridSearch(payload.collection, payload.options);
+        break;
+
       case "sqlQuery":
         if (!client) throw new Error("Database not opened");
         result = await client.sqlQuery(payload.sql, payload.params);

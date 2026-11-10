@@ -72,7 +72,7 @@ export function generateMarkdown(
 **Platform**: ${envInfo.os} (${envInfo.arch})  
 **CPU**: ${envInfo.cpu}  
 **Node.js**: ${envInfo.nodeVersion}  
-**Engine**: LiliaDB v0.1.0-alpha.2 (SQLite engine, WAL, Durability::Durable)
+**Engine**: LiliaDB v0.1.0-alpha.7 (SQLite engine, WAL, Durability::Durable)
 
 ---
 

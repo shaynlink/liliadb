@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { command, rpc, service, bounded } from './process.mjs';
+import { command, service, bounded } from './process.mjs';
 import { Database } from '../../packages/node/dist/index.js';
 
 function sdkOperation(operation) {
@@ -72,34 +72,6 @@ export function cli(binary, path, directory) {
     assert.equal(result.stderr, '');
     return JSON.parse(result.stdout);
   };
-}
-
-export async function mcp(binary, path) {
-  const server = service(binary, ['--database', `test=${path}`]);
-  const call = rpc(server);
-  try {
-    const initialized = await call('initialize', { protocolVersion: '2026-07-28', capabilities: {}, clientInfo: { name: 'conformance', version: '1' } });
-    assert.equal(initialized.result.serverInfo.name, 'liliadb');
-    server.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
-    const listed = await call('tools/list');
-    const names = new Set(listed.result.tools.map(tool => tool.name));
-    for (const name of ['batch', 'kv_get', 'kv_scan', 'json_get', 'json_scan']) assert(names.has(`lilia_${name}`));
-    return {
-      close: () => server.close(),
-      async execute(step) {
-        const { op, name, expected, error, ...args } = step;
-        if (args.key) args.key = Buffer.from(args.key).toString('base64');
-        if (op === 'kv_scan' && args.after) args.after = Buffer.from(args.after).toString('base64');
-        const response = await call('tools/call', { name: `lilia_${op}`, arguments: { database: 'test', ...args } });
-        assert.equal(response.jsonrpc, '2.0');
-        assert.equal(response.error, undefined);
-        const value = response.result.structuredContent;
-        assert.deepEqual(JSON.parse(response.result.content[0].text), value);
-        if (response.result.isError) throw value.error;
-        return value;
-      },
-    };
-  } catch (error) { await server.close(); throw error; }
 }
 
 export async function daemon(binary, directory) {

@@ -532,6 +532,9 @@ fn operation_name(operation: &Operation) -> &'static str {
         Operation::GraphNeighbors { .. } => "graph_neighbors",
         Operation::GraphReachability { .. } => "graph_reachability",
         Operation::FtsSearch { .. } => "fts_search",
+        Operation::VectorGet { .. } => "vector_get",
+        Operation::VectorSearch { .. } => "vector_search",
+        Operation::HybridSearch { .. } => "hybrid_search",
         Operation::Subscribe { .. } => "subscribe",
     }
 }
@@ -550,6 +553,8 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
                     "sql".into(),
                     "graph".into(),
                     "fts".into(),
+                    "vector".into(),
+                    "hybrid".into(),
                     "watch".into(),
                 ],
             }
@@ -654,5 +659,55 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             query,
             limit,
         } => ResponseValue::FtsHits(database.fts_search(&collection, &query, limit)?),
+        Operation::VectorGet { collection, id } => {
+            let res = database
+                .vector_get(&collection, &id)?
+                .map(|(dim, et, vec)| (dim, et, lilia_protocol::ByteBuf::from(vec)));
+            ResponseValue::Vector(res)
+        }
+        Operation::VectorSearch {
+            collection,
+            vector,
+            dim,
+            element_type,
+            metric,
+            limit,
+        } => ResponseValue::VectorHits(database.vector_search(
+            &collection,
+            &vector,
+            dim,
+            element_type,
+            metric,
+            limit,
+        )?),
+        Operation::HybridSearch {
+            collection,
+            fts_query,
+            vector,
+            dim,
+            element_type,
+            metric,
+            rrf_k,
+            fts_weight,
+            vector_weight,
+            limit,
+        } => {
+            let vec_arg = match (vector, dim, element_type, metric) {
+                (Some(v), Some(d), Some(et), Some(m)) => Some((v, d, et, m)),
+                _ => None,
+            };
+            let vec_ref = vec_arg
+                .as_ref()
+                .map(|(v, d, et, m)| (v.as_slice(), *d, *et, *m));
+            ResponseValue::HybridHits(database.hybrid_search(
+                &collection,
+                fts_query.as_deref(),
+                vec_ref,
+                rrf_k,
+                fts_weight,
+                vector_weight,
+                limit,
+            )?)
+        }
     })
 }

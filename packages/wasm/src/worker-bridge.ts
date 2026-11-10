@@ -2,12 +2,16 @@ import type {
   BatchOperation,
   FtsHit,
   GraphDirection,
+  HybridHit,
   JsonEntry,
   JsonIndexInfo,
   JsonValue,
   KvEntry,
   MutationResult,
   SqlQueryResult,
+  VectorElementType,
+  VectorHit,
+  VectorMetric,
   WasmOpenOptions,
 } from "./types.js";
 import { LiliaError } from "./types.js";
@@ -218,6 +222,38 @@ export class WorkerClient {
 
   ftsSearch(collection: string, query: string, limit?: number): Promise<FtsHit[]> {
     return this.request("ftsSearch", { collection, query, limit });
+  }
+
+  vectorGet(collection: string, id: string): Promise<Uint8Array | null> {
+    return this.request("vectorGet", { collection, id });
+  }
+
+  vectorSearch(
+    collection: string,
+    query: Float32Array | number[] | Uint8Array,
+    dim?: number,
+    elementType?: VectorElementType,
+    metric?: VectorMetric,
+    limit?: number
+  ): Promise<VectorHit[]> {
+    return this.request("vectorSearch", { collection, query, dim, elementType, metric, limit });
+  }
+
+  hybridSearch(
+    collection: string,
+    options: {
+      query?: string;
+      vector?: Float32Array | number[] | Uint8Array;
+      dim?: number;
+      elementType?: VectorElementType;
+      metric?: VectorMetric;
+      rrfK?: number;
+      ftsWeight?: number;
+      vectorWeight?: number;
+      limit?: number;
+    } = {}
+  ): Promise<HybridHit[]> {
+    return this.request("hybridSearch", { collection, options });
   }
 
   sqlQuery(sql: string, params: unknown[] = []): Promise<SqlQueryResult> {

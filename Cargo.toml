@@ -3,7 +3,6 @@ resolver = "2"
 members = [
   "apps/lilia-cli",
   "apps/lilia-daemon",
-  "apps/lilia-mcp",
   "crates/lilia-core",
   "crates/lilia-graph",
   "crates/lilia-node-native",
@@ -12,12 +11,11 @@ members = [
   "crates/lilia-sqlite-native",
   "crates/lilia-storage-sqlite",
   "crates/lilia-wasm",
+  "crates/lilia-ffi",
   "plugins/lilia-plugin-json",
   "plugins/lilia-plugin-kv",
   "plugins/lilia-plugin-codec",
   "plugins/lilia-plugin-sql",
-  "examples/custom-extension",
-  "examples/project-iot-smart-hub",
 ]
 
 [workspace.package]
@@ -37,6 +35,7 @@ clap = { version = "4.5.51", features = ["derive"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 hex = "0.4.3"
 libloading = "0.9.0"
+miniz_oxide = "0.8"
 napi = { version = "3.4.0", features = ["napi8", "tokio_rt"] }
 napi-derive = "3.3.0"
 pbkdf2 = "0.12.2"
@@ -74,7 +73,4 @@ missing_debug_implementations = "warn"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
-
-[patch.crates-io]
-libsqlite3-sys = { path = "crates/libsqlite3-sys" }
 

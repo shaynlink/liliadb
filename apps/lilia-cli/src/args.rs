@@ -72,6 +72,14 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: FtsCommand,
     },
+    Vector {
+        #[command(subcommand)]
+        command: VectorCommand,
+    },
+    Hybrid {
+        #[command(subcommand)]
+        command: HybridCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -238,6 +246,102 @@ pub(crate) enum FtsCommand {
         collection: String,
         doc_id: String,
         content: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum VectorMetricArg {
+    Cosine,
+    L2,
+    Dot,
+    Hamming,
+}
+
+impl From<VectorMetricArg> for lilia_core::VectorMetric {
+    fn from(arg: VectorMetricArg) -> Self {
+        match arg {
+            VectorMetricArg::Cosine => Self::Cosine,
+            VectorMetricArg::L2 => Self::L2,
+            VectorMetricArg::Dot => Self::Dot,
+            VectorMetricArg::Hamming => Self::Hamming,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum VectorCommand {
+    CreateIndex {
+        collection: String,
+        #[arg(long, default_value_t = 16)]
+        m: usize,
+        #[arg(long, default_value_t = 64)]
+        ef_construction: usize,
+        #[arg(long, default_value_t = 32)]
+        ef_search: usize,
+        #[arg(long, value_enum, default_value = "cosine")]
+        metric: VectorMetricArg,
+        #[arg(long, default_value = "f32")]
+        element_type: String,
+        #[arg(long, default_value_t = 0)]
+        dim: u32,
+    },
+    IndexInfo {
+        collection: String,
+    },
+    DropIndex {
+        collection: String,
+    },
+    Set {
+        collection: String,
+        id: String,
+        vector: String,
+        #[arg(long, default_value = "f32")]
+        element_type: String,
+    },
+    Get {
+        collection: String,
+        id: String,
+    },
+    Delete {
+        collection: String,
+        id: String,
+    },
+    Search {
+        collection: String,
+        vector: String,
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
+        #[arg(long, value_enum, default_value = "cosine")]
+        metric: VectorMetricArg,
+        #[arg(long, default_value = "f32")]
+        element_type: String,
+        #[arg(long)]
+        in_graph_neighbors: Option<String>,
+        #[arg(long)]
+        by_json_index: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum HybridCommand {
+    Search {
+        collection: String,
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long)]
+        vector: Option<String>,
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
+        #[arg(long, default_value_t = 60)]
+        rrf_k: u32,
+        #[arg(long, default_value_t = 1.0)]
+        fts_weight: f64,
+        #[arg(long, default_value_t = 1.0)]
+        vector_weight: f64,
+        #[arg(long, value_enum, default_value = "cosine")]
+        metric: VectorMetricArg,
+        #[arg(long, default_value = "f32")]
+        element_type: String,
     },
 }
 

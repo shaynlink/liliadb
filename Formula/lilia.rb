@@ -1,5 +1,5 @@
 class Lilia < Formula
-  desc "Local-first multimodel embedded and daemon database (CLI, Daemon & MCP)"
+  desc "Local-first multimodel embedded and daemon database (CLI & Daemon)"
   homepage "https://liliadb.org"
   version "0.1.0-alpha.6"
   license "Apache-2.0"
@@ -27,7 +27,6 @@ class Lilia < Formula
   def install
     bin.install "lilia"
     bin.install "lilia-daemon"
-    bin.install "lilia-mcp"
   end
 
   service do

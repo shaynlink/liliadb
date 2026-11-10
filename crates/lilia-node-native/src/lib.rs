@@ -87,6 +87,25 @@ pub struct NativeFtsHit {
     pub rank: f64,
 }
 
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct NativeVectorHit {
+    pub collection: String,
+    pub id: String,
+    pub distance: f64,
+}
+
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct NativeHybridHit {
+    pub id: String,
+    pub rrf_score: f64,
+    pub fts_rank: Option<u32>,
+    pub fts_snippet: Option<String>,
+    pub vector_rank: Option<u32>,
+    pub vector_distance: Option<f64>,
+}
+
 #[napi]
 impl NativeDatabase {
     #[napi(factory)]
@@ -525,6 +544,125 @@ impl NativeDatabase {
                     doc_id: h.doc_id,
                     snippet: h.snippet,
                     rank: h.rank,
+                })
+                .collect())
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    #[napi]
+    pub async fn vector_get(&self, collection: String, id: String) -> Result<Option<Buffer>> {
+        let database = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || {
+            let res = database.vector_get(&collection, &id).map_err(napi_error)?;
+            Ok(res.map(|(_, _, bytes)| Buffer::from(bytes)))
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    #[napi]
+    pub async fn vector_search(
+        &self,
+        collection: String,
+        query: Buffer,
+        dim: u32,
+        element_type: Option<String>,
+        metric: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<Vec<NativeVectorHit>> {
+        let database = Arc::clone(&self.inner);
+        let elem_t = match element_type.as_deref() {
+            Some("int8") => lilia_core::VectorElementType::Int8,
+            Some("bit") => lilia_core::VectorElementType::Bit,
+            _ => lilia_core::VectorElementType::Float32,
+        };
+        let met = match metric.as_deref() {
+            Some("l2") => lilia_core::VectorMetric::L2,
+            Some("dot") => lilia_core::VectorMetric::Dot,
+            Some("hamming") => lilia_core::VectorMetric::Hamming,
+            _ => lilia_core::VectorMetric::Cosine,
+        };
+        tokio::task::spawn_blocking(move || {
+            let hits = database
+                .vector_search(
+                    &collection,
+                    query.as_ref(),
+                    dim,
+                    elem_t,
+                    met,
+                    limit.unwrap_or(10),
+                )
+                .map_err(napi_error)?;
+            Ok(hits
+                .into_iter()
+                .map(|h| NativeVectorHit {
+                    collection: h.collection,
+                    id: h.id,
+                    distance: h.distance,
+                })
+                .collect())
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn hybrid_search(
+        &self,
+        collection: String,
+        fts_query: Option<String>,
+        vector_query: Option<Buffer>,
+        dim: Option<u32>,
+        element_type: Option<String>,
+        metric: Option<String>,
+        rrf_k: Option<u32>,
+        fts_weight: Option<f64>,
+        vector_weight: Option<f64>,
+        limit: Option<u32>,
+    ) -> Result<Vec<NativeHybridHit>> {
+        let database = Arc::clone(&self.inner);
+        let elem_t = match element_type.as_deref() {
+            Some("int8") => lilia_core::VectorElementType::Int8,
+            Some("bit") => lilia_core::VectorElementType::Bit,
+            _ => lilia_core::VectorElementType::Float32,
+        };
+        let met = match metric.as_deref() {
+            Some("l2") => lilia_core::VectorMetric::L2,
+            Some("dot") => lilia_core::VectorMetric::Dot,
+            Some("hamming") => lilia_core::VectorMetric::Hamming,
+            _ => lilia_core::VectorMetric::Cosine,
+        };
+        let k = rrf_k.unwrap_or(60);
+        let w_fts = fts_weight.unwrap_or(1.0);
+        let w_vec = vector_weight.unwrap_or(1.0);
+        let lim = limit.unwrap_or(10);
+        tokio::task::spawn_blocking(move || {
+            let vec_arg = vector_query
+                .as_ref()
+                .map(|v| (v.as_ref(), dim.unwrap_or(0), elem_t, met));
+            let hits = database
+                .hybrid_search(
+                    &collection,
+                    fts_query.as_deref(),
+                    vec_arg,
+                    k,
+                    w_fts,
+                    w_vec,
+                    lim,
+                )
+                .map_err(napi_error)?;
+            Ok(hits
+                .into_iter()
+                .map(|h| NativeHybridHit {
+                    id: h.id,
+                    rrf_score: h.rrf_score,
+                    fts_rank: h.fts_rank.map(|r| r as u32),
+                    fts_snippet: h.fts_snippet,
+                    vector_rank: h.vector_rank.map(|r| r as u32),
+                    vector_distance: h.vector_distance,
                 })
                 .collect())
         })

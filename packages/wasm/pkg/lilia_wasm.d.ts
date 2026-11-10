@@ -22,6 +22,9 @@ export class WasmDatabase {
     kv_scan(namespace: string, after: Uint8Array | null | undefined, limit: number): any;
     static open(options_val: any): Promise<WasmDatabase>;
     sql_query(sql: string, params_json?: string | null): string;
+    vector_get(collection: string, id: string): Uint8Array | undefined;
+    vector_search(collection: string, query_vector: Uint8Array, dim: number, element_type?: string | null, metric?: string | null, limit?: number | null): any;
+    hybrid_search(collection: string, fts_query?: string | null, vector_query?: Uint8Array | null, dim?: number | null, element_type?: string | null, metric?: string | null, rrf_k?: number | null, fts_weight?: number | null, vector_weight?: number | null, limit?: number | null): any;
 }
 
 export function init_opfs_vfs(directory?: string | null): Promise<void>;
@@ -65,8 +68,8 @@ export interface InitOutput {
     readonly rust_sqlite_wasm_realloc: (a: number, b: number) => number;
     readonly sqlite3_os_end: () => number;
     readonly sqlite3_os_init: () => number;
-    readonly __wasm_bindgen_func_elem_3060: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_3086: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_2890: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_2916: (a: number, b: number, c: number, d: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;

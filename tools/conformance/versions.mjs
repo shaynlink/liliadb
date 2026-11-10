@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Database } from '../../packages/node/dist/index.js';
-import { sdk, daemon, cli, mcp } from './adapters.mjs';
+import { sdk, daemon, cli } from './adapters.mjs';
 import { command, bounded } from './process.mjs';
 
 const high = 9007199254740993n;
@@ -80,7 +80,4 @@ export async function precision(parent, executable) {
   try { await verify('daemon', shared.execute); }
   finally { await shared.close(); }
   await verify('CLI JSON', cli(executable('lilia'), join(directory, 'cli.lilia'), directory));
-  const server = await mcp(executable('lilia-mcp'), join(directory, 'mcp.lilia'));
-  try { await verify('MCP stdio', server.execute); }
-  finally { await server.close(); }
 }

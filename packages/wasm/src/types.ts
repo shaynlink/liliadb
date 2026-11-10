@@ -62,6 +62,24 @@ export interface FtsHit {
   rank: number;
 }
 
+export type VectorElementType = "float32" | "int8" | "bit";
+export type VectorMetric = "cosine" | "l2" | "dot" | "hamming";
+
+export interface VectorHit {
+  collection: string;
+  id: string;
+  distance: number;
+}
+
+export interface HybridHit {
+  id: string;
+  rrfScore: number;
+  ftsRank?: number;
+  ftsSnippet?: string;
+  vectorRank?: number;
+  vectorDistance?: number;
+}
+
 export type BatchOperation =
   | { model: "kv_set"; namespace: string; key: Uint8Array; value: Uint8Array; ifVersion?: bigint; expiresAtMs?: number }
   | { model: "kv_delete"; namespace: string; key: Uint8Array; ifVersion?: bigint }
@@ -72,14 +90,17 @@ export type BatchOperation =
   | { model: "graph_add_edge"; graph: string; source: string; target: string; kind: string }
   | { model: "graph_remove_edge"; graph: string; source: string; target: string; kind: string }
   | { model: "fts_index"; collection: string; docId: string; content: string }
-  | { model: "fts_delete"; collection: string; docId: string };
+  | { model: "fts_delete"; collection: string; docId: string }
+  | { model: "vector_set"; collection: string; id: string; dim: number; elementType?: VectorElementType; vector: Uint8Array | number[] | Float32Array }
+  | { model: "vector_delete"; collection: string; id: string };
 
 export type DatabaseEvent =
   | { type: "kv_mutated"; namespace: string; key: Uint8Array; version?: bigint; deleted: boolean }
   | { type: "json_mutated"; space: string; id: string; version?: bigint; deleted: boolean }
   | { type: "graph_node_mutated"; graph: string; id: string; deleted: boolean }
   | { type: "graph_edge_mutated"; graph: string; source: string; target: string; kind: string; deleted: boolean }
-  | { type: "fts_mutated"; collection: string; docId: string; deleted: boolean };
+  | { type: "fts_mutated"; collection: string; docId: string; deleted: boolean }
+  | { type: "vector_mutated"; collection: string; id: string; deleted: boolean };
 
 export interface WatchSubscription {
   unsubscribe(): void | Promise<void>;

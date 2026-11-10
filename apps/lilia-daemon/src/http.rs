@@ -9,7 +9,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::Stream;
-use lilia_core::{BatchOperation, Direction, ErrorCode, LiliaError};
+use lilia_core::{
+    BatchOperation, Direction, ErrorCode, LiliaError, VectorElementType, VectorMetric,
+};
 use lilia_storage_sqlite::Database;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -239,6 +241,10 @@ pub enum HttpBatchOperation {
         kind: String,
         #[serde(default)]
         metadata: Option<Value>,
+        #[serde(default)]
+        doc_space: Option<String>,
+        #[serde(default)]
+        doc_id: Option<String>,
     },
     GraphDeleteNode {
         graph: String,
@@ -249,6 +255,8 @@ pub enum HttpBatchOperation {
         source: String,
         target: String,
         kind: String,
+        #[serde(default)]
+        weight: Option<f64>,
     },
     GraphRemoveEdge {
         graph: String,
@@ -265,6 +273,71 @@ pub enum HttpBatchOperation {
         collection: String,
         doc_id: String,
     },
+    VectorSet {
+        collection: String,
+        id: String,
+        dim: u32,
+        #[serde(default)]
+        element_type: Option<VectorElementType>,
+        vector: Vec<f32>,
+    },
+    VectorDelete {
+        collection: String,
+        id: String,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VectorSetRequest {
+    pub collection: String,
+    pub id: String,
+    pub dim: u32,
+    #[serde(default)]
+    pub element_type: Option<VectorElementType>,
+    pub vector: Vec<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VectorGetRequest {
+    pub collection: String,
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VectorSearchRequest {
+    pub collection: String,
+    pub vector: Vec<f32>,
+    #[serde(default)]
+    pub dim: Option<u32>,
+    #[serde(default)]
+    pub element_type: Option<VectorElementType>,
+    #[serde(default)]
+    pub metric: Option<VectorMetric>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HybridSearchRequest {
+    pub collection: String,
+    #[serde(default)]
+    pub fts_query: Option<String>,
+    #[serde(default)]
+    pub vector: Option<Vec<f32>>,
+    #[serde(default)]
+    pub dim: Option<u32>,
+    #[serde(default)]
+    pub element_type: Option<VectorElementType>,
+    #[serde(default)]
+    pub metric: Option<VectorMetric>,
+    #[serde(default)]
+    pub rrf_k: Option<u32>,
+    #[serde(default)]
+    pub fts_weight: Option<f64>,
+    #[serde(default)]
+    pub vector_weight: Option<f64>,
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -965,12 +1038,16 @@ async fn batch_handler(
                 id,
                 kind,
                 metadata,
+                doc_space,
+                doc_id,
             } => {
                 ops.push(BatchOperation::GraphSetNode {
                     graph,
                     id,
                     kind,
                     metadata: metadata.unwrap_or_else(|| json!({})),
+                    doc_space,
+                    doc_id,
                 });
             }
             HttpBatchOperation::GraphDeleteNode { graph, id } => {
@@ -981,12 +1058,14 @@ async fn batch_handler(
                 source,
                 target,
                 kind,
+                weight,
             } => {
                 ops.push(BatchOperation::GraphAddEdge {
                     graph,
                     source,
                     target,
                     kind,
+                    weight: weight.unwrap_or(1.0),
                 });
             }
             HttpBatchOperation::GraphRemoveEdge {
@@ -1015,6 +1094,41 @@ async fn batch_handler(
             }
             HttpBatchOperation::FtsDelete { collection, doc_id } => {
                 ops.push(BatchOperation::FtsDelete { collection, doc_id });
+            }
+            HttpBatchOperation::VectorSet {
+                collection,
+                id,
+                dim,
+                element_type,
+                vector,
+            } => {
+                let elem_type = element_type.unwrap_or(VectorElementType::Float32);
+                let bytes = match elem_type {
+                    VectorElementType::Float32 => {
+                        let mut b = Vec::with_capacity(vector.len() * 4);
+                        for f in vector {
+                            b.extend_from_slice(&f.to_le_bytes());
+                        }
+                        b
+                    }
+                    VectorElementType::Int8 => {
+                        let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&vector);
+                        q.into_iter().map(|x| x as u8).collect()
+                    }
+                    VectorElementType::Bit => {
+                        lilia_core::quantization::quantize_f32_to_bits(&vector)
+                    }
+                };
+                ops.push(BatchOperation::VectorSet {
+                    collection,
+                    id,
+                    dim,
+                    element_type: elem_type,
+                    vector: bytes,
+                });
+            }
+            HttpBatchOperation::VectorDelete { collection, id } => {
+                ops.push(BatchOperation::VectorDelete { collection, id });
             }
         }
     }
@@ -1222,6 +1336,188 @@ async fn fts_search_handler(
     Ok(Json(json!({ "ok": true, "hits": hits })))
 }
 
+// Vector & Hybrid Handlers
+async fn vector_set_handler(
+    State(state): State<HttpState>,
+    Json(payload): Json<VectorSetRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let db = state.database.clone();
+    let elem_type = payload.element_type.unwrap_or(VectorElementType::Float32);
+    let bytes = match elem_type {
+        VectorElementType::Float32 => {
+            let mut b = Vec::with_capacity(payload.vector.len() * 4);
+            for f in payload.vector {
+                b.extend_from_slice(&f.to_le_bytes());
+            }
+            b
+        }
+        VectorElementType::Int8 => {
+            let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&payload.vector);
+            q.into_iter().map(|x| x as u8).collect()
+        }
+        VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(&payload.vector),
+    };
+    tokio::task::spawn_blocking(move || {
+        db.vector_set(
+            &payload.collection,
+            &payload.id,
+            payload.dim,
+            elem_type,
+            &bytes,
+        )
+    })
+    .await
+    .map_err(|_| {
+        map_error(LiliaError::new(
+            ErrorCode::Storage,
+            "worker task failed",
+            false,
+        ))
+    })?
+    .map_err(map_error)?;
+
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn vector_get_handler(
+    State(state): State<HttpState>,
+    Json(payload): Json<VectorGetRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let db = state.database.clone();
+    let res = tokio::task::spawn_blocking(move || db.vector_get(&payload.collection, &payload.id))
+        .await
+        .map_err(|_| {
+            map_error(LiliaError::new(
+                ErrorCode::Storage,
+                "worker task failed",
+                false,
+            ))
+        })?
+        .map_err(map_error)?;
+
+    match res {
+        Some((dim, elem_type, bytes)) => {
+            let floats: Vec<f32> = match elem_type {
+                VectorElementType::Float32 => bytes
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect(),
+                VectorElementType::Int8 => bytes.iter().map(|&x| (x as i8) as f32).collect(),
+                VectorElementType::Bit => bytes.iter().map(|&x| x as f32).collect(),
+            };
+            Ok(Json(json!({
+                "ok": true,
+                "found": true,
+                "dim": dim,
+                "element_type": elem_type,
+                "vector": floats
+            })))
+        }
+        None => Ok(Json(json!({ "ok": true, "found": false }))),
+    }
+}
+
+async fn vector_search_handler(
+    State(state): State<HttpState>,
+    Json(payload): Json<VectorSearchRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let db = state.database.clone();
+    let limit = payload.limit.unwrap_or(10);
+    let elem_type = payload.element_type.unwrap_or(VectorElementType::Float32);
+    let metric = payload.metric.unwrap_or(VectorMetric::Cosine);
+    let dim = payload.dim.unwrap_or(payload.vector.len() as u32);
+    let bytes = match elem_type {
+        VectorElementType::Float32 => {
+            let mut b = Vec::with_capacity(payload.vector.len() * 4);
+            for f in payload.vector {
+                b.extend_from_slice(&f.to_le_bytes());
+            }
+            b
+        }
+        VectorElementType::Int8 => {
+            let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&payload.vector);
+            q.into_iter().map(|x| x as u8).collect()
+        }
+        VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(&payload.vector),
+    };
+
+    let hits = tokio::task::spawn_blocking(move || {
+        db.vector_search(&payload.collection, &bytes, dim, elem_type, metric, limit)
+    })
+    .await
+    .map_err(|_| {
+        map_error(LiliaError::new(
+            ErrorCode::Storage,
+            "worker task failed",
+            false,
+        ))
+    })?
+    .map_err(map_error)?;
+
+    Ok(Json(json!({ "ok": true, "hits": hits })))
+}
+
+async fn hybrid_search_handler(
+    State(state): State<HttpState>,
+    Json(payload): Json<HybridSearchRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let db = state.database.clone();
+    let limit = payload.limit.unwrap_or(10);
+    let rrf_k = payload.rrf_k.unwrap_or(60);
+    let fts_weight = payload.fts_weight.unwrap_or(1.0);
+    let vector_weight = payload.vector_weight.unwrap_or(1.0);
+
+    let hits = tokio::task::spawn_blocking(move || {
+        let vec_data = if let Some(ref v) = payload.vector {
+            let elem_type = payload.element_type.unwrap_or(VectorElementType::Float32);
+            let metric = payload.metric.unwrap_or(VectorMetric::Cosine);
+            let dim = payload.dim.unwrap_or(v.len() as u32);
+            let bytes = match elem_type {
+                VectorElementType::Float32 => {
+                    let mut b = Vec::with_capacity(v.len() * 4);
+                    for f in v {
+                        b.extend_from_slice(&f.to_le_bytes());
+                    }
+                    b
+                }
+                VectorElementType::Int8 => {
+                    let (q, _) = lilia_core::quantization::quantize_f32_to_i8(v);
+                    q.into_iter().map(|x| x as u8).collect()
+                }
+                VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(v),
+            };
+            Some((bytes, dim, elem_type, metric))
+        } else {
+            None
+        };
+
+        let vec_ref = vec_data
+            .as_ref()
+            .map(|(b, d, et, m)| (b.as_slice(), *d, *et, *m));
+
+        db.hybrid_search(
+            &payload.collection,
+            payload.fts_query.as_deref(),
+            vec_ref,
+            rrf_k,
+            fts_weight,
+            vector_weight,
+            limit,
+        )
+    })
+    .await
+    .map_err(|_| {
+        map_error(LiliaError::new(
+            ErrorCode::Storage,
+            "worker task failed",
+            false,
+        ))
+    })?
+    .map_err(map_error)?;
+
+    Ok(Json(json!({ "ok": true, "hits": hits })))
+}
+
 // Doctor Handler
 async fn doctor_handler(
     State(state): State<HttpState>,
@@ -1342,6 +1638,11 @@ pub fn router(state: HttpState) -> Router {
         // FTS
         .route("/v1/fts/index", post(fts_index_handler))
         .route("/v1/fts/search", post(fts_search_handler))
+        // Vector & Hybrid
+        .route("/v1/vector/set", post(vector_set_handler))
+        .route("/v1/vector/get", post(vector_get_handler))
+        .route("/v1/vector/search", post(vector_search_handler))
+        .route("/v1/hybrid/search", post(hybrid_search_handler))
         // Batch
         .route("/v1/batch", post(batch_handler))
         // SQL

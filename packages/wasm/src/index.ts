@@ -6,6 +6,7 @@ import type {
   CreateIndexOptions,
   FtsHit,
   GraphDirection,
+  HybridHit,
   JsonEntry,
   JsonFindOptions,
   JsonIndexInfo,
@@ -15,6 +16,9 @@ import type {
   OpenOptions,
   ScanStreamOptions,
   SqlQueryResult,
+  VectorElementType,
+  VectorHit,
+  VectorMetric,
   WasmOpenOptions,
 } from "./types.js";
 import { LiliaError } from "./types.js";
@@ -234,6 +238,52 @@ export class Database {
       this.run(client => client.ftsSearch(collection, query, options.limit)),
   };
 
+  readonly vector = {
+    set: async (
+      collection: string,
+      id: string,
+      vector: Float32Array | number[] | Uint8Array,
+      options: { dim?: number; elementType?: VectorElementType } = {}
+    ): Promise<MutationResult> => {
+      const dim = options.dim ?? (vector instanceof Uint8Array ? vector.byteLength / 4 : vector.length);
+      return (await this.batch([{ model: "vector_set", collection, id, dim, elementType: options.elementType, vector }]))[0]!;
+    },
+    get: (
+      collection: string,
+      id: string
+    ): Promise<Uint8Array | null> =>
+      this.run(client => client.vectorGet(collection, id)),
+    delete: async (
+      collection: string,
+      id: string
+    ): Promise<MutationResult> =>
+      (await this.batch([{ model: "vector_delete", collection, id }]))[0]!,
+    search: (
+      collection: string,
+      query: Float32Array | number[] | Uint8Array,
+      options: { dim?: number; elementType?: VectorElementType; metric?: VectorMetric; limit?: number } = {}
+    ): Promise<VectorHit[]> =>
+      this.run(client => client.vectorSearch(collection, query, options.dim, options.elementType, options.metric, options.limit)),
+  };
+
+  readonly hybrid = {
+    search: (
+      collection: string,
+      options: {
+        query?: string;
+        vector?: Float32Array | number[] | Uint8Array;
+        dim?: number;
+        elementType?: VectorElementType;
+        metric?: VectorMetric;
+        rrfK?: number;
+        ftsWeight?: number;
+        vectorWeight?: number;
+        limit?: number;
+      } = {}
+    ): Promise<HybridHit[]> =>
+      this.run(client => client.hybridSearch(collection, options)),
+  };
+
   readonly sql = {
     query: <T = Record<string, unknown>>(
       sql: string,
@@ -408,3 +458,54 @@ export class Database {
     }
   }
 }
+
+export const quantization = {
+  toInt8(floats: Float32Array | number[]): { quantized: Int8Array; scale: number } {
+    let maxAbs = 0;
+    for (let i = 0; i < floats.length; i++) {
+      const abs = Math.abs(floats[i]!);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+    if (maxAbs === 0) {
+      return { quantized: new Int8Array(floats.length), scale: 1.0 };
+    }
+    const scale = maxAbs / 127.0;
+    const invScale = 1.0 / scale;
+    const quantized = new Int8Array(floats.length);
+    for (let i = 0; i < floats.length; i++) {
+      quantized[i] = Math.max(-128, Math.min(127, Math.round(floats[i]! * invScale)));
+    }
+    return { quantized, scale };
+  },
+
+  toBit(floats: Float32Array | number[]): Uint8Array {
+    const numBytes = Math.ceil(floats.length / 8);
+    const packed = new Uint8Array(numBytes);
+    for (let i = 0; i < floats.length; i++) {
+      if (floats[i]! > 0) {
+        const byteIdx = Math.floor(i / 8);
+        const bitIdx = 7 - (i % 8);
+        packed[byteIdx]! |= 1 << bitIdx;
+      }
+    }
+    return packed;
+  },
+
+  cosineDistance(a: Float32Array | number[], b: Float32Array | number[]): number {
+    const len = Math.min(a.length, b.length);
+    if (len === 0) return 1.0;
+    let dot = 0,
+      normA = 0,
+      normB = 0;
+    for (let i = 0; i < len; i++) {
+      const va = a[i]!,
+        vb = b[i]!;
+      dot += va * vb;
+      normA += va * va;
+      normB += vb * vb;
+    }
+    if (normA <= 0 || normB <= 0) return 1.0;
+    const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    return Math.max(0, Math.min(2, 1.0 - sim));
+  },
+};

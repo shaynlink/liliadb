@@ -12,7 +12,9 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "bun": "./dist/index.js",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "files": [
@@ -22,6 +24,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test dist/**/*.test.js",
+    "test:bun": "bun test tests/compat-bun.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "bench": "node dist/benchmarks/runner.js",
     "bench:full": "node dist/benchmarks/runner.js --workload all",

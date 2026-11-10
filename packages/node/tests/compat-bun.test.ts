@@ -7,7 +7,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { test } from "bun:test";
 
-import { Database } from "../src/index.js";
+import { Database, isKvEntry, isJsonEntry, LiliaError } from "../src/index.js";
 
 const candidateDaemon = [
   new URL("../../../target/debug/lilia-daemon", import.meta.url).pathname,
@@ -149,6 +149,63 @@ test("Bun: daemon client connects over Unix domain socket IPC", async () => {
     await db.close();
   } finally {
     daemonProc.kill("SIGTERM");
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Bun: idiomatic standards (await using, SQL tagged templates, Web Streams, AbortSignal)", async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "bun-idio-")));
+  const dbPath = join(dir, "idiomatic.lilia");
+
+  try {
+    let closedDbRef!: Database;
+    {
+      // 1. Explicit resource management with await using
+      await using db = await Database.open({ path: dbPath });
+      closedDbRef = db;
+
+      // 2. String KV ergonomics
+      await db.kv.set("bun_kv", "key:1", "value:1");
+      const kvEntry = await db.kv.get("bun_kv", "key:1");
+      assert.ok(kvEntry !== undefined);
+      assert.ok(isKvEntry(kvEntry));
+      assert.equal(new TextDecoder().decode(kvEntry.value), "value:1");
+
+      // 3. Generic JSON entries
+      interface BunItem { title: string; count: number }
+      await db.json.put<BunItem>("bun_json", "doc:1", { title: "Bun Native", count: 42 });
+      const jsonDoc = await db.json.get<BunItem>("bun_json", "doc:1");
+      assert.ok(jsonDoc !== undefined);
+      assert.ok(isJsonEntry(jsonDoc));
+      assert.equal(jsonDoc.value.title, "Bun Native");
+      assert.equal(jsonDoc.value.count, 42);
+
+      // 4. SQL tagged template strings
+      const space = "bun_json";
+      const rows = await db.sql<{ id: string; title: string }>`SELECT id, json_extract(value, '$.title') AS title FROM lilia_json WHERE space = ${space}`;
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.title, "Bun Native");
+
+      // 5. WHATWG ReadableStream
+      const stream = db.json.readableStream<BunItem>("bun_json");
+      assert.ok(stream instanceof ReadableStream);
+      const streamed: BunItem[] = [];
+      for await (const doc of stream) {
+        streamed.push(doc.value);
+      }
+      assert.equal(streamed.length, 1);
+      assert.equal(streamed[0]?.title, "Bun Native");
+
+      // 6. AbortSignal support
+      const aborted = AbortSignal.abort(new Error("bun abort"));
+      await assert.rejects(db.json.get("bun_json", "doc:1", { signal: aborted }), /bun abort/);
+    }
+
+    // Verify automatic closure via await using
+    await assert.rejects(closedDbRef.json.get("bun_json", "doc:1"), (err: unknown) =>
+      err instanceof LiliaError && err.code === "CLOSED"
+    );
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

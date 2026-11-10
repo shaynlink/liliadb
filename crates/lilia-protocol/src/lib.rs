@@ -1,10 +1,11 @@
 use std::io;
 
 use lilia_core::{
-    BatchOperation, DatabaseEvent, Direction, FtsHit, JsonEntry, JsonIndexInfo, KvEntry,
-    LiliaError, MutationResult,
+    BatchOperation, DatabaseEvent, Direction, FtsHit, HybridHit, JsonEntry, JsonIndexInfo, KvEntry,
+    LiliaError, MutationResult, VectorElementType, VectorHit, VectorMetric,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+pub use serde_bytes::ByteBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const PROTOCOL_MAJOR: u16 = 1;
@@ -100,6 +101,32 @@ pub enum Operation {
         query: String,
         limit: u32,
     },
+    VectorGet {
+        collection: String,
+        id: String,
+    },
+    VectorSearch {
+        collection: String,
+        #[serde(with = "serde_bytes")]
+        vector: Vec<u8>,
+        dim: u32,
+        element_type: VectorElementType,
+        metric: VectorMetric,
+        limit: u32,
+    },
+    HybridSearch {
+        collection: String,
+        fts_query: Option<String>,
+        #[serde(default, with = "serde_bytes")]
+        vector: Option<Vec<u8>>,
+        dim: Option<u32>,
+        element_type: Option<VectorElementType>,
+        metric: Option<VectorMetric>,
+        rrf_k: u32,
+        fts_weight: f64,
+        vector_weight: f64,
+        limit: u32,
+    },
     Subscribe {
         namespace: Option<String>,
     },
@@ -133,6 +160,9 @@ pub enum ResponseValue {
     GraphNeighbors(Vec<String>),
     GraphReachability(Vec<String>),
     FtsHits(Vec<FtsHit>),
+    Vector(Option<(u32, VectorElementType, serde_bytes::ByteBuf)>),
+    VectorHits(Vec<VectorHit>),
+    HybridHits(Vec<HybridHit>),
     Event(DatabaseEvent),
 }
 

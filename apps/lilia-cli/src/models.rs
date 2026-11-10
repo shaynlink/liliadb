@@ -1,13 +1,16 @@
 use std::fs;
 use std::path::Path;
 
-use lilia_core::BatchOperation;
+use lilia_core::{BatchOperation, VectorElementType};
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::{json, Value};
 
 use base64::Engine;
 
-use crate::args::{Command, Encoding, FtsCommand, GraphCommand, JsonCommand, KvCommand};
+use crate::args::{
+    Command, Encoding, FtsCommand, GraphCommand, HybridCommand, JsonCommand, KvCommand,
+    VectorCommand,
+};
 
 pub(crate) fn resolve_plugin_path(plugin: &Path) -> anyhow::Result<std::path::PathBuf> {
     if plugin.exists() {
@@ -70,6 +73,8 @@ pub(crate) fn execute(
         Command::Json { command } => json_model(&database, command)?,
         Command::Graph { command } => graph(&database, command)?,
         Command::Fts { command } => fts(&database, command)?,
+        Command::Vector { command } => vector(&database, command)?,
+        Command::Hybrid { command } => hybrid(&database, command)?,
         Command::Batch { file } => {
             let operations: Vec<BatchOperation> = serde_json::from_slice(&fs::read(file)?)?;
             serde_json::to_value(database.batch(&operations)?)?
@@ -294,6 +299,295 @@ fn fts(database: &Database, command: FtsCommand) -> anyhow::Result<Value> {
             limit,
         } => {
             let hits = database.fts_search(&collection, &query, limit)?;
+            Ok(serde_json::to_value(hits)?)
+        }
+    }
+}
+
+fn parse_element_type(raw: &str) -> anyhow::Result<VectorElementType> {
+    match raw.to_lowercase().as_str() {
+        "f32" | "float32" | "float" => Ok(VectorElementType::Float32),
+        "i8" | "int8" => Ok(VectorElementType::Int8),
+        "1bit" | "bit1" | "bit" | "binary" => Ok(VectorElementType::Bit),
+        other => {
+            anyhow::bail!("unknown vector element type `{other}`, expected `f32`, `i8`, or `1bit`")
+        }
+    }
+}
+
+fn parse_vector_data(raw: &str, element_type: VectorElementType) -> anyhow::Result<(Vec<u8>, u32)> {
+    let trimmed = raw.trim();
+    // 1. Try JSON array
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(trimmed) {
+            match element_type {
+                VectorElementType::Float32 => {
+                    let mut bytes = Vec::with_capacity(arr.len() * 4);
+                    for item in &arr {
+                        let f = item
+                            .as_f64()
+                            .ok_or_else(|| anyhow::anyhow!("vector element not a number"))?
+                            as f32;
+                        bytes.extend_from_slice(&f.to_le_bytes());
+                    }
+                    return Ok((bytes, arr.len() as u32));
+                }
+                VectorElementType::Int8 => {
+                    let mut bytes = Vec::with_capacity(arr.len());
+                    for item in &arr {
+                        let i = item
+                            .as_i64()
+                            .ok_or_else(|| anyhow::anyhow!("vector element not an int"))?
+                            as i8;
+                        bytes.push(i as u8);
+                    }
+                    return Ok((bytes, arr.len() as u32));
+                }
+                VectorElementType::Bit => {
+                    let mut bytes = Vec::with_capacity(arr.len());
+                    for item in &arr {
+                        let u = item
+                            .as_u64()
+                            .ok_or_else(|| anyhow::anyhow!("vector element not a u8"))?
+                            as u8;
+                        bytes.push(u);
+                    }
+                    return Ok((bytes, (arr.len() * 8) as u32));
+                }
+            }
+        }
+    }
+
+    // 2. Try Base64
+    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(trimmed) {
+        let dim = match element_type {
+            VectorElementType::Float32 => (bytes.len() / 4) as u32,
+            VectorElementType::Int8 => bytes.len() as u32,
+            VectorElementType::Bit => (bytes.len() * 8) as u32,
+        };
+        return Ok((bytes, dim));
+    }
+
+    // 3. Try comma-separated numbers
+    let parts: std::result::Result<Vec<f32>, _> = trimmed
+        .split(',')
+        .map(|s| s.trim().parse::<f32>())
+        .collect();
+    if let Ok(floats) = parts {
+        if !floats.is_empty() {
+            match element_type {
+                VectorElementType::Float32 => {
+                    let mut bytes = Vec::with_capacity(floats.len() * 4);
+                    for f in &floats {
+                        bytes.extend_from_slice(&f.to_le_bytes());
+                    }
+                    return Ok((bytes, floats.len() as u32));
+                }
+                VectorElementType::Int8 => {
+                    let mut bytes = Vec::with_capacity(floats.len());
+                    for f in &floats {
+                        bytes.push(*f as i8 as u8);
+                    }
+                    return Ok((bytes, floats.len() as u32));
+                }
+                VectorElementType::Bit => {
+                    let mut bytes = Vec::with_capacity(floats.len());
+                    for f in &floats {
+                        bytes.push(*f as u8);
+                    }
+                    return Ok((bytes, (floats.len() * 8) as u32));
+                }
+            }
+        }
+    }
+
+    anyhow::bail!("unable to parse vector input: must be JSON array (e.g. `[1.0, 2.0]`), comma-separated numbers, or base64")
+}
+
+fn vector(database: &Database, command: VectorCommand) -> anyhow::Result<Value> {
+    match command {
+        VectorCommand::CreateIndex {
+            collection,
+            m,
+            ef_construction,
+            ef_search,
+            metric,
+            element_type,
+            dim,
+        } => {
+            let elem_type = parse_element_type(&element_type)?;
+            let metric: lilia_core::VectorMetric = metric.into();
+            let config = lilia_core::HnswConfig {
+                m,
+                ef_construction,
+                ef_search,
+                metric,
+                element_type: elem_type,
+                dim,
+            };
+            database.vector_create_index(&collection, config)?;
+            Ok(json!({
+                "ok": true,
+                "collection": collection,
+                "index_created": true,
+            }))
+        }
+        VectorCommand::IndexInfo { collection } => {
+            let info = database.vector_get_index_info(&collection)?;
+            match info {
+                Some(i) => Ok(json!({
+                    "ok": true,
+                    "index": i,
+                })),
+                None => Ok(json!({ "ok": false, "found": false })),
+            }
+        }
+        VectorCommand::DropIndex { collection } => {
+            let dropped = database.vector_drop_index(&collection)?;
+            Ok(json!({ "ok": true, "dropped": dropped }))
+        }
+        VectorCommand::Set {
+            collection,
+            id,
+            vector,
+            element_type,
+        } => {
+            let elem_type = parse_element_type(&element_type)?;
+            let (vec_bytes, dim) = parse_vector_data(&vector, elem_type)?;
+            database.vector_set(&collection, &id, dim, elem_type, &vec_bytes)?;
+            Ok(json!({
+                "ok": true,
+                "collection": collection,
+                "id": id,
+                "dim": dim,
+                "element_type": element_type,
+            }))
+        }
+        VectorCommand::Get { collection, id } => {
+            let item = database.vector_get(&collection, &id)?;
+            match item {
+                Some((dim, elem_type, bytes)) => {
+                    let values: Value = match elem_type {
+                        VectorElementType::Float32 => {
+                            let floats: Vec<f32> = bytes
+                                .chunks_exact(4)
+                                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                                .collect();
+                            json!(floats)
+                        }
+                        VectorElementType::Int8 => {
+                            let ints: Vec<i8> = bytes.into_iter().map(|b| b as i8).collect();
+                            json!(ints)
+                        }
+                        VectorElementType::Bit => {
+                            let u8s: Vec<u8> = bytes;
+                            json!(u8s)
+                        }
+                    };
+                    Ok(json!({
+                        "ok": true,
+                        "collection": collection,
+                        "id": id,
+                        "dim": dim,
+                        "element_type": elem_type.as_str(),
+                        "vector": values,
+                    }))
+                }
+                None => Ok(json!({ "ok": false, "found": false })),
+            }
+        }
+        VectorCommand::Delete { collection, id } => {
+            let deleted = database.vector_delete(&collection, &id)?;
+            Ok(json!({ "ok": true, "deleted": deleted }))
+        }
+        VectorCommand::Search {
+            collection,
+            vector,
+            limit,
+            metric,
+            element_type,
+            in_graph_neighbors,
+            by_json_index,
+        } => {
+            let elem_type = parse_element_type(&element_type)?;
+            let (vec_bytes, dim) = parse_vector_data(&vector, elem_type)?;
+            let metric: lilia_core::VectorMetric = metric.into();
+
+            let hits = if let Some(filter) = in_graph_neighbors {
+                let (graph, start_node) = filter
+                    .split_once(':')
+                    .or_else(|| filter.split_once(','))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("in_graph_neighbors format should be `graph:start_node`")
+                    })?;
+                database.vector_search_in_graph_neighbors(
+                    &collection,
+                    graph,
+                    start_node,
+                    lilia_core::Direction::Outgoing,
+                    &vec_bytes,
+                    dim,
+                    elem_type,
+                    metric,
+                    limit,
+                )?
+            } else if let Some(filter) = by_json_index {
+                let (space_index, value) = filter.split_once('=').ok_or_else(|| {
+                    anyhow::anyhow!("by_json_index format should be `space:index_name=value`")
+                })?;
+                let (space, index_name) = space_index.split_once(':').ok_or_else(|| {
+                    anyhow::anyhow!("by_json_index format should be `space:index_name=value`")
+                })?;
+                database.vector_search_by_json_index(
+                    &collection,
+                    space,
+                    index_name,
+                    value,
+                    &vec_bytes,
+                    dim,
+                    elem_type,
+                    metric,
+                    limit,
+                )?
+            } else {
+                database.vector_search(&collection, &vec_bytes, dim, elem_type, metric, limit)?
+            };
+            Ok(serde_json::to_value(hits)?)
+        }
+    }
+}
+
+fn hybrid(database: &Database, command: HybridCommand) -> anyhow::Result<Value> {
+    match command {
+        HybridCommand::Search {
+            collection,
+            query,
+            vector,
+            limit,
+            rrf_k,
+            fts_weight,
+            vector_weight,
+            metric,
+            element_type,
+        } => {
+            let elem_type = parse_element_type(&element_type)?;
+            let vector_query = if let Some(vec_str) = vector {
+                let (vec_bytes, dim) = parse_vector_data(&vec_str, elem_type)?;
+                Some((vec_bytes, dim, elem_type, metric.into()))
+            } else {
+                None
+            };
+            let hits = database.hybrid_search(
+                &collection,
+                query.as_deref(),
+                vector_query
+                    .as_ref()
+                    .map(|(b, d, e, m)| (b.as_slice(), *d, *e, *m)),
+                rrf_k,
+                fts_weight,
+                vector_weight,
+                limit,
+            )?;
             Ok(serde_json::to_value(hits)?)
         }
     }
@@ -536,6 +830,91 @@ mod tests {
         let hits = search.as_array().unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["doc_id"], "doc1");
+
+        // Vector set & get & search
+        execute(
+            Command::Vector {
+                command: VectorCommand::Set {
+                    collection: "docs".into(),
+                    id: "doc1".into(),
+                    vector: "[1.0, 0.0]".into(),
+                    element_type: "f32".into(),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        execute(
+            Command::Vector {
+                command: VectorCommand::Set {
+                    collection: "docs".into(),
+                    id: "doc2".into(),
+                    vector: "[0.0, 1.0]".into(),
+                    element_type: "f32".into(),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        let vget = execute(
+            Command::Vector {
+                command: VectorCommand::Get {
+                    collection: "docs".into(),
+                    id: "doc1".into(),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(vget["ok"], true);
+        assert_eq!(vget["dim"], 2);
+
+        let vsearch = execute(
+            Command::Vector {
+                command: VectorCommand::Search {
+                    collection: "docs".into(),
+                    vector: "[1.0, 0.0]".into(),
+                    limit: 1,
+                    metric: crate::args::VectorMetricArg::Cosine,
+                    element_type: "f32".into(),
+                    in_graph_neighbors: None,
+                    by_json_index: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        let vhits = vsearch.as_array().unwrap();
+        assert_eq!(vhits.len(), 1);
+        assert_eq!(vhits[0]["id"], "doc1");
+
+        // Hybrid search
+        let hsearch = execute(
+            Command::Hybrid {
+                command: HybridCommand::Search {
+                    collection: "docs".into(),
+                    query: None,
+                    vector: Some("[1.0, 0.0]".into()),
+                    limit: 2,
+                    rrf_k: 60,
+                    fts_weight: 1.0,
+                    vector_weight: 1.0,
+                    metric: crate::args::VectorMetricArg::Cosine,
+                    element_type: "f32".into(),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        let hhits = hsearch.as_array().unwrap();
+        assert_eq!(hhits.len(), 2);
     }
 
     #[test]

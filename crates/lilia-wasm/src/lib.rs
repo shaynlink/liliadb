@@ -68,6 +68,25 @@ pub struct WasmFtsHit {
     pub rank: f64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmVectorHit {
+    pub collection: String,
+    pub id: String,
+    pub distance: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmHybridHit {
+    pub id: String,
+    pub rrf_score: f64,
+    pub fts_rank: Option<usize>,
+    pub fts_snippet: Option<String>,
+    pub vector_rank: Option<usize>,
+    pub vector_distance: Option<f64>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmOpenOptions {
@@ -388,6 +407,109 @@ impl WasmDatabase {
                 doc_id: h.doc_id,
                 snippet: h.snippet,
                 rank: h.rank,
+            })
+            .collect();
+        serde_wasm_bindgen::to_value(&wasm_hits).map_err(to_js_err)
+    }
+
+    #[wasm_bindgen]
+    pub fn vector_get(&self, collection: String, id: String) -> Result<JsValue, JsValue> {
+        let res = self.inner.vector_get(&collection, &id).map_err(to_js_err)?;
+        let bytes = res.map(|(_, _, b)| b);
+        serde_wasm_bindgen::to_value(&bytes).map_err(to_js_err)
+    }
+
+    #[wasm_bindgen]
+    pub fn vector_search(
+        &self,
+        collection: String,
+        query: Vec<u8>,
+        dim: u32,
+        element_type: Option<String>,
+        metric: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<JsValue, JsValue> {
+        let elem_t = match element_type.as_deref() {
+            Some("int8") => lilia_core::VectorElementType::Int8,
+            Some("bit") => lilia_core::VectorElementType::Bit,
+            _ => lilia_core::VectorElementType::Float32,
+        };
+        let met = match metric.as_deref() {
+            Some("l2") => lilia_core::VectorMetric::L2,
+            Some("dot") => lilia_core::VectorMetric::Dot,
+            Some("hamming") => lilia_core::VectorMetric::Hamming,
+            _ => lilia_core::VectorMetric::Cosine,
+        };
+        let hits = self
+            .inner
+            .vector_search(&collection, &query, dim, elem_t, met, limit.unwrap_or(10))
+            .map_err(to_js_err)?;
+        let wasm_hits: Vec<WasmVectorHit> = hits
+            .into_iter()
+            .map(|h| WasmVectorHit {
+                collection: h.collection,
+                id: h.id,
+                distance: h.distance,
+            })
+            .collect();
+        serde_wasm_bindgen::to_value(&wasm_hits).map_err(to_js_err)
+    }
+
+    #[wasm_bindgen]
+    #[allow(clippy::too_many_arguments)]
+    pub fn hybrid_search(
+        &self,
+        collection: String,
+        fts_query: Option<String>,
+        vector_query: Option<Vec<u8>>,
+        dim: Option<u32>,
+        element_type: Option<String>,
+        metric: Option<String>,
+        rrf_k: Option<u32>,
+        fts_weight: Option<f64>,
+        vector_weight: Option<f64>,
+        limit: Option<u32>,
+    ) -> Result<JsValue, JsValue> {
+        let elem_t = match element_type.as_deref() {
+            Some("int8") => lilia_core::VectorElementType::Int8,
+            Some("bit") => lilia_core::VectorElementType::Bit,
+            _ => lilia_core::VectorElementType::Float32,
+        };
+        let met = match metric.as_deref() {
+            Some("l2") => lilia_core::VectorMetric::L2,
+            Some("dot") => lilia_core::VectorMetric::Dot,
+            Some("hamming") => lilia_core::VectorMetric::Hamming,
+            _ => lilia_core::VectorMetric::Cosine,
+        };
+        let k = rrf_k.unwrap_or(60);
+        let w_fts = fts_weight.unwrap_or(1.0);
+        let w_vec = vector_weight.unwrap_or(1.0);
+        let lim = limit.unwrap_or(10);
+
+        let vec_arg = vector_query
+            .as_ref()
+            .map(|v| (v.as_slice(), dim.unwrap_or(0), elem_t, met));
+        let hits = self
+            .inner
+            .hybrid_search(
+                &collection,
+                fts_query.as_deref(),
+                vec_arg,
+                k,
+                w_fts,
+                w_vec,
+                lim,
+            )
+            .map_err(to_js_err)?;
+        let wasm_hits: Vec<WasmHybridHit> = hits
+            .into_iter()
+            .map(|h| WasmHybridHit {
+                id: h.id,
+                rrf_score: h.rrf_score,
+                fts_rank: h.fts_rank,
+                fts_snippet: h.fts_snippet,
+                vector_rank: h.vector_rank,
+                vector_distance: h.vector_distance,
             })
             .collect();
         serde_wasm_bindgen::to_value(&wasm_hits).map_err(to_js_err)
