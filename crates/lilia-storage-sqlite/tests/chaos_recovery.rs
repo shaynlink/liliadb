@@ -90,7 +90,7 @@ fn chaos_child_worker() {
 
             // Now open an internal writer connection to stage dirty uncommitted pages
             // into the WAL without committing the transaction.
-            let mut conn = NativeConnection::open_with_config(&path, "FULL", 0, 5000, -65536)
+            let conn = NativeConnection::open_with_config(&path, "FULL", 0, 5000, -65536)
                 .expect("open raw sqlite in child");
             conn.exec("BEGIN;").expect("begin raw transaction");
 
@@ -196,7 +196,7 @@ fn chaos_child_worker() {
                 .unwrap();
 
             // Stage dirty uncommitted mutation
-            let mut conn = NativeConnection::open_with_config(&path, "FULL", 0, 5000, -65536).unwrap();
+            let conn = NativeConnection::open_with_config(&path, "FULL", 0, 5000, -65536).unwrap();
             conn.exec("BEGIN;").unwrap();
             let mut stmt = conn
                 .prepare("INSERT INTO _lilia_kv(namespace, key, value, version) VALUES('chaos_kv', ?1, ?2, 1)")
