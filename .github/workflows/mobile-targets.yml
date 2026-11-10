@@ -1,0 +1,44 @@
+name: mobile-targets
+
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'tools/mobile/**'
+      - '.github/workflows/mobile-targets.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'tools/mobile/**'
+      - '.github/workflows/mobile-targets.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check-apple-targets:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,aarch64-apple-watchos,aarch64-apple-tvos
+      - name: Verify compilation for Apple targets (iOS, watchOS, tvOS)
+        run: |
+          cargo check -p lilia-core -p lilia-storage-sqlite -p lilia-ffi --target aarch64-apple-ios
+          cargo check -p lilia-core -p lilia-storage-sqlite -p lilia-ffi --target aarch64-apple-ios-sim
+          cargo check -p lilia-core -p lilia-storage-sqlite -p lilia-ffi --target aarch64-apple-watchos
+          cargo check -p lilia-core -p lilia-storage-sqlite -p lilia-ffi --target aarch64-apple-tvos
+      - name: Test Apple XCFramework build script
+        run: ./tools/mobile/build-apple.sh
+
+  check-android-targets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+      - name: Verify Kotlin bindings generation
+        run: ./tools/mobile/build-android.sh

@@ -1,0 +1,37 @@
+[package]
+name = "lilia-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+name = "lilia_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
+
+[dependencies]
+lilia-core = { path = "../lilia-core" }
+lilia-storage-sqlite = { path = "../lilia-storage-sqlite" }
+lilia-graph = { path = "../lilia-graph" }
+uniffi = { version = "0.28.3", features = ["tokio"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

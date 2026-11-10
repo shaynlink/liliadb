@@ -1,0 +1,57 @@
+{
+  "name": "@liliadb/react-native",
+  "version": "0.1.0-alpha.6",
+  "description": "Local-first multimodel embedded database (KV, JSON, Graph, FTS5, SQL) for React Native and Expo with transparent AES-256-GCM hardware encryption",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "react-native": "src/index.ts",
+  "source": "src/index.ts",
+  "files": [
+    "dist",
+    "src",
+    "ios",
+    "android",
+    "plugin",
+    "app.plugin.js",
+    "react-native.config.js",
+    "LiliaReactNative.podspec"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node -r ./tests/register-mock.cjs --test dist/**/*.test.js",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "database",
+    "local-first",
+    "sqlite",
+    "key-value",
+    "json",
+    "graph",
+    "fts5",
+    "sql",
+    "encryption",
+    "offline-first"
+  ],
+  "author": "LiliaDB Team",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shaynlink/lilia.git",
+    "directory": "packages/react-native"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.71.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "@types/react": "^18.3.0",
+    "@types/react-native": "^0.73.0",
+    "react": "^18.3.0",
+    "typescript": "^5.6.0"
+  }
+}
