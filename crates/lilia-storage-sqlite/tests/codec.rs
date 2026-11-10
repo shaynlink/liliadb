@@ -113,28 +113,26 @@ fn codec_encrypts_kv_and_json_at_rest() {
     // Close and inspect raw SQLite storage
     drop(db);
 
-    let raw_conn = rusqlite::Connection::open(&db_path).expect("open raw sqlite");
+    let raw_conn =
+        lilia_sqlite_native::NativeConnection::open_file(&db_path).expect("open raw sqlite");
 
     // Verify KV row is rot13 encoded at rest
-    let raw_kv: Vec<u8> = raw_conn
-        .query_row(
-            "SELECT value FROM _lilia_kv WHERE namespace = 'secrets' AND key = ?1",
-            [b"api_token"],
-            |row| row.get(0),
-        )
-        .expect("query raw kv");
+    let mut stmt = raw_conn
+        .prepare("SELECT value FROM _lilia_kv WHERE namespace = 'secrets' AND key = ?1")
+        .expect("prepare raw kv");
+    stmt.bind_blob_static(1, b"api_token").unwrap();
+    assert!(stmt.step().unwrap());
+    let raw_kv = stmt.column_blob(0).to_vec();
     assert_ne!(raw_kv, b"sk-super-secret-12345");
     let decoded_kv = codec.decode(&raw_kv).expect("decode raw kv");
     assert_eq!(decoded_kv, b"sk-super-secret-12345");
 
     // Verify JSON row is stored as an envelope with $codec and $data
-    let raw_json_str: String = raw_conn
-        .query_row(
-            "SELECT value FROM _lilia_json WHERE space = 'credentials' AND id = 'user1'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("query raw json");
+    let mut stmt = raw_conn
+        .prepare("SELECT value FROM _lilia_json WHERE space = 'credentials' AND id = 'user1'")
+        .expect("prepare raw json");
+    assert!(stmt.step().unwrap());
+    let raw_json_str = stmt.column_text(0).to_string();
 
     let raw_envelope: serde_json::Value =
         serde_json::from_str(&raw_json_str).expect("envelope is valid json");
@@ -143,13 +141,13 @@ fn codec_encrypts_kv_and_json_at_rest() {
     assert!(!raw_json_str.contains("secret-key-999"));
 
     // Verify Vector blob is encoded at rest
-    let raw_vec: Vec<u8> = raw_conn
-        .query_row(
+    let mut stmt = raw_conn
+        .prepare(
             "SELECT vector FROM _lilia_vectors WHERE collection = 'biometrics' AND id = 'face_1'",
-            [],
-            |row| row.get(0),
         )
-        .expect("query raw vector");
+        .expect("prepare raw vector");
+    assert!(stmt.step().unwrap());
+    let raw_vec = stmt.column_blob(0).to_vec();
     assert_ne!(raw_vec, vec_bytes);
     let decoded_vec = codec.decode(&raw_vec).expect("decode raw vector");
     assert_eq!(decoded_vec, vec_bytes);

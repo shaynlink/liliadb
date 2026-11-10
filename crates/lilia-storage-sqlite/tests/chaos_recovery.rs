@@ -7,8 +7,8 @@ use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use lilia_core::{BatchOperation, Direction, ErrorCode};
+use lilia_sqlite_native::NativeConnection;
 use lilia_storage_sqlite::{Database, DatabaseOptions};
-use rusqlite::Connection;
 use serde_json::json;
 
 struct KillOnDrop(Child);
@@ -62,13 +62,10 @@ fn multi_model_batch(id: &str, val: u8) -> Vec<BatchOperation> {
 #[test]
 #[ignore = "subprocess helper for crash testing"]
 fn chaos_child_worker() {
-    eprintln!("DEBUG: chaos_child_worker start");
     let path_str = std::env::var("CHAOS_DB_PATH").expect("CHAOS_DB_PATH missing");
     let scenario = std::env::var("CHAOS_SCENARIO").expect("CHAOS_SCENARIO missing");
     let path = PathBuf::from(path_str);
-    eprintln!("DEBUG: opening db at {:?}", path);
     let db = Database::open(DatabaseOptions::durable(&path)).expect("open durable db in child");
-    eprintln!("DEBUG: opened db successfully");
 
     match scenario.as_str() {
         "multimodel_uncommitted" => {
@@ -93,10 +90,9 @@ fn chaos_child_worker() {
 
             // Now open an internal writer connection to stage dirty uncommitted pages
             // into the WAL without committing the transaction.
-            let mut conn = Connection::open(&path).expect("open raw sqlite in child");
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")
-                .unwrap();
-            let tx = conn.transaction().expect("begin raw transaction");
+            let mut conn = NativeConnection::open_with_config(&path, "FULL", 0, 5000, -65536)
+                .expect("open raw sqlite in child");
+            conn.exec("BEGIN;").expect("begin raw transaction");
 
             // Execute uncommitted operations across all tables
             let uncommitted = multi_model_batch("uncommitted", 99);
@@ -108,21 +104,25 @@ fn chaos_child_worker() {
                         value,
                         ..
                     } => {
-                        tx.execute(
-                            "INSERT INTO _lilia_kv(namespace, key, value, version) VALUES(?1, ?2, ?3, 1)",
-                            rusqlite::params![namespace, key, value],
-                        )
-                        .unwrap();
+                        let mut stmt = conn
+                            .prepare("INSERT INTO _lilia_kv(namespace, key, value, version) VALUES(?1, ?2, ?3, 1)")
+                            .unwrap();
+                        stmt.bind_text_static(1, namespace).unwrap();
+                        stmt.bind_blob_static(2, key).unwrap();
+                        stmt.bind_blob_static(3, value).unwrap();
+                        stmt.step().unwrap();
                     }
                     BatchOperation::JsonPut {
                         space, id, value, ..
                     } => {
                         let json_str = serde_json::to_string(value).unwrap();
-                        tx.execute(
-                            "INSERT INTO _lilia_json(space, id, value, version) VALUES(?1, ?2, ?3, 1)",
-                            rusqlite::params![space, id, json_str],
-                        )
-                        .unwrap();
+                        let mut stmt = conn
+                            .prepare("INSERT INTO _lilia_json(space, id, value, version) VALUES(?1, ?2, ?3, 1)")
+                            .unwrap();
+                        stmt.bind_text_static(1, space).unwrap();
+                        stmt.bind_text_static(2, id).unwrap();
+                        stmt.bind_text_static(3, &json_str).unwrap();
+                        stmt.step().unwrap();
                     }
                     BatchOperation::GraphSetNode {
                         graph,
@@ -132,11 +132,14 @@ fn chaos_child_worker() {
                         ..
                     } => {
                         let meta_str = serde_json::to_string(metadata).unwrap();
-                        tx.execute(
-                            "INSERT INTO _lilia_graph_nodes(graph, id, kind, metadata) VALUES(?1, ?2, ?3, ?4)",
-                            rusqlite::params![graph, id, kind, meta_str],
-                        )
-                        .unwrap();
+                        let mut stmt = conn
+                            .prepare("INSERT INTO _lilia_graph_nodes(graph, id, kind, metadata) VALUES(?1, ?2, ?3, ?4)")
+                            .unwrap();
+                        stmt.bind_text_static(1, graph).unwrap();
+                        stmt.bind_text_static(2, id).unwrap();
+                        stmt.bind_text_static(3, kind).unwrap();
+                        stmt.bind_text_static(4, &meta_str).unwrap();
+                        stmt.step().unwrap();
                     }
                     BatchOperation::GraphAddEdge {
                         graph,
@@ -145,29 +148,34 @@ fn chaos_child_worker() {
                         kind,
                         ..
                     } => {
-                        tx.execute(
-                            "INSERT INTO _lilia_graph_edges(graph, source, target, kind) VALUES(?1, ?2, ?3, ?4)",
-                            rusqlite::params![graph, source, target, kind],
-                        )
-                        .unwrap();
+                        let mut stmt = conn
+                            .prepare("INSERT INTO _lilia_graph_edges(graph, source, target, kind) VALUES(?1, ?2, ?3, ?4)")
+                            .unwrap();
+                        stmt.bind_text_static(1, graph).unwrap();
+                        stmt.bind_text_static(2, source).unwrap();
+                        stmt.bind_text_static(3, target).unwrap();
+                        stmt.bind_text_static(4, kind).unwrap();
+                        stmt.step().unwrap();
                     }
                     BatchOperation::FtsIndex {
                         collection,
                         doc_id,
                         content,
                     } => {
-                        tx.execute(
-                            "INSERT INTO _lilia_fts(collection, doc_id, content) VALUES(?1, ?2, ?3)",
-                            rusqlite::params![collection, doc_id, content],
-                        )
-                        .unwrap();
+                        let mut stmt = conn
+                            .prepare("INSERT INTO _lilia_fts(collection, doc_id, content) VALUES(?1, ?2, ?3)")
+                            .unwrap();
+                        stmt.bind_text_static(1, collection).unwrap();
+                        stmt.bind_text_static(2, doc_id).unwrap();
+                        stmt.bind_text_static(3, content).unwrap();
+                        stmt.step().unwrap();
                     }
                     _ => {}
                 }
             }
 
             // Flush dirty pages to the WAL file
-            tx.cache_flush().expect("cache flush uncommitted pages");
+            conn.cache_flush().expect("cache flush uncommitted pages");
 
             // Signal parent that uncommitted dirty pages are in WAL
             fs::write(path.with_extension("staged"), b"uncommitted_staged").unwrap();
@@ -188,19 +196,17 @@ fn chaos_child_worker() {
                 .unwrap();
 
             // Stage dirty uncommitted mutation
-            let mut conn = Connection::open(&path).unwrap();
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")
+            let mut conn = NativeConnection::open_with_config(&path, "FULL", 0, 5000, -65536).unwrap();
+            conn.exec("BEGIN;").unwrap();
+            let mut stmt = conn
+                .prepare("INSERT INTO _lilia_kv(namespace, key, value, version) VALUES('chaos_kv', ?1, ?2, 1)")
                 .unwrap();
-            let tx = conn.transaction().unwrap();
-            tx.execute(
-                "INSERT INTO _lilia_kv(namespace, key, value, version) VALUES('chaos_kv', ?1, ?2, 1)",
-                rusqlite::params![
-                    format!("dirty_{cycle_idx}").into_bytes(),
-                    vec![255u8; 1024]
-                ],
-            )
-            .unwrap();
-            tx.cache_flush().unwrap();
+            let dirty_key = format!("dirty_{cycle_idx}").into_bytes();
+            let dirty_val = vec![255u8; 1024];
+            stmt.bind_blob_static(1, &dirty_key).unwrap();
+            stmt.bind_blob_static(2, &dirty_val).unwrap();
+            stmt.step().unwrap();
+            conn.cache_flush().unwrap();
 
             fs::write(path.with_extension("staged"), b"cycle_staged").unwrap();
 
