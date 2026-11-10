@@ -1,12 +1,71 @@
-use rusqlite::{params, OptionalExtension, Transaction};
+use lilia_sqlite_native::{NativeTransaction, StmtSlot};
 use serde_json::json;
 
-use crate::storage::{row_version, store_version, validate_name};
-use lilia_core::{BatchOperation, ErrorCode, LiliaError, MutationResult, Result};
+use crate::json::decode_json_value;
+use crate::storage::{now_ms, parse_version, store_version, validate_name};
+use lilia_core::{
+    compress_bytes, json_patch, BatchOperation, ErrorCode, LiliaError, MutationResult, Result,
+};
+
+fn record_json_revision(
+    tx: &mut NativeTransaction<'_>,
+    space: &str,
+    id: &str,
+    version: u64,
+    prev_val: Option<&serde_json::Value>,
+    new_val: &serde_json::Value,
+) -> Result<()> {
+    let now = now_ms();
+    let (delta, is_keyframe) = match prev_val {
+        Some(old) if !version.is_multiple_of(50) => {
+            let patch = json_patch::diff(old, new_val);
+            let raw = serde_json::to_vec(&patch)
+                .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;
+            (compress_bytes(&raw), 0)
+        }
+        _ => {
+            let raw = serde_json::to_vec(new_val)
+                .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;
+            (compress_bytes(&raw), 1)
+        }
+    };
+
+    let mut stmt = tx.prepare(
+        "INSERT INTO _lilia_json_revisions(space, id, version, timestamp_ms, delta, is_keyframe, is_deletion) \
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, 0);",
+    )?;
+    stmt.bind_text_static(1, space)?;
+    stmt.bind_text_static(2, id)?;
+    stmt.bind_int64(3, store_version(version)?)?;
+    stmt.bind_int64(4, now)?;
+    stmt.bind_blob_static(5, &delta)?;
+    stmt.bind_int64(6, is_keyframe)?;
+    stmt.step()?;
+    Ok(())
+}
+
+fn record_json_deletion_revision(
+    tx: &mut NativeTransaction<'_>,
+    space: &str,
+    id: &str,
+    version: u64,
+) -> Result<()> {
+    let now = now_ms();
+    let mut stmt = tx.prepare(
+        "INSERT INTO _lilia_json_revisions(space, id, version, timestamp_ms, delta, is_keyframe, is_deletion) \
+         VALUES(?1, ?2, ?3, ?4, X'', 0, 1);",
+    )?;
+    stmt.bind_text_static(1, space)?;
+    stmt.bind_text_static(2, id)?;
+    stmt.bind_int64(3, store_version(version)?)?;
+    stmt.bind_int64(4, now)?;
+    stmt.step()?;
+    Ok(())
+}
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn apply(
-    tx: &Transaction<'_>,
+    tx: &mut NativeTransaction<'_>,
     operation: &BatchOperation,
     codec: &dyn lilia_core::ValueCodec,
 ) -> Result<MutationResult> {
@@ -22,38 +81,42 @@ pub(crate) fn apply(
             let stored_value = codec.encode(value)?;
             let version = match if_version {
                 None => {
-                    let mut stmt = tx.prepare_cached(
-                        "INSERT INTO _lilia_kv(namespace,key,value,version,expires_at_ms) \
-                         VALUES(?1,?2,?3,1,?4) \
-                         ON CONFLICT(namespace,key) DO UPDATE SET \
-                           value=excluded.value, \
-                           version=_lilia_kv.version + 1, \
-                           expires_at_ms=excluded.expires_at_ms \
-                         RETURNING version;",
-                    )?;
-                    let v: i64 = stmt.query_row(
-                        params![namespace, key, stored_value.as_ref(), expires_at_ms],
-                        |r| r.get(0),
-                    )?;
-                    u64::try_from(v).map_err(|e| {
-                        LiliaError::new(ErrorCode::Storage, format!("invalid version: {e}"), false)
-                    })?
+                    let stmt = tx.slot(StmtSlot::KvUpsertReturning)?;
+                    stmt.reset()?;
+                    stmt.bind_text_static(1, namespace)?;
+                    stmt.bind_blob_static(2, key)?;
+                    stmt.bind_blob_static(3, stored_value.as_ref())?;
+                    match expires_at_ms {
+                        Some(exp) => stmt.bind_int64(4, *exp)?,
+                        None => stmt.bind_null(4)?,
+                    }
+                    if !stmt.step()? {
+                        return Err(LiliaError::new(
+                            ErrorCode::Storage,
+                            "no version returned from upsert",
+                            false,
+                        ));
+                    }
+                    let v = stmt.column_int64(0);
+                    stmt.reset()?;
+                    parse_version(v)?
                 }
                 Some(expected) => {
                     let current = kv_version(tx, namespace, key)?;
                     assert_version(current, Some(*expected))?;
                     let next_version = current.unwrap_or(0) + 1;
-                    let mut stmt = tx.prepare_cached(
-                        "INSERT INTO _lilia_kv(namespace,key,value,version,expires_at_ms) VALUES(?1,?2,?3,?4,?5) \
-                         ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value,version=excluded.version,expires_at_ms=excluded.expires_at_ms",
-                    )?;
-                    stmt.execute(params![
-                        namespace,
-                        key,
-                        stored_value.as_ref(),
-                        store_version(next_version)?,
-                        expires_at_ms
-                    ])?;
+                    let stmt = tx.slot(StmtSlot::KvUpsertVersioned)?;
+                    stmt.reset()?;
+                    stmt.bind_text_static(1, namespace)?;
+                    stmt.bind_blob_static(2, key)?;
+                    stmt.bind_blob_static(3, stored_value.as_ref())?;
+                    stmt.bind_int64(4, store_version(next_version)?)?;
+                    match expires_at_ms {
+                        Some(exp) => stmt.bind_int64(5, *exp)?,
+                        None => stmt.bind_null(5)?,
+                    }
+                    stmt.step()?;
+                    stmt.reset()?;
                     next_version
                 }
             };
@@ -70,9 +133,13 @@ pub(crate) fn apply(
             validate_name("namespace", namespace)?;
             let current = kv_version(tx, namespace, key)?;
             assert_version(current, *if_version)?;
-            let mut stmt =
-                tx.prepare_cached("DELETE FROM _lilia_kv WHERE namespace = ?1 AND key = ?2")?;
-            let deleted = stmt.execute(params![namespace, key])? > 0;
+            let stmt = tx.slot(StmtSlot::KvDelete)?;
+            stmt.reset()?;
+            stmt.bind_text_static(1, namespace)?;
+            stmt.bind_blob_static(2, key)?;
+            stmt.step()?;
+            stmt.reset()?;
+            let deleted = tx.conn().changes() > 0;
             Ok(MutationResult {
                 version: None,
                 deleted,
@@ -86,6 +153,20 @@ pub(crate) fn apply(
         } => {
             validate_name("space", space)?;
             validate_name("id", id)?;
+            let prev_doc: Option<serde_json::Value> = {
+                let stmt = tx.slot(StmtSlot::JsonGet)?;
+                stmt.reset()?;
+                stmt.bind_text_static(1, space)?;
+                stmt.bind_text_static(2, id)?;
+                let res = if stmt.step()? {
+                    let encoded_prev = stmt.column_text(0);
+                    decode_json_value(encoded_prev, codec).ok()
+                } else {
+                    None
+                };
+                stmt.reset()?;
+                res
+            };
             let encoded = if codec.name() == "identity" {
                 serde_json::to_string(value).map_err(|error| {
                     LiliaError::new(ErrorCode::InvalidInput, error.to_string(), false)
@@ -105,28 +186,38 @@ pub(crate) fn apply(
             };
             let version = match if_version {
                 None => {
-                    let mut stmt = tx.prepare_cached(
-                        "INSERT INTO _lilia_json(space,id,value,version) VALUES(?1,?2,?3,1) \
-                         ON CONFLICT(space,id) DO UPDATE SET value=excluded.value,version=_lilia_json.version + 1 \
-                         RETURNING version;",
-                    )?;
-                    let v: i64 = stmt.query_row(params![space, id, encoded], |r| r.get(0))?;
-                    u64::try_from(v).map_err(|e| {
-                        LiliaError::new(ErrorCode::Storage, format!("invalid version: {e}"), false)
-                    })?
+                    let stmt = tx.slot(StmtSlot::JsonPutReturning)?;
+                    stmt.reset()?;
+                    stmt.bind_text_static(1, space)?;
+                    stmt.bind_text_static(2, id)?;
+                    stmt.bind_text_static(3, &encoded)?;
+                    if !stmt.step()? {
+                        return Err(LiliaError::new(
+                            ErrorCode::Storage,
+                            "no version returned from json put",
+                            false,
+                        ));
+                    }
+                    let v = stmt.column_int64(0);
+                    stmt.reset()?;
+                    parse_version(v)?
                 }
                 Some(expected) => {
                     let current = json_version(tx, space, id)?;
                     assert_version(current, Some(*expected))?;
                     let next_version = current.unwrap_or(0) + 1;
-                    let mut stmt = tx.prepare_cached(
-                        "INSERT INTO _lilia_json(space,id,value,version) VALUES(?1,?2,?3,?4) \
-                         ON CONFLICT(space,id) DO UPDATE SET value=excluded.value,version=excluded.version",
-                    )?;
-                    stmt.execute(params![space, id, encoded, store_version(next_version)?])?;
+                    let stmt = tx.slot(StmtSlot::JsonPutVersioned)?;
+                    stmt.reset()?;
+                    stmt.bind_text_static(1, space)?;
+                    stmt.bind_text_static(2, id)?;
+                    stmt.bind_text_static(3, &encoded)?;
+                    stmt.bind_int64(4, store_version(next_version)?)?;
+                    stmt.step()?;
+                    stmt.reset()?;
                     next_version
                 }
             };
+            record_json_revision(tx, space, id, version, prev_doc.as_ref(), value)?;
             update_json_indexes(tx, space, id, value)?;
             Ok(MutationResult {
                 version: Some(version),
@@ -142,9 +233,16 @@ pub(crate) fn apply(
             validate_name("id", id)?;
             let current = json_version(tx, space, id)?;
             assert_version(current, *if_version)?;
-            let mut stmt =
-                tx.prepare_cached("DELETE FROM _lilia_json WHERE space = ?1 AND id = ?2")?;
-            let deleted = stmt.execute(params![space, id])? > 0;
+            if let Some(cur_ver) = current {
+                record_json_deletion_revision(tx, space, id, cur_ver + 1)?;
+            }
+            let stmt = tx.slot(StmtSlot::JsonDelete)?;
+            stmt.reset()?;
+            stmt.bind_text_static(1, space)?;
+            stmt.bind_text_static(2, id)?;
+            stmt.step()?;
+            stmt.reset()?;
+            let deleted = tx.conn().changes() > 0;
             if deleted {
                 delete_json_indexes(tx, space, id)?;
             }
@@ -158,17 +256,32 @@ pub(crate) fn apply(
             id,
             kind,
             metadata,
+            doc_space,
+            doc_id,
         } => {
             validate_name("graph", graph)?;
             validate_name("id", id)?;
             let meta_str = serde_json::to_string(metadata).map_err(|error| {
                 LiliaError::new(ErrorCode::InvalidInput, error.to_string(), false)
             })?;
-            let mut stmt = tx.prepare_cached(
-                "INSERT INTO _lilia_graph_nodes(graph, id, kind, metadata) VALUES(?1, ?2, ?3, ?4)
-                 ON CONFLICT(graph, id) DO UPDATE SET kind=excluded.kind, metadata=excluded.metadata",
-            )?;
-            stmt.execute(params![graph, id, kind, meta_str])?;
+            let stmt = tx.slot(StmtSlot::GraphNodeSet)?;
+            stmt.reset()?;
+            stmt.bind_text_static(1, graph)?;
+            stmt.bind_text_static(2, id)?;
+            stmt.bind_text_static(3, kind)?;
+            stmt.bind_text_static(4, &meta_str)?;
+            if let Some(space) = doc_space {
+                stmt.bind_text_static(5, space)?;
+            } else {
+                stmt.bind_null(5)?;
+            }
+            if let Some(did) = doc_id {
+                stmt.bind_text_static(6, did)?;
+            } else {
+                stmt.bind_null(6)?;
+            }
+            stmt.step()?;
+            stmt.reset()?;
             Ok(MutationResult {
                 version: None,
                 deleted: false,
@@ -177,13 +290,21 @@ pub(crate) fn apply(
         BatchOperation::GraphDeleteNode { graph, id } => {
             validate_name("graph", graph)?;
             validate_name("id", id)?;
-            let mut stmt_edges = tx.prepare_cached(
-                "DELETE FROM _lilia_graph_edges WHERE graph = ?1 AND (source = ?2 OR target = ?2)",
+            let mut stmt_edges = tx.prepare(
+                "DELETE FROM _lilia_graph_edges WHERE graph = ?1 AND (source = ?2 OR target = ?2);",
             )?;
-            stmt_edges.execute(params![graph, id])?;
-            let mut stmt =
-                tx.prepare_cached("DELETE FROM _lilia_graph_nodes WHERE graph = ?1 AND id = ?2")?;
-            let deleted = stmt.execute(params![graph, id])? > 0;
+            stmt_edges.bind_text_static(1, graph)?;
+            stmt_edges.bind_text_static(2, id)?;
+            stmt_edges.step()?;
+            drop(stmt_edges);
+
+            let stmt = tx.slot(StmtSlot::GraphNodeDelete)?;
+            stmt.reset()?;
+            stmt.bind_text_static(1, graph)?;
+            stmt.bind_text_static(2, id)?;
+            stmt.step()?;
+            stmt.reset()?;
+            let deleted = tx.conn().changes() > 0;
             Ok(MutationResult {
                 version: None,
                 deleted,
@@ -194,14 +315,20 @@ pub(crate) fn apply(
             source,
             target,
             kind,
+            weight,
         } => {
             validate_name("graph", graph)?;
             validate_name("source", source)?;
             validate_name("target", target)?;
-            let mut stmt = tx.prepare_cached(
-                "INSERT OR IGNORE INTO _lilia_graph_edges(graph, source, target, kind) VALUES(?1, ?2, ?3, ?4)",
-            )?;
-            stmt.execute(params![graph, source, target, kind])?;
+            let stmt = tx.slot(StmtSlot::GraphEdgeSet)?;
+            stmt.reset()?;
+            stmt.bind_text_static(1, graph)?;
+            stmt.bind_text_static(2, source)?;
+            stmt.bind_text_static(3, target)?;
+            stmt.bind_text_static(4, kind)?;
+            stmt.bind_double(5, *weight)?;
+            stmt.step()?;
+            stmt.reset()?;
             Ok(MutationResult {
                 version: None,
                 deleted: false,
@@ -216,10 +343,15 @@ pub(crate) fn apply(
             validate_name("graph", graph)?;
             validate_name("source", source)?;
             validate_name("target", target)?;
-            let mut stmt = tx.prepare_cached(
-                "DELETE FROM _lilia_graph_edges WHERE graph = ?1 AND source = ?2 AND target = ?3 AND kind = ?4",
-            )?;
-            let deleted = stmt.execute(params![graph, source, target, kind])? > 0;
+            let stmt = tx.slot(StmtSlot::GraphEdgeDelete)?;
+            stmt.reset()?;
+            stmt.bind_text_static(1, graph)?;
+            stmt.bind_text_static(2, source)?;
+            stmt.bind_text_static(3, target)?;
+            stmt.bind_text_static(4, kind)?;
+            stmt.step()?;
+            stmt.reset()?;
+            let deleted = tx.conn().changes() > 0;
             Ok(MutationResult {
                 version: None,
                 deleted,
@@ -232,13 +364,21 @@ pub(crate) fn apply(
         } => {
             validate_name("collection", collection)?;
             validate_name("doc_id", doc_id)?;
-            let mut stmt_del =
-                tx.prepare_cached("DELETE FROM _lilia_fts WHERE collection = ?1 AND doc_id = ?2")?;
-            stmt_del.execute(params![collection, doc_id])?;
-            let mut stmt_ins = tx.prepare_cached(
-                "INSERT INTO _lilia_fts(collection, doc_id, content) VALUES(?1, ?2, ?3)",
-            )?;
-            stmt_ins.execute(params![collection, doc_id, content])?;
+            let stmt_del = tx.slot(StmtSlot::FtsIndexDelete)?;
+            stmt_del.reset()?;
+            stmt_del.bind_text_static(1, collection)?;
+            stmt_del.bind_text_static(2, doc_id)?;
+            stmt_del.step()?;
+            stmt_del.reset()?;
+
+            let stmt_ins = tx.slot(StmtSlot::FtsIndexInsert)?;
+            stmt_ins.reset()?;
+            stmt_ins.bind_text_static(1, collection)?;
+            stmt_ins.bind_text_static(2, doc_id)?;
+            stmt_ins.bind_text_static(3, content)?;
+            stmt_ins.step()?;
+            stmt_ins.reset()?;
+
             Ok(MutationResult {
                 version: None,
                 deleted: false,
@@ -247,9 +387,52 @@ pub(crate) fn apply(
         BatchOperation::FtsDelete { collection, doc_id } => {
             validate_name("collection", collection)?;
             validate_name("doc_id", doc_id)?;
-            let mut stmt_del =
-                tx.prepare_cached("DELETE FROM _lilia_fts WHERE collection = ?1 AND doc_id = ?2")?;
-            let deleted = stmt_del.execute(params![collection, doc_id])? > 0;
+            let stmt_del = tx.slot(StmtSlot::FtsIndexDelete)?;
+            stmt_del.reset()?;
+            stmt_del.bind_text_static(1, collection)?;
+            stmt_del.bind_text_static(2, doc_id)?;
+            stmt_del.step()?;
+            stmt_del.reset()?;
+            let deleted = tx.conn().changes() > 0;
+            Ok(MutationResult {
+                version: None,
+                deleted,
+            })
+        }
+        BatchOperation::VectorSet {
+            collection,
+            id,
+            dim,
+            element_type,
+            vector,
+        } => {
+            validate_name("collection", collection)?;
+            validate_name("id", id)?;
+            let stored_vector = codec.encode(vector)?;
+            let stmt = tx.slot(StmtSlot::VectorUpsert)?;
+            stmt.reset()?;
+            stmt.bind_text_static(1, collection)?;
+            stmt.bind_text_static(2, id)?;
+            stmt.bind_int64(3, i64::from(*dim))?;
+            stmt.bind_int64(4, i64::from(*element_type as u8))?;
+            stmt.bind_blob_static(5, stored_vector.as_ref())?;
+            stmt.step()?;
+            stmt.reset()?;
+            Ok(MutationResult {
+                version: None,
+                deleted: false,
+            })
+        }
+        BatchOperation::VectorDelete { collection, id } => {
+            validate_name("collection", collection)?;
+            validate_name("id", id)?;
+            let stmt = tx.slot(StmtSlot::VectorDelete)?;
+            stmt.reset()?;
+            stmt.bind_text_static(1, collection)?;
+            stmt.bind_text_static(2, id)?;
+            stmt.step()?;
+            stmt.reset()?;
+            let deleted = tx.conn().changes() > 0;
             Ok(MutationResult {
                 version: None,
                 deleted,
@@ -258,30 +441,38 @@ pub(crate) fn apply(
     }
 }
 
-fn delete_json_indexes(tx: &Transaction<'_>, space: &str, doc_id: &str) -> Result<()> {
-    let mut stmt = tx
-        .prepare_cached("DELETE FROM _lilia_json_index_entries WHERE space = ?1 AND doc_id = ?2")?;
-    stmt.execute(params![space, doc_id])?;
+fn delete_json_indexes(tx: &mut NativeTransaction<'_>, space: &str, doc_id: &str) -> Result<()> {
+    let mut stmt =
+        tx.prepare("DELETE FROM _lilia_json_index_entries WHERE space = ?1 AND doc_id = ?2;")?;
+    stmt.bind_text_static(1, space)?;
+    stmt.bind_text_static(2, doc_id)?;
+    stmt.step()?;
     Ok(())
 }
 
 fn update_json_indexes(
-    tx: &Transaction<'_>,
+    tx: &mut NativeTransaction<'_>,
     space: &str,
     doc_id: &str,
     value: &serde_json::Value,
 ) -> Result<()> {
     delete_json_indexes(tx, space, doc_id)?;
-    let mut stmt = tx
-        .prepare_cached("SELECT index_name, json_path FROM _lilia_json_indexes WHERE space = ?1")?;
-    let indexes: Vec<(String, String)> = stmt
-        .query_map([space], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut stmt =
+        tx.prepare("SELECT index_name, json_path FROM _lilia_json_indexes WHERE space = ?1;")?;
+    stmt.bind_text_static(1, space)?;
+    let mut indexes: Vec<(String, String)> = Vec::new();
+    while stmt.step()? {
+        indexes.push((
+            stmt.column_text(0).to_string(),
+            stmt.column_text(1).to_string(),
+        ));
+    }
+    drop(stmt);
     if indexes.is_empty() {
         return Ok(());
     }
-    let mut insert_stmt = tx.prepare_cached(
-        "INSERT OR IGNORE INTO _lilia_json_index_entries(space, index_name, idx_value, doc_id) VALUES(?1, ?2, ?3, ?4)",
+    let mut insert_stmt = tx.prepare(
+        "INSERT OR IGNORE INTO _lilia_json_index_entries(space, index_name, idx_value, doc_id) VALUES(?1, ?2, ?3, ?4);",
     )?;
     for (index_name, json_path) in indexes {
         let path = if let Some(stripped) = json_path.strip_prefix("$.") {
@@ -301,7 +492,12 @@ fn update_json_indexes(
                         serde_json::Value::Null => "null".to_string(),
                         _ => item.to_string(),
                     };
-                    insert_stmt.execute(params![space, index_name, val_str, doc_id])?;
+                    insert_stmt.reset()?;
+                    insert_stmt.bind_text_static(1, space)?;
+                    insert_stmt.bind_text_static(2, &index_name)?;
+                    insert_stmt.bind_text_static(3, &val_str)?;
+                    insert_stmt.bind_text_static(4, doc_id)?;
+                    insert_stmt.step()?;
                 }
             } else {
                 let val_str = match target_val {
@@ -311,27 +507,45 @@ fn update_json_indexes(
                     serde_json::Value::Null => "null".to_string(),
                     _ => target_val.to_string(),
                 };
-                insert_stmt.execute(params![space, index_name, val_str, doc_id])?;
+                insert_stmt.reset()?;
+                insert_stmt.bind_text_static(1, space)?;
+                insert_stmt.bind_text_static(2, &index_name)?;
+                insert_stmt.bind_text_static(3, &val_str)?;
+                insert_stmt.bind_text_static(4, doc_id)?;
+                insert_stmt.step()?;
             }
         }
     }
+    insert_stmt.reset()?;
     Ok(())
 }
 
-fn kv_version(tx: &Transaction<'_>, namespace: &str, key: &[u8]) -> Result<Option<u64>> {
-    let mut stmt =
-        tx.prepare_cached("SELECT version FROM _lilia_kv WHERE namespace = ?1 AND key = ?2")?;
-    stmt.query_row(params![namespace, key], |row| row_version(row, 0))
-        .optional()
-        .map_err(Into::into)
+fn kv_version(tx: &mut NativeTransaction<'_>, namespace: &str, key: &[u8]) -> Result<Option<u64>> {
+    let stmt = tx.slot(StmtSlot::KvVersion)?;
+    stmt.reset()?;
+    stmt.bind_text_static(1, namespace)?;
+    stmt.bind_blob_static(2, key)?;
+    let res = if stmt.step()? {
+        Some(parse_version(stmt.column_int64(0))?)
+    } else {
+        None
+    };
+    stmt.reset()?;
+    Ok(res)
 }
 
-fn json_version(tx: &Transaction<'_>, space: &str, id: &str) -> Result<Option<u64>> {
-    let mut stmt =
-        tx.prepare_cached("SELECT version FROM _lilia_json WHERE space = ?1 AND id = ?2")?;
-    stmt.query_row(params![space, id], |row| row_version(row, 0))
-        .optional()
-        .map_err(Into::into)
+fn json_version(tx: &mut NativeTransaction<'_>, space: &str, id: &str) -> Result<Option<u64>> {
+    let stmt = tx.slot(StmtSlot::JsonVersion)?;
+    stmt.reset()?;
+    stmt.bind_text_static(1, space)?;
+    stmt.bind_text_static(2, id)?;
+    let res = if stmt.step()? {
+        Some(parse_version(stmt.column_int64(0))?)
+    } else {
+        None
+    };
+    stmt.reset()?;
+    Ok(res)
 }
 
 fn assert_version(current: Option<u64>, expected: Option<u64>) -> Result<()> {

@@ -11,12 +11,10 @@ use std::time::{Duration, Instant};
 use lilia_core::LiliaError;
 use lilia_core::{ErrorCode, Result};
 #[cfg(not(target_arch = "wasm32"))]
-use rusqlite::Connection;
+use lilia_sqlite_native::NativeConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::CheckpointPolicy;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::storage::is_uri_or_memory;
 
 /// Background attempts only; explicit checkpoints are not included.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,27 +43,13 @@ pub(crate) struct Checkpointer {
 #[cfg(not(target_arch = "wasm32"))]
 impl Checkpointer {
     pub(crate) fn start(path: &Path, policy: CheckpointPolicy, synchronous: &str) -> Result<Self> {
-        let connection = if is_uri_or_memory(path) {
-            Connection::open_with_flags(
-                path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                    | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-                    | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-            )?
-        } else {
-            Connection::open(path)?
-        };
-        connection.busy_timeout(Duration::ZERO)?;
-        connection.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
-        connection.pragma_update(None, "synchronous", synchronous)?;
-        connection.pragma_update(None, "wal_autocheckpoint", 0)?;
-        connection.pragma_update(None, "temp_store", "MEMORY")?;
+        let connection = NativeConnection::open_with_config(path, synchronous, 0, 0, -2048)?;
+        connection.pragma_update("wal_autocheckpoint", "0")?;
+        connection.pragma_update("temp_store", "MEMORY")?;
         // Initialize this connection's WAL view before inspecting checkpoint state.
-        connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
+        connection.exec("SELECT count(*) FROM sqlite_schema;")?;
         let page_size =
-            u64::from(connection.query_row("PRAGMA page_size", [], |row| row.get::<_, u32>(0))?);
+            u64::try_from(connection.pragma_query_int("PRAGMA page_size")?).unwrap_or(4096);
         let stats = Arc::new(Mutex::new(CheckpointStats::default()));
         let (wake, receive) = mpsc::sync_channel(1);
         let shared = Arc::clone(&stats);
@@ -133,7 +117,7 @@ impl Drop for Checkpointer {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run(
-    connection: &Connection,
+    connection: &NativeConnection,
     page_size: u64,
     policy: CheckpointPolicy,
     receive: &mpsc::Receiver<()>,
@@ -173,7 +157,7 @@ fn run(
             }
             Ok(None) => {}
             Err(error) => {
-                stats.last_error = Some(LiliaError::from(error).code);
+                stats.last_error = Some(error.code);
                 defer_until_tick = true;
             }
         }
@@ -182,11 +166,11 @@ fn run(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn maybe_checkpoint(
-    connection: &Connection,
+    connection: &NativeConnection,
     page_size: u64,
     limit: u64,
     elapsed: bool,
-) -> rusqlite::Result<Option<(i64, i64, i64)>> {
+) -> Result<Option<(i64, i64, i64)>> {
     let (_, log, copied) = state(connection, "PRAGMA wal_checkpoint(NOOP)")?;
     let outstanding = u64::try_from(log.saturating_sub(copied)).unwrap_or(0);
     // WAL frames contain a page plus a 24-byte header. Allocated file length may
@@ -198,10 +182,17 @@ fn maybe_checkpoint(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn state(connection: &Connection, pragma: &str) -> rusqlite::Result<(i64, i64, i64)> {
-    connection.query_row(pragma, [], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-    })
+fn state(connection: &NativeConnection, pragma: &str) -> Result<(i64, i64, i64)> {
+    let mut stmt = connection.prepare(pragma)?;
+    if stmt.step()? {
+        Ok((
+            stmt.column_int64(0),
+            stmt.column_int64(1),
+            stmt.column_int64(2),
+        ))
+    } else {
+        Ok((0, 0, 0))
+    }
 }
 
 #[cfg(test)]

@@ -1,35 +1,41 @@
 #![allow(clippy::missing_errors_doc)]
 
-use rusqlite::{params, OptionalExtension};
+use lilia_sqlite_native::StmtSlot;
 
-use crate::storage::{normalize_limit, now_ms, row_version, validate_name};
+use crate::storage::{normalize_limit, now_ms, parse_version, validate_name};
 use crate::Database;
 use lilia_core::{KvEntry, Result};
 
 impl Database {
     pub fn kv_get(&self, namespace: &str, key: &[u8]) -> Result<Option<KvEntry>> {
         validate_name("namespace", namespace)?;
-        let connection = self.read_lock()?;
-        let mut statement = connection.prepare_cached(
-            "SELECT value, version, expires_at_ms FROM _lilia_kv
-             WHERE namespace = ?1 AND key = ?2 AND (expires_at_ms IS NULL OR expires_at_ms > ?3)",
-        )?;
-        let entry: Option<(Vec<u8>, u64, Option<i64>)> = statement
-            .query_row(params![namespace, key, now_ms()], |row| {
-                Ok((row.get(0)?, row_version(row, 1)?, row.get(2)?))
+        let mut connection = self.read_lock()?;
+        let stmt = connection.slot(StmtSlot::KvGet)?;
+        stmt.reset()?;
+        stmt.bind_text_static(1, namespace)?;
+        stmt.bind_blob_static(2, key)?;
+        stmt.bind_int64(3, now_ms())?;
+        let entry = if stmt.step()? {
+            let raw_val = stmt.column_blob(0);
+            let version = parse_version(stmt.column_int64(1))?;
+            let expires_at_ms = if stmt.column_is_null(2) {
+                None
+            } else {
+                Some(stmt.column_int64(2))
+            };
+            let value = self.codec.decode(raw_val)?;
+            Some(KvEntry {
+                namespace: namespace.to_owned(),
+                key: key.to_vec(),
+                value,
+                version,
+                expires_at_ms,
             })
-            .optional()?;
-        let Some((raw_val, version, expires_at_ms)) = entry else {
-            return Ok(None);
+        } else {
+            None
         };
-        let value = self.codec.decode(&raw_val)?;
-        Ok(Some(KvEntry {
-            namespace: namespace.to_owned(),
-            key: key.to_vec(),
-            value,
-            version,
-            expires_at_ms,
-        }))
+        stmt.reset()?;
+        Ok(entry)
     }
 
     pub fn kv_scan(
@@ -39,32 +45,24 @@ impl Database {
         limit: u32,
     ) -> Result<Vec<KvEntry>> {
         validate_name("namespace", namespace)?;
-        let connection = self.read_lock()?;
-        let mut statement = connection.prepare_cached(
-            "SELECT key, value, version, expires_at_ms FROM _lilia_kv
-             WHERE namespace = ?1 AND key > ?2 AND (expires_at_ms IS NULL OR expires_at_ms > ?3)
-             ORDER BY key LIMIT ?4",
-        )?;
-        let rows = statement.query_map(
-            params![
-                namespace,
-                after.unwrap_or_default(),
-                now_ms(),
-                normalize_limit(limit)
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row_version(row, 2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                ))
-            },
-        )?;
+        let mut connection = self.read_lock()?;
+        let stmt = connection.slot(StmtSlot::KvScan)?;
+        stmt.reset()?;
+        stmt.bind_text_static(1, namespace)?;
+        stmt.bind_blob_static(2, after.unwrap_or_default())?;
+        stmt.bind_int64(3, now_ms())?;
+        stmt.bind_int64(4, normalize_limit(limit))?;
         let mut entries = Vec::new();
-        for row in rows {
-            let (key, raw_val, version, expires_at_ms) = row?;
-            let value = self.codec.decode(&raw_val)?;
+        while stmt.step()? {
+            let key = stmt.column_blob(0).to_vec();
+            let raw_val = stmt.column_blob(1);
+            let version = parse_version(stmt.column_int64(2))?;
+            let expires_at_ms = if stmt.column_is_null(3) {
+                None
+            } else {
+                Some(stmt.column_int64(3))
+            };
+            let value = self.codec.decode(raw_val)?;
             entries.push(KvEntry {
                 namespace: namespace.to_owned(),
                 key,
@@ -73,6 +71,7 @@ impl Database {
                 expires_at_ms,
             });
         }
+        stmt.reset()?;
         Ok(entries)
     }
 }

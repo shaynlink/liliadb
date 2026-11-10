@@ -1,6 +1,6 @@
 use lilia_core::{BatchOperation, ErrorCode};
+use lilia_sqlite_native::NativeConnection;
 use lilia_storage_sqlite::{Database, DatabaseOptions};
-use rusqlite::{params, Connection};
 use std::path::Path;
 use std::time::Duration;
 
@@ -34,32 +34,32 @@ fn seed(path: &Path) {
         database.batch(&put(id, None)).unwrap();
     }
     database.close(Duration::from_secs(5)).unwrap();
-    let connection = Connection::open(path).unwrap();
+    let connection = NativeConnection::open_file(path).unwrap();
     for (id, version) in [
         ("high", i64::try_from(HIGH).unwrap()),
         ("edge", i64::MAX - 1),
     ] {
-        connection
-            .execute(
-                "UPDATE _lilia_kv SET version=?1 WHERE namespace='versions' AND key=?2",
-                params![version, id.as_bytes()],
-            )
+        let mut kv_stmt = connection
+            .prepare("UPDATE _lilia_kv SET version = ?1 WHERE namespace = 'versions' AND key = ?2;")
             .unwrap();
-        connection
-            .execute(
-                "UPDATE _lilia_json SET version=?1 WHERE space='versions' AND id=?2",
-                params![version, id],
-            )
+        kv_stmt.bind_int64(1, version).unwrap();
+        kv_stmt.bind_blob_static(2, id.as_bytes()).unwrap();
+        kv_stmt.step().unwrap();
+
+        let mut json_stmt = connection
+            .prepare("UPDATE _lilia_json SET version = ?1 WHERE space = 'versions' AND id = ?2;")
             .unwrap();
+        json_stmt.bind_int64(1, version).unwrap();
+        json_stmt.bind_text_static(2, id).unwrap();
+        json_stmt.step().unwrap();
     }
-    connection.close().unwrap();
 }
 
 #[test]
-#[ignore = "private fixture producer invoked by the five-surface conformance runner"]
+#[ignore = "private fixture producer invoked by the four-surface conformance runner"]
 fn seed_precision_fixture() {
     let directory = std::env::var_os("LILIA_VERSION_FIXTURE_DIR").expect("fixture directory");
-    for name in ["embedded", "daemon", "cli", "mcp"] {
+    for name in ["embedded", "daemon", "cli"] {
         seed(&Path::new(&directory).join(format!("{name}.lilia")));
     }
 }

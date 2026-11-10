@@ -3,12 +3,12 @@ use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::Connection;
+use lilia_sqlite_native::NativeConnection;
 
 use lilia_core::{ErrorCode, LiliaError, Result};
 
-pub(crate) fn migrate(connection: &Connection) -> Result<()> {
-    connection.execute_batch(
+pub(crate) fn migrate(connection: &NativeConnection) -> Result<()> {
+    connection.exec(
         "BEGIN IMMEDIATE;
          CREATE TABLE IF NOT EXISTS _lilia_metadata(
            key TEXT PRIMARY KEY NOT NULL,
@@ -37,6 +37,8 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
            id TEXT NOT NULL,
            kind TEXT NOT NULL,
            metadata TEXT NOT NULL CHECK(json_valid(metadata)),
+           doc_space TEXT,
+           doc_id TEXT,
            PRIMARY KEY(graph,id)
          ) STRICT, WITHOUT ROWID;
          CREATE TABLE IF NOT EXISTS _lilia_graph_edges(
@@ -44,6 +46,7 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
            source TEXT NOT NULL,
            target TEXT NOT NULL,
            kind TEXT NOT NULL,
+           weight REAL NOT NULL DEFAULT 1.0,
            PRIMARY KEY(graph,source,target,kind)
          ) STRICT, WITHOUT ROWID;
          CREATE INDEX IF NOT EXISTS _lilia_graph_edges_target ON _lilia_graph_edges(graph,target);
@@ -66,6 +69,73 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
            content,
            tokenize='unicode61'
          );
+         CREATE TABLE IF NOT EXISTS _lilia_vectors(
+           collection TEXT NOT NULL,
+           id TEXT NOT NULL,
+           dim INTEGER NOT NULL,
+           element_type INTEGER NOT NULL,
+           vector BLOB NOT NULL,
+           PRIMARY KEY(collection,id)
+         ) STRICT, WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS _lilia_vectors_collection ON _lilia_vectors(collection);
+         CREATE TABLE IF NOT EXISTS _lilia_hnsw_meta(
+           collection TEXT PRIMARY KEY,
+           entry_id TEXT,
+           max_level INTEGER NOT NULL,
+           m INTEGER NOT NULL,
+           ef_construction INTEGER NOT NULL,
+           ef_search INTEGER NOT NULL,
+           metric TEXT NOT NULL,
+           element_type INTEGER NOT NULL,
+           dim INTEGER NOT NULL
+         ) STRICT, WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS _lilia_hnsw_edges(
+           collection TEXT NOT NULL,
+           id TEXT NOT NULL,
+           level INTEGER NOT NULL,
+           neighbors BLOB NOT NULL,
+           PRIMARY KEY(collection, id, level)
+         ) STRICT, WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS _lilia_timeseries_chunks(
+           series_id TEXT NOT NULL,
+           resolution_ms INTEGER NOT NULL DEFAULT 0,
+           start_time INTEGER NOT NULL,
+           end_time INTEGER NOT NULL,
+           point_count INTEGER NOT NULL,
+           min_val REAL NOT NULL,
+           max_val REAL NOT NULL,
+           sum_val REAL NOT NULL,
+           data BLOB NOT NULL,
+           PRIMARY KEY(series_id,resolution_ms,start_time)
+         ) STRICT, WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS _lilia_ts_series_end ON _lilia_timeseries_chunks(series_id,resolution_ms,end_time);
+         CREATE TABLE IF NOT EXISTS _lilia_timeseries_policies(
+           series_pattern TEXT PRIMARY KEY NOT NULL,
+           policy_json TEXT NOT NULL
+         ) STRICT, WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS _lilia_timeseries_downsample_state(
+           series_id TEXT NOT NULL,
+           resolution_ms INTEGER NOT NULL,
+           last_downsampled_time INTEGER NOT NULL,
+           PRIMARY KEY(series_id,resolution_ms)
+         ) STRICT, WITHOUT ROWID;
+         CREATE VIRTUAL TABLE IF NOT EXISTS _lilia_geofences USING geopoly(
+           id,
+           name,
+           category,
+           metadata
+         );
+         CREATE TABLE IF NOT EXISTS _lilia_gps_points(
+           track_id TEXT NOT NULL,
+           timestamp INTEGER NOT NULL,
+           latitude REAL NOT NULL,
+           longitude REAL NOT NULL,
+           altitude REAL,
+           speed REAL,
+           accuracy REAL,
+           PRIMARY KEY(track_id,timestamp)
+         ) STRICT, WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS _lilia_gps_points_time ON _lilia_gps_points(track_id,timestamp);
          CREATE VIEW IF NOT EXISTS lilia_kv AS
            SELECT namespace, key, lilia_decode_kv(value) AS value, version, expires_at_ms
            FROM _lilia_kv;
@@ -73,13 +143,70 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
            SELECT space, id, lilia_decode_json(value) AS value, version
            FROM _lilia_json;
          CREATE VIEW IF NOT EXISTS lilia_graph_nodes AS
-           SELECT graph, id, kind, metadata
+           SELECT graph, id, kind, metadata, doc_space, doc_id
            FROM _lilia_graph_nodes;
          CREATE VIEW IF NOT EXISTS lilia_graph_edges AS
-           SELECT graph, source, target, kind
+           SELECT graph, source, target, kind, weight
            FROM _lilia_graph_edges;
+         CREATE VIEW IF NOT EXISTS lilia_graph_unified AS
+           SELECT g.graph, g.id, g.kind, g.metadata,
+                  COALESCE(g.doc_space, g.kind) AS doc_space,
+                  COALESCE(g.doc_id, g.id) AS doc_id,
+                  lilia_decode_json(j.value) AS document
+           FROM _lilia_graph_nodes g
+           LEFT JOIN _lilia_json j
+             ON j.space = COALESCE(g.doc_space, g.kind)
+            AND j.id = COALESCE(g.doc_id, g.id);
+         CREATE VIEW IF NOT EXISTS lilia_vectors AS
+           SELECT collection, id, dim, element_type, lilia_decode_vector(vector) AS vector
+           FROM _lilia_vectors;
+         CREATE VIEW IF NOT EXISTS lilia_vector_indexes AS
+           SELECT collection, entry_id, max_level, m, ef_construction, ef_search, metric, element_type, dim
+           FROM _lilia_hnsw_meta;
+         CREATE VIEW IF NOT EXISTS lilia_timeseries_chunks AS
+           SELECT series_id, resolution_ms, start_time, end_time, point_count, min_val, max_val, sum_val,
+                  (sum_val / point_count) AS avg_val, length(data) AS compressed_bytes
+           FROM _lilia_timeseries_chunks;
+         CREATE VIEW IF NOT EXISTS lilia_timeseries_policies AS
+           SELECT series_pattern, policy_json
+           FROM _lilia_timeseries_policies;
+         CREATE VIEW IF NOT EXISTS lilia_geofences AS
+           SELECT rowid, _shape, id, name, category, metadata
+           FROM _lilia_geofences;
+         CREATE VIEW IF NOT EXISTS lilia_gps_points AS
+           SELECT track_id, timestamp, latitude, longitude, altitude, speed, accuracy
+           FROM _lilia_gps_points;
+         CREATE TABLE IF NOT EXISTS _lilia_json_revisions(
+           space TEXT NOT NULL,
+           id TEXT NOT NULL,
+           version INTEGER NOT NULL CHECK(version > 0),
+           timestamp_ms INTEGER NOT NULL,
+           delta BLOB NOT NULL,
+           is_keyframe INTEGER NOT NULL DEFAULT 0,
+           is_deletion INTEGER NOT NULL DEFAULT 0,
+           PRIMARY KEY(space,id,version)
+         ) STRICT, WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS _lilia_json_rev_time ON _lilia_json_revisions(space,id,timestamp_ms);
+         CREATE TABLE IF NOT EXISTS _lilia_undo_log(
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           timestamp_ms INTEGER NOT NULL,
+           summary TEXT NOT NULL,
+           forward_changeset BLOB NOT NULL,
+           reverse_changeset BLOB NOT NULL,
+           undone INTEGER NOT NULL DEFAULT 0
+         ) STRICT;
+         CREATE VIEW IF NOT EXISTS lilia_json_history AS
+           SELECT space, id, version, timestamp_ms, is_keyframe, is_deletion
+           FROM _lilia_json_revisions;
          COMMIT;",
     )?;
+
+    // Safe schema updates for existing tables
+    let _ = connection
+        .exec("ALTER TABLE _lilia_graph_edges ADD COLUMN weight REAL NOT NULL DEFAULT 1.0;");
+    let _ = connection.exec("ALTER TABLE _lilia_graph_nodes ADD COLUMN doc_space TEXT;");
+    let _ = connection.exec("ALTER TABLE _lilia_graph_nodes ADD COLUMN doc_id TEXT;");
+
     Ok(())
 }
 
@@ -162,13 +289,12 @@ pub(crate) fn normalize_limit(limit: u32) -> i64 {
     i64::from(limit.clamp(1, 1_000))
 }
 
-pub(crate) fn row_version(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
-    let value = row.get::<_, i64>(index)?;
+pub(crate) fn parse_version(value: i64) -> Result<u64> {
     u64::try_from(value).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            index,
-            rusqlite::types::Type::Integer,
-            Box::new(error),
+        LiliaError::new(
+            ErrorCode::Storage,
+            format!("invalid version {value}: {error}"),
+            false,
         )
     })
 }

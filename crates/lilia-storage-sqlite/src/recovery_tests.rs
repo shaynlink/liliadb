@@ -1,4 +1,5 @@
 use super::*;
+use lilia_sqlite_native::NativeConnection;
 use std::io::{Seek, Write};
 use std::process::{Child, Command};
 
@@ -25,12 +26,15 @@ fn mutations(id: &str, value: u8) -> [BatchOperation; 5] {
             id: id.into(),
             kind: "entity".into(),
             metadata: serde_json::json!({ "value": value }),
+            doc_space: None,
+            doc_id: None,
         },
         BatchOperation::GraphAddEdge {
             graph: "recovery".into(),
             source: id.into(),
             target: id.into(),
             kind: "self".into(),
+            weight: 1.0,
         },
         BatchOperation::FtsIndex {
             collection: "recovery".into(),
@@ -50,10 +54,8 @@ fn crash_writer_child() {
     let database = Database::open(DatabaseOptions::durable(&path)).unwrap();
     // Keep the initial snapshot pinned so maintenance cannot copy later commits
     // into the main file before the process is killed.
-    let snapshot = Connection::open(&path).unwrap();
-    snapshot
-        .execute_batch("BEGIN; SELECT * FROM _lilia_kv;")
-        .unwrap();
+    let snapshot = NativeConnection::open_file(&path).unwrap();
+    snapshot.exec("BEGIN; SELECT * FROM _lilia_kv;").unwrap();
     for id in 0..8 {
         database.batch(&mutations(&id.to_string(), id)).unwrap();
     }
@@ -61,13 +63,13 @@ fn crash_writer_child() {
     wal_path.push("-wal");
     let committed_wal_bytes = std::fs::metadata(&wal_path).unwrap().len();
     let mut writer = database.lock_writer().unwrap();
-    let transaction = writer.transaction().unwrap();
+    let mut transaction = writer.transaction().unwrap();
     if phase == "uncommitted" {
         for operation in mutations("0", 99)
             .iter()
             .chain(mutations("partial", 99).iter())
         {
-            apply(&transaction, operation, &lilia_core::IdentityCodec).unwrap();
+            apply(&mut transaction, operation, &lilia_core::IdentityCodec).unwrap();
         }
         // Force dirty transaction pages into WAL without committing them.
         transaction.cache_flush().unwrap();
@@ -163,12 +165,8 @@ fn page_quota_failure_rolls_back_batch_and_releases_writer() {
     database.batch(&mutations("confirmed", 1)).unwrap();
     {
         let writer = database.lock_writer().unwrap();
-        let pages: u32 = writer
-            .query_row("PRAGMA page_count", [], |row| row.get(0))
-            .unwrap();
-        writer
-            .pragma_update(None, "max_page_count", pages + 1)
-            .unwrap();
+        let pages = writer.pragma_query_int("page_count").unwrap();
+        writer.pragma_update("max_page_count", pages + 1).unwrap();
     }
     let mut operations = mutations("confirmed", 2).to_vec();
     operations.push(BatchOperation::KvSet {
@@ -210,7 +208,7 @@ fn page_quota_failure_rolls_back_batch_and_releases_writer() {
     database
         .lock_writer()
         .unwrap()
-        .pragma_update(None, "max_page_count", 1_000_000)
+        .pragma_update("max_page_count", 1_000_000)
         .unwrap();
     database.batch(&mutations("after-full", 4)).unwrap();
     database.close(Duration::from_secs(5)).unwrap();
@@ -233,8 +231,8 @@ fn external_writer_lock_is_retryable_and_preserves_atomicity() {
     let mut options = DatabaseOptions::durable(&path);
     options.busy_timeout_ms = 10;
     let database = Database::open(options).unwrap();
-    let external = Connection::open(&path).unwrap();
-    external.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let external = NativeConnection::open_file(&path).unwrap();
+    external.exec("BEGIN IMMEDIATE").unwrap();
     let error = database.batch(&mutations("locked", 1)).unwrap_err();
     assert_eq!(error.code, ErrorCode::Busy);
     assert!(error.retryable);
@@ -249,7 +247,7 @@ fn external_writer_lock_is_retryable_and_preserves_atomicity() {
         .fts_search("recovery", "locked", 10)
         .unwrap()
         .is_empty());
-    external.execute_batch("ROLLBACK").unwrap();
+    external.exec("ROLLBACK").unwrap();
     database.batch(&mutations("locked", 1)).unwrap();
     assert!(database.integrity_check().unwrap());
 }

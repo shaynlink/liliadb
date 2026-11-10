@@ -6,17 +6,36 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use rusqlite::Connection;
+#[cfg(not(target_arch = "wasm32"))]
+use lilia_sqlite_native::NativeBackup;
+use lilia_sqlite_native::{InterruptHandle, NativeConnection};
 
 use crate::checkpoint::{CheckpointStats, Checkpointer};
 use crate::lifecycle::{Lifecycle, Operation};
-use crate::storage::{is_uri_or_memory, migrate, prepare_parent, secure_database_file};
+use crate::storage::{migrate, prepare_parent, secure_database_file};
+use crate::timeseries_worker::{TimeSeriesOptions, TimeSeriesWorker};
 use crate::transaction::apply;
 use crate::writer_queue::{Permit, WriterQueue};
 use lilia_core::{
     BatchOperation, Durability, ErrorCode, IdentityCodec, LiliaError, MutationResult, Result,
     ValueCodec,
 };
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct TableStorageStat {
+    pub name: String,
+    pub page_count: i64,
+    pub payload_bytes: i64,
+    pub unused_bytes: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResourceProfile {
+    #[default]
+    Server,
+    Mobile,
+    Constrained,
+}
 
 #[derive(Debug, Clone)]
 pub struct DatabaseOptions {
@@ -28,6 +47,10 @@ pub struct DatabaseOptions {
     pub checkpoint_policy: CheckpointPolicy,
     pub codec: Arc<dyn ValueCodec>,
     pub mmap_size_bytes: u64,
+    pub profile: ResourceProfile,
+    pub cache_size_kib: i32,
+    pub timeseries_options: TimeSeriesOptions,
+    pub undo_log_capacity: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +73,59 @@ impl DatabaseOptions {
             },
             codec: Arc::new(IdentityCodec),
             mmap_size_bytes: 256 * 1024 * 1024,
+            profile: ResourceProfile::Server,
+            cache_size_kib: -65_536,
+            timeseries_options: TimeSeriesOptions {
+                auto_retention: true,
+                retention_interval_ms: 60_000,
+            },
+            undo_log_capacity: 100,
+        }
+    }
+
+    pub fn mobile(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            durability: Durability::Balanced,
+            busy_timeout_ms: 5_000,
+            writer_queue_capacity: 32,
+            read_pool_size: 2,
+            checkpoint_policy: CheckpointPolicy {
+                wal_bytes: 4 * 1024 * 1024,
+                interval_ms: 3_000,
+            },
+            codec: Arc::new(IdentityCodec),
+            mmap_size_bytes: 32 * 1024 * 1024,
+            profile: ResourceProfile::Mobile,
+            cache_size_kib: -8_192,
+            timeseries_options: TimeSeriesOptions {
+                auto_retention: true,
+                retention_interval_ms: 300_000,
+            },
+            undo_log_capacity: 100,
+        }
+    }
+
+    pub fn constrained(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            durability: Durability::Balanced,
+            busy_timeout_ms: 3_000,
+            writer_queue_capacity: 16,
+            read_pool_size: 1,
+            checkpoint_policy: CheckpointPolicy {
+                wal_bytes: 1024 * 1024,
+                interval_ms: 1_500,
+            },
+            codec: Arc::new(IdentityCodec),
+            mmap_size_bytes: 0,
+            profile: ResourceProfile::Constrained,
+            cache_size_kib: -2_048,
+            timeseries_options: TimeSeriesOptions {
+                auto_retention: false,
+                retention_interval_ms: 600_000,
+            },
+            undo_log_capacity: 100,
         }
     }
 
@@ -72,7 +148,73 @@ impl DatabaseOptions {
             },
             codec: Arc::new(IdentityCodec),
             mmap_size_bytes: 0,
+            profile: ResourceProfile::Server,
+            cache_size_kib: -65_536,
+            timeseries_options: TimeSeriesOptions {
+                auto_retention: false,
+                retention_interval_ms: 0,
+            },
+            undo_log_capacity: 100,
         }
+    }
+
+    #[must_use]
+    pub fn with_profile(mut self, profile: ResourceProfile) -> Self {
+        self.profile = profile;
+        match profile {
+            ResourceProfile::Server => {
+                self.cache_size_kib = -65_536;
+                self.mmap_size_bytes = 256 * 1024 * 1024;
+                self.read_pool_size = 4;
+                self.checkpoint_policy = CheckpointPolicy {
+                    wal_bytes: 16 * 1024 * 1024,
+                    interval_ms: 5_000,
+                };
+                self.timeseries_options = TimeSeriesOptions {
+                    auto_retention: true,
+                    retention_interval_ms: 60_000,
+                };
+            }
+            ResourceProfile::Mobile => {
+                self.cache_size_kib = -8_192;
+                self.mmap_size_bytes = 32 * 1024 * 1024;
+                self.read_pool_size = 2;
+                self.checkpoint_policy = CheckpointPolicy {
+                    wal_bytes: 4 * 1024 * 1024,
+                    interval_ms: 3_000,
+                };
+                self.timeseries_options = TimeSeriesOptions {
+                    auto_retention: true,
+                    retention_interval_ms: 300_000,
+                };
+            }
+            ResourceProfile::Constrained => {
+                self.cache_size_kib = -2_048;
+                self.mmap_size_bytes = 0;
+                self.read_pool_size = 1;
+                self.checkpoint_policy = CheckpointPolicy {
+                    wal_bytes: 1024 * 1024,
+                    interval_ms: 1_500,
+                };
+                self.timeseries_options = TimeSeriesOptions {
+                    auto_retention: false,
+                    retention_interval_ms: 600_000,
+                };
+            }
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn with_timeseries_options(mut self, options: TimeSeriesOptions) -> Self {
+        self.timeseries_options = options;
+        self
+    }
+
+    #[must_use]
+    pub fn with_cache_size_kib(mut self, kib: i32) -> Self {
+        self.cache_size_kib = kib;
+        self
     }
 
     #[must_use]
@@ -86,23 +228,37 @@ impl DatabaseOptions {
         self.mmap_size_bytes = bytes;
         self
     }
+
+    #[must_use]
+    pub fn with_undo_log_capacity(mut self, capacity: usize) -> Self {
+        self.undo_log_capacity = capacity;
+        self
+    }
 }
 
 #[derive(Debug)]
 pub struct Database {
     path: PathBuf,
-    lifecycle: Arc<Lifecycle>,
-    resources: Arc<Resources>,
+    pub(crate) lifecycle: Arc<Lifecycle>,
+    pub(crate) resources: Arc<Resources>,
     pub(crate) codec: Arc<dyn ValueCodec>,
     events: Arc<tokio::sync::broadcast::Sender<lilia_core::DatabaseEvent>>,
+    pub(crate) hnsw_cache: Arc<
+        std::sync::RwLock<
+            std::collections::HashMap<String, Arc<std::sync::RwLock<lilia_core::HnswIndex>>>,
+        >,
+    >,
+    #[allow(dead_code)]
+    pub(crate) undo_log_capacity: usize,
 }
 
 #[derive(Debug)]
-struct Resources {
+pub(crate) struct Resources {
     // Stop/join maintenance before dropping the database connections.
     checkpointer: Mutex<Option<Checkpointer>>,
-    writer: Mutex<Option<Connection>>,
-    readers: Vec<Mutex<Option<Connection>>>,
+    pub(crate) ts_worker: Mutex<Option<TimeSeriesWorker>>,
+    writer: Mutex<Option<NativeConnection>>,
+    readers: Vec<Mutex<Option<NativeConnection>>>,
     next_reader: AtomicUsize,
     writer_queue: WriterQueue,
 }
@@ -110,7 +266,7 @@ struct Resources {
 #[doc(hidden)]
 pub struct WriterGuard<'a> {
     // Drop the connection lock before making the next FIFO permit available.
-    connection: MutexGuard<'a, Option<Connection>>,
+    connection: MutexGuard<'a, Option<NativeConnection>>,
     _permit: Option<Permit<'a>>,
     _operation: Operation<'a>,
 }
@@ -122,8 +278,8 @@ impl std::fmt::Debug for WriterGuard<'_> {
 }
 
 impl Deref for WriterGuard<'_> {
-    type Target = Connection;
-    fn deref(&self) -> &Connection {
+    type Target = NativeConnection;
+    fn deref(&self) -> &NativeConnection {
         self.connection
             .as_ref()
             .expect("admitted connection must remain open")
@@ -131,46 +287,30 @@ impl Deref for WriterGuard<'_> {
 }
 
 impl DerefMut for WriterGuard<'_> {
-    fn deref_mut(&mut self) -> &mut Connection {
+    fn deref_mut(&mut self) -> &mut NativeConnection {
         self.connection
             .as_mut()
             .expect("admitted connection must remain open")
     }
 }
 
-fn open_connection(path: &Path) -> Result<Connection> {
-    if is_uri_or_memory(path) {
-        Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-                | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-        )
-        .map_err(Into::into)
-    } else {
-        Connection::open(path).map_err(Into::into)
-    }
-}
-
-fn configure_connection(
-    conn: &Connection,
+fn open_connection(
+    path: &Path,
     synchronous: &str,
-    busy_timeout: Duration,
     mmap_size: u64,
+    busy_timeout_ms: i32,
+    cache_size_kib: i32,
     codec: &Arc<dyn ValueCodec>,
-) -> Result<()> {
-    conn.busy_timeout(busy_timeout)?;
-    conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "synchronous", synchronous)?;
-    conn.pragma_update(None, "temp_store", "MEMORY")?;
-    conn.pragma_update(None, "cache_size", -65536)?;
-    if mmap_size > 0 {
-        let size = i64::try_from(mmap_size).unwrap_or(i64::MAX);
-        conn.pragma_update(None, "mmap_size", size)?;
-    }
-    crate::sql::register_sql_functions(conn, codec)?;
-    Ok(())
+) -> Result<NativeConnection> {
+    let conn = NativeConnection::open_with_config(
+        path,
+        synchronous,
+        mmap_size,
+        busy_timeout_ms,
+        cache_size_kib,
+    )?;
+    crate::sql::register_sql_functions(&conn, codec)?;
+    Ok(conn)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -182,7 +322,7 @@ struct Watchdog {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Watchdog {
-    fn arm(interrupt: rusqlite::InterruptHandle, duration: Duration) -> Self {
+    fn arm(interrupt: InterruptHandle, duration: Duration) -> Self {
         let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel::<()>(1);
         let worker = std::thread::Builder::new()
             .name("lilia-deadline-watchdog".into())
@@ -219,7 +359,7 @@ struct Watchdog;
 #[cfg(target_arch = "wasm32")]
 impl Watchdog {
     #[allow(clippy::unnecessary_wraps)]
-    fn arm(_interrupt: rusqlite::InterruptHandle, _duration: Duration) -> Self {
+    fn arm(_interrupt: InterruptHandle, _duration: Duration) -> Self {
         Self
     }
 }
@@ -236,22 +376,23 @@ impl Database {
             ));
         }
         prepare_parent(&options.path)?;
-        let connection = open_connection(&options.path)?;
-        secure_database_file(&options.path)?;
         let synchronous = match options.durability {
             Durability::Durable => "FULL",
             Durability::Balanced => "NORMAL",
             Durability::Performance => "OFF",
         };
-        configure_connection(
-            &connection,
+        let busy_ms = i32::try_from(options.busy_timeout_ms).unwrap_or(5000);
+        let connection = open_connection(
+            &options.path,
             synchronous,
-            Duration::from_millis(options.busy_timeout_ms),
             options.mmap_size_bytes,
+            busy_ms,
+            options.cache_size_kib,
             &options.codec,
         )?;
+        secure_database_file(&options.path)?;
         // Disable SQLite's commit-path checkpoint in favor of background work.
-        connection.pragma_update(None, "wal_autocheckpoint", 0)?;
+        connection.pragma_update("wal_autocheckpoint", 0)?;
         migrate(&connection)?;
         let reader_count = if cfg!(target_arch = "wasm32") {
             0
@@ -260,33 +401,52 @@ impl Database {
         };
         let mut readers = Vec::with_capacity(reader_count);
         for _ in 0..reader_count {
-            let reader = open_connection(&options.path)?;
-            configure_connection(
-                &reader,
+            let reader = open_connection(
+                &options.path,
                 synchronous,
-                Duration::from_millis(options.busy_timeout_ms),
                 options.mmap_size_bytes,
+                busy_ms,
+                options.cache_size_kib,
                 &options.codec,
             )?;
-            reader.pragma_update(None, "query_only", true)?;
+            reader.pragma_update("query_only", 1)?;
             readers.push(Mutex::new(Some(reader)));
         }
+        let lifecycle = Arc::new(Lifecycle::default());
+        let resources = Arc::new(Resources {
+            checkpointer: Mutex::new(Some(Checkpointer::start(
+                &options.path,
+                options.checkpoint_policy,
+                synchronous,
+            )?)),
+            ts_worker: Mutex::new(None),
+            writer: Mutex::new(Some(connection)),
+            readers,
+            next_reader: AtomicUsize::new(0),
+            writer_queue: WriterQueue::new(options.writer_queue_capacity),
+        });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ts_worker = TimeSeriesWorker::start(
+                Arc::downgrade(&resources),
+                Arc::downgrade(&lifecycle),
+                options.timeseries_options,
+            )?;
+            *resources
+                .ts_worker
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ts_worker);
+        }
+
         Ok(Self {
-            lifecycle: Arc::new(Lifecycle::default()),
-            resources: Arc::new(Resources {
-                checkpointer: Mutex::new(Some(Checkpointer::start(
-                    &options.path,
-                    options.checkpoint_policy,
-                    synchronous,
-                )?)),
-                writer: Mutex::new(Some(connection)),
-                readers,
-                next_reader: AtomicUsize::new(0),
-                writer_queue: WriterQueue::new(options.writer_queue_capacity),
-            }),
+            lifecycle,
+            resources,
             path: options.path,
             codec: options.codec,
             events: Arc::new(tokio::sync::broadcast::channel(1024).0),
+            hnsw_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+            undo_log_capacity: options.undo_log_capacity,
         })
     }
 
@@ -322,22 +482,49 @@ impl Database {
     }
 
     pub fn integrity_check(&self) -> Result<bool> {
-        let result: String = self
-            .read_lock()?
-            .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        Ok(result == "ok")
+        let conn = self.read_lock()?;
+        let mut stmt = conn.prepare("PRAGMA integrity_check;")?;
+        if stmt.step()? {
+            Ok(stmt.column_text(0) == "ok")
+        } else {
+            Ok(false)
+        }
     }
 
     pub fn quick_check(&self) -> Result<bool> {
-        let result: String = self
-            .read_lock()?
-            .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
-        Ok(result == "ok")
+        let conn = self.read_lock()?;
+        let mut stmt = conn.prepare("PRAGMA quick_check;")?;
+        if stmt.step()? {
+            Ok(stmt.column_text(0) == "ok")
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Retrieve physical page and payload statistics for all tables in the database using `dbstat`.
+    pub fn storage_stats(&self) -> Result<Vec<TableStorageStat>> {
+        let conn = self.read_lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT name, count(*) AS page_count, coalesce(sum(payload), 0) AS total_payload, coalesce(sum(unused), 0) AS total_unused
+             FROM dbstat
+             GROUP BY name
+             ORDER BY name;",
+        )?;
+        let mut stats = Vec::new();
+        while stmt.step()? {
+            stats.push(TableStorageStat {
+                name: stmt.column_text(0).to_string(),
+                page_count: stmt.column_int64(1),
+                payload_bytes: stmt.column_int64(2),
+                unused_bytes: stmt.column_int64(3),
+            });
+        }
+        Ok(stats)
     }
 
     pub fn checkpoint(&self) -> Result<()> {
         self.lock_writer()?
-            .execute_batch("PRAGMA wal_checkpoint(PASSIVE)")?;
+            .exec("PRAGMA wal_checkpoint(PASSIVE);")?;
         Ok(())
     }
 
@@ -389,18 +576,24 @@ impl Database {
             #[cfg(windows)]
             lilia_core::windows_security::secure_directory(staging.path()).map_err(backup_io)?;
             let temporary = staging.path().join("snapshot.lilia");
-            let mut output = Connection::open(&temporary)?;
-            output.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
-            output.pragma_update(None, "temp_store", "MEMORY")?;
+            let output = NativeConnection::open_with_config(&temporary, "NORMAL", 0, 5000, -2048)?;
             secure_database_file(&temporary)?;
-            let backup = rusqlite::backup::Backup::new(&source, &mut output)?;
-            backup.run_to_completion(128, std::time::Duration::from_millis(10), None)?;
+            let mut backup = NativeBackup::new(&output, &source)?;
+            let mut done = false;
+            while !done {
+                done = backup.step(128)?;
+                if !done {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
             drop(backup);
-            let integrity: String =
-                output.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-            output
-                .close()
-                .map_err(|(_, error)| LiliaError::from(error))?;
+            let mut stmt = output.prepare("PRAGMA integrity_check;")?;
+            let mut integrity = String::new();
+            if stmt.step()? {
+                integrity = stmt.column_text(0).to_string();
+            }
+            drop(stmt);
+            drop(output);
             if integrity != "ok" {
                 return Err(LiliaError::new(
                     ErrorCode::Corrupt,
@@ -461,15 +654,102 @@ impl Database {
             if remaining.is_zero() {
                 None
             } else {
-                Some(Watchdog::arm(connection.get_interrupt_handle(), remaining))
+                Some(Watchdog::arm(connection.interrupt_handle(), remaining))
             }
         });
-        let transaction = connection.transaction()?;
+
+        let session = if self.undo_log_capacity > 0 {
+            if let Ok(sess) = lilia_sqlite_native::NativeSession::create(&connection, "main") {
+                let _ = sess.attach_all();
+                Some(sess)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut transaction = connection.transaction()?;
         let results = operations
             .iter()
-            .map(|operation| apply(&transaction, operation, self.codec.as_ref()))
+            .map(|operation| apply(&mut transaction, operation, self.codec.as_ref()))
             .collect::<Result<Vec<_>>>()?;
+
+        for operation in operations {
+            match operation {
+                BatchOperation::VectorSet {
+                    collection,
+                    id,
+                    dim,
+                    element_type,
+                    vector,
+                } => {
+                    self.sync_hnsw_insert(
+                        collection,
+                        id,
+                        *dim,
+                        *element_type,
+                        vector,
+                        &mut transaction,
+                    )?;
+                }
+                BatchOperation::VectorDelete { collection, id } => {
+                    self.sync_hnsw_delete(collection, id, &mut transaction)?;
+                }
+                _ => {}
+            }
+        }
+
         transaction.commit()?;
+
+        if let Some(sess) = session {
+            if !sess.is_empty() {
+                if let Ok(changeset) = sess.changeset() {
+                    if !changeset.is_empty() {
+                        if let Ok(inverse) =
+                            lilia_sqlite_native::NativeSession::invert_changeset(&changeset)
+                        {
+                            drop(sess);
+
+                            let now = crate::storage::now_ms();
+                            let summary = format!("batch of {} operations", operations.len());
+                            let fwd_compressed = lilia_core::compress_bytes(&changeset);
+                            let rev_compressed = lilia_core::compress_bytes(&inverse);
+
+                            if let Ok(undo_tx) = connection.transaction() {
+                                if let Ok(mut ins_stmt) = undo_tx.prepare(
+                                    "INSERT INTO _lilia_undo_log(timestamp_ms, summary, forward_changeset, reverse_changeset, undone) \
+                                     VALUES(?1, ?2, ?3, ?4, 0);",
+                                ) {
+                                    let _ = ins_stmt.bind_int64(1, now);
+                                    let _ = ins_stmt.bind_text_static(2, &summary);
+                                    let _ = ins_stmt.bind_blob_static(3, &fwd_compressed);
+                                    let _ = ins_stmt.bind_blob_static(4, &rev_compressed);
+                                    let _ = ins_stmt.step();
+                                }
+
+                                let _ =
+                                    undo_tx.exec("DELETE FROM _lilia_undo_log WHERE undone = 1;");
+
+                                if let Ok(mut prune_stmt) = undo_tx.prepare(
+                                    "DELETE FROM _lilia_undo_log WHERE id NOT IN (\
+                                       SELECT id FROM _lilia_undo_log ORDER BY id DESC LIMIT ?1\
+                                     );",
+                                ) {
+                                    let _ = prune_stmt.bind_int64(
+                                        1,
+                                        i64::try_from(self.undo_log_capacity).unwrap_or(100),
+                                    );
+                                    let _ = prune_stmt.step();
+                                }
+
+                                let _ = undo_tx.commit();
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if self.events.receiver_count() > 0 {
             for (op, res) in operations.iter().zip(&results) {
                 let evt = match op {
@@ -524,6 +804,7 @@ impl Database {
                         source,
                         target,
                         kind,
+                        ..
                     } => Some(lilia_core::DatabaseEvent::GraphEdgeMutated {
                         graph: graph.clone(),
                         source: source.clone(),
@@ -557,6 +838,20 @@ impl Database {
                             deleted: true,
                         })
                     }
+                    BatchOperation::VectorSet { collection, id, .. } => {
+                        Some(lilia_core::DatabaseEvent::VectorMutated {
+                            collection: collection.clone(),
+                            id: id.clone(),
+                            deleted: false,
+                        })
+                    }
+                    BatchOperation::VectorDelete { collection, id } => {
+                        Some(lilia_core::DatabaseEvent::VectorMutated {
+                            collection: collection.clone(),
+                            id: id.clone(),
+                            deleted: true,
+                        })
+                    }
                 };
                 if let Some(event) = evt {
                     let _ = self.events.send(event);
@@ -583,12 +878,147 @@ impl Database {
     }
 
     fn writer_lock(&self, deadline: Option<Instant>) -> Result<WriterGuard<'_>> {
-        let operation = self.lifecycle.enter()?;
-        let permit = self.resources.writer_queue.acquire(deadline)?;
-        let connection =
-            self.resources.writer.lock().map_err(|_| {
-                LiliaError::new(ErrorCode::Storage, "database lock poisoned", false)
-            })?;
+        self.resources.lock_writer(&self.lifecycle, deadline)
+    }
+
+    pub(crate) fn read_lock(&self) -> Result<WriterGuard<'_>> {
+        self.resources.read_lock(&self.lifecycle)
+    }
+
+    /// Roll back the most recent database mutation using native changeset inversion.
+    pub fn rollback_last_mutation(&self) -> Result<Option<lilia_core::UndoResult>> {
+        let mut connection = self.writer_lock(None)?;
+        let tx = connection.transaction()?;
+
+        let entry = {
+            let mut stmt = tx.prepare(
+                "SELECT id, summary, timestamp_ms, reverse_changeset \
+                 FROM _lilia_undo_log \
+                 WHERE undone = 0 \
+                 ORDER BY id DESC LIMIT 1;",
+            )?;
+            if stmt.step()? {
+                let id = stmt.column_int64(0);
+                let summary = stmt.column_text(1).to_string();
+                let ts = stmt.column_int64(2);
+                let reverse_blob = stmt.column_blob(3).to_vec();
+                Some((id, summary, ts, reverse_blob))
+            } else {
+                None
+            }
+        };
+
+        let Some((id, summary, ts, reverse_blob)) = entry else {
+            return Ok(None);
+        };
+
+        let raw_inverse = lilia_core::decompress_bytes(&reverse_blob)?;
+        lilia_sqlite_native::NativeSession::apply(
+            tx.conn(),
+            &raw_inverse,
+            lilia_sqlite_native::ConflictAction::Replace,
+        )?;
+
+        let mut update_stmt = tx.prepare("UPDATE _lilia_undo_log SET undone = 1 WHERE id = ?1;")?;
+        update_stmt.bind_int64(1, id)?;
+        update_stmt.step()?;
+        drop(update_stmt);
+
+        tx.commit()?;
+
+        Ok(Some(lilia_core::UndoResult {
+            id,
+            summary,
+            timestamp_ms: ts,
+        }))
+    }
+
+    /// Alias for `rollback_last_mutation`.
+    pub fn undo(&self) -> Result<Option<lilia_core::UndoResult>> {
+        self.rollback_last_mutation()
+    }
+
+    /// Re-apply the most recently undone database mutation.
+    pub fn redo(&self) -> Result<Option<lilia_core::RedoResult>> {
+        let mut connection = self.writer_lock(None)?;
+        let tx = connection.transaction()?;
+
+        let entry = {
+            let mut stmt = tx.prepare(
+                "SELECT id, summary, timestamp_ms, forward_changeset \
+                 FROM _lilia_undo_log \
+                 WHERE undone = 1 \
+                 ORDER BY id DESC LIMIT 1;",
+            )?;
+            if stmt.step()? {
+                let id = stmt.column_int64(0);
+                let summary = stmt.column_text(1).to_string();
+                let ts = stmt.column_int64(2);
+                let forward_blob = stmt.column_blob(3).to_vec();
+                Some((id, summary, ts, forward_blob))
+            } else {
+                None
+            }
+        };
+
+        let Some((id, summary, ts, forward_blob)) = entry else {
+            return Ok(None);
+        };
+
+        let raw_forward = lilia_core::decompress_bytes(&forward_blob)?;
+        lilia_sqlite_native::NativeSession::apply(
+            tx.conn(),
+            &raw_forward,
+            lilia_sqlite_native::ConflictAction::Replace,
+        )?;
+
+        let mut update_stmt = tx.prepare("UPDATE _lilia_undo_log SET undone = 0 WHERE id = ?1;")?;
+        update_stmt.bind_int64(1, id)?;
+        update_stmt.step()?;
+        drop(update_stmt);
+
+        tx.commit()?;
+
+        Ok(Some(lilia_core::RedoResult {
+            id,
+            summary,
+            timestamp_ms: ts,
+        }))
+    }
+
+    /// Retrieve the recent transaction undo/redo history.
+    pub fn undo_history(&self) -> Result<Vec<lilia_core::UndoEntry>> {
+        let conn = self.read_lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp_ms, summary, undone \
+             FROM _lilia_undo_log \
+             ORDER BY id DESC;",
+        )?;
+        let mut entries = Vec::new();
+        while stmt.step()? {
+            entries.push(lilia_core::UndoEntry {
+                id: stmt.column_int64(0),
+                timestamp_ms: stmt.column_int64(1),
+                summary: stmt.column_text(2).to_string(),
+                undone: stmt.column_int64(3) != 0,
+            });
+        }
+        Ok(entries)
+    }
+}
+
+impl Resources {
+    pub(crate) fn lock_writer<'a>(
+        &'a self,
+        lifecycle: &'a Lifecycle,
+        deadline: Option<Instant>,
+    ) -> Result<WriterGuard<'a>> {
+        let operation = lifecycle.enter()?;
+        let permit = self.writer_queue.acquire(deadline)?;
+        let connection = self
+            .writer
+            .lock()
+            .map_err(|_| LiliaError::new(ErrorCode::Storage, "database lock poisoned", false))?;
         Ok(WriterGuard {
             connection,
             _permit: Some(permit),
@@ -596,14 +1026,13 @@ impl Database {
         })
     }
 
-    pub(crate) fn read_lock(&self) -> Result<WriterGuard<'_>> {
-        if self.resources.readers.is_empty() {
-            return self.writer_lock(None);
+    pub(crate) fn read_lock<'a>(&'a self, lifecycle: &'a Lifecycle) -> Result<WriterGuard<'a>> {
+        if self.readers.is_empty() {
+            return self.lock_writer(lifecycle, None);
         }
-        let operation = self.lifecycle.enter()?;
-        let index = self.resources.next_reader.fetch_add(1, Ordering::Relaxed)
-            % self.resources.readers.len();
-        let connection = self.resources.readers[index].lock().map_err(|_| {
+        let operation = lifecycle.enter()?;
+        let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len();
+        let connection = self.readers[index].lock().map_err(|_| {
             LiliaError::new(ErrorCode::Storage, "read database lock poisoned", false)
         })?;
         Ok(WriterGuard {
@@ -612,12 +1041,16 @@ impl Database {
             _operation: operation,
         })
     }
-}
 
-impl Resources {
     fn close(&self) -> Result<()> {
         // No admitted operations remain. Potentially slow I/O runs on the cleanup
         // thread so the caller's timeout is independent of filesystem progress.
+        let ts_worker = self
+            .ts_worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(ts_worker);
         let worker = self
             .checkpointer
             .lock()
@@ -631,8 +1064,7 @@ impl Resources {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
             {
-                let closed = reader.close().map_err(|(_, error)| LiliaError::from(error));
-                result = result.and(closed);
+                drop(reader);
             }
         }
         if let Some(writer) = self
@@ -641,13 +1073,9 @@ impl Resources {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         {
-            let checkpoint = writer
-                .busy_timeout(Duration::ZERO)
-                .and_then(|()| writer.execute_batch("PRAGMA wal_checkpoint(PASSIVE)"))
-                .map_err(LiliaError::from);
+            let checkpoint = writer.exec("PRAGMA wal_checkpoint(PASSIVE);");
             result = result.and(checkpoint);
-            let closed = writer.close().map_err(|(_, error)| LiliaError::from(error));
-            result = result.and(closed);
+            drop(writer);
         }
         result
     }

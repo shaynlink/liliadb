@@ -40,12 +40,15 @@ fn multi_model_batch(id: &str, val: u8) -> Vec<BatchOperation> {
             id: format!("node_{id}"),
             kind: "service".into(),
             metadata: json!({ "val": val }),
+            doc_space: None,
+            doc_id: None,
         },
         BatchOperation::GraphAddEdge {
             graph: "chaos_graph".into(),
             source: format!("node_{id}"),
             target: "gateway".into(),
             kind: "routes_to".into(),
+            weight: 1.0,
         },
         BatchOperation::FtsIndex {
             collection: "chaos_fts".into(),
@@ -59,11 +62,13 @@ fn multi_model_batch(id: &str, val: u8) -> Vec<BatchOperation> {
 #[test]
 #[ignore = "subprocess helper for crash testing"]
 fn chaos_child_worker() {
+    eprintln!("DEBUG: chaos_child_worker start");
     let path_str = std::env::var("CHAOS_DB_PATH").expect("CHAOS_DB_PATH missing");
     let scenario = std::env::var("CHAOS_SCENARIO").expect("CHAOS_SCENARIO missing");
     let path = PathBuf::from(path_str);
-
+    eprintln!("DEBUG: opening db at {:?}", path);
     let db = Database::open(DatabaseOptions::durable(&path)).expect("open durable db in child");
+    eprintln!("DEBUG: opened db successfully");
 
     match scenario.as_str() {
         "multimodel_uncommitted" => {
@@ -73,6 +78,8 @@ fn chaos_child_worker() {
                 id: "gateway".into(),
                 kind: "gateway".into(),
                 metadata: json!({ "cluster": "alpha" }),
+                doc_space: None,
+                doc_id: None,
             }])
             .unwrap();
 
@@ -122,6 +129,7 @@ fn chaos_child_worker() {
                         id,
                         kind,
                         metadata,
+                        ..
                     } => {
                         let meta_str = serde_json::to_string(metadata).unwrap();
                         tx.execute(
@@ -135,6 +143,7 @@ fn chaos_child_worker() {
                         source,
                         target,
                         kind,
+                        ..
                     } => {
                         tx.execute(
                             "INSERT INTO _lilia_graph_edges(graph, source, target, kind) VALUES(?1, ?2, ?3, ?4)",
@@ -205,6 +214,8 @@ fn chaos_child_worker() {
                 id: "gateway".into(),
                 kind: "gateway".into(),
                 metadata: json!({ "cluster": "alpha" }),
+                doc_space: None,
+                doc_id: None,
             }])
             .unwrap();
 
@@ -586,11 +597,9 @@ fn test_enospc_batch_rollback_and_healing() {
     // Restrict max page quota to simulate out-of-disk condition
     {
         let writer = db.lock_writer().unwrap();
-        let current_pages: u32 = writer
-            .query_row("PRAGMA page_count", [], |row| row.get(0))
-            .unwrap();
+        let current_pages = writer.pragma_query_int("page_count").unwrap();
         writer
-            .pragma_update(None, "max_page_count", current_pages + 1)
+            .pragma_update("max_page_count", current_pages + 1)
             .unwrap();
     }
 
@@ -621,9 +630,7 @@ fn test_enospc_batch_rollback_and_healing() {
     // SIMULATE DISK SPACE RESTORATION (expand quota)
     {
         let writer = db.lock_writer().unwrap();
-        writer
-            .pragma_update(None, "max_page_count", 1_000_000)
-            .unwrap();
+        writer.pragma_update("max_page_count", 1_000_000).unwrap();
     }
 
     // Engine immediately heals and accepts new batches without restart

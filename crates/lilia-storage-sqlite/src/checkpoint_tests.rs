@@ -20,10 +20,9 @@ fn wait_stats(
     }
 }
 
-fn setup(path: &Path) -> Connection {
-    let connection = Connection::open(path).unwrap();
-    connection.busy_timeout(Duration::from_millis(50)).unwrap();
-    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE data(value); PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+fn setup(path: &Path) -> NativeConnection {
+    let connection = NativeConnection::open(path, "NORMAL", 0, 50).unwrap();
+    connection.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE data(value); PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     connection
 }
 
@@ -41,9 +40,7 @@ fn interval_flushes_small_wal_without_new_notifications() {
         "FULL",
     )
     .unwrap();
-    connection
-        .execute("INSERT INTO data VALUES(1)", [])
-        .unwrap();
+    connection.exec("INSERT INTO data VALUES(1)").unwrap();
     let stats = wait_stats(&service, |stats| {
         stats.log_frames > 0 && stats.log_frames == stats.checkpointed_frames
     });
@@ -60,7 +57,7 @@ fn threshold_uses_outstanding_frames_not_allocated_file_length() {
     let path = directory.path().join("db.lilia");
     let connection = setup(&path);
     connection
-        .execute("INSERT INTO data VALUES(zeroblob(32768))", [])
+        .exec("INSERT INTO data VALUES(zeroblob(32768))")
         .unwrap();
     assert!(maybe_checkpoint(&connection, 4096, 1, false)
         .unwrap()
@@ -81,11 +78,9 @@ fn reader_starvation_does_not_block_writes_and_retries_on_interval() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db.lilia");
     let connection = setup(&path);
-    let reader = Connection::open(&path).unwrap();
-    reader.execute_batch("BEGIN; SELECT * FROM data;").unwrap();
-    connection
-        .execute("INSERT INTO data VALUES(1)", [])
-        .unwrap();
+    let reader = NativeConnection::open(&path, "NORMAL", 0, 50).unwrap();
+    reader.exec("BEGIN; SELECT * FROM data;").unwrap();
+    connection.exec("INSERT INTO data VALUES(1)").unwrap();
     let service = Checkpointer::start(
         &path,
         CheckpointPolicy {
@@ -96,16 +91,14 @@ fn reader_starvation_does_not_block_writes_and_retries_on_interval() {
     )
     .unwrap();
     wait_stats(&service, |stats| stats.incomplete > 0);
-    connection
-        .execute("INSERT INTO data VALUES(2)", [])
-        .unwrap();
-    reader.execute_batch("ROLLBACK").unwrap();
+    connection.exec("INSERT INTO data VALUES(2)").unwrap();
+    reader.exec("ROLLBACK").unwrap();
     wait_stats(&service, |stats| {
         stats.log_frames > 0 && stats.log_frames == stats.checkpointed_frames
     });
     assert_eq!(
         connection
-            .query_row("SELECT count(*) FROM data", [], |row| row.get::<_, i64>(0))
+            .pragma_query_int("SELECT count(*) FROM data")
             .unwrap(),
         2
     );
@@ -155,7 +148,7 @@ fn engine_disables_commit_checkpoint_and_notifies_background_worker() {
         database
             .lock_writer()
             .unwrap()
-            .query_row("PRAGMA wal_autocheckpoint", [], |row| row.get::<_, i64>(0))
+            .pragma_query_int("PRAGMA wal_autocheckpoint")
             .unwrap(),
         0
     );

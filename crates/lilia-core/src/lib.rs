@@ -1,13 +1,32 @@
 mod codec;
+pub mod compression;
 mod error;
+pub mod geo;
+pub mod hnsw;
+pub mod json_patch;
+pub mod quantization;
+pub mod timeseries;
 mod types;
 mod version;
 
 pub use codec::{Aes256GcmCodec, IdentityCodec, ValueCodec};
+pub use compression::{compress_bytes, decompress_bytes};
 pub use error::{ErrorCode, LiliaError, Result};
+pub use geo::{
+    circle_to_geopoly_json, coords_to_geopoly_json, haversine_distance_meters, GeofenceMatch,
+    GpsPoint, EARTH_RADIUS_METERS,
+};
+pub use hnsw::{HnswIndex, HnswNode};
+pub use timeseries::{
+    compress_timeseries, decompress_timeseries, downsample_points, pattern_matches, BitReader,
+    BitWriter, DownsampleAggregation, TimeSeriesLifecyclePolicy, TimeSeriesPoint,
+    TimeSeriesRetentionRule, TimeSeriesRetentionStats, TimeSeriesStats,
+};
 pub use types::{
-    BatchOperation, DatabaseEvent, Direction, Durability, FtsHit, GraphEdge, GraphNode, JsonEntry,
-    JsonIndexInfo, KvEntry, MutationResult, SqlQueryResult,
+    BatchOperation, CentralityType, ComponentType, DatabaseEvent, Direction, Durability, FtsHit,
+    GraphEdge, GraphNode, HnswConfig, HybridHit, JsonEntry, JsonIndexInfo, JsonRevisionInfo,
+    KvEntry, MutationResult, NodeScore, PathEdge, RedoResult, SqlQueryResult, UndoEntry,
+    UndoResult, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric, Version, WeightedPath,
 };
 
 #[cfg(windows)]

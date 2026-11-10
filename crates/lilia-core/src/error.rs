@@ -57,29 +57,4 @@ impl LiliaError {
     }
 }
 
-#[cfg(feature = "sqlite-errors")]
-impl From<rusqlite::Error> for LiliaError {
-    fn from(error: rusqlite::Error) -> Self {
-        let code = match error {
-            rusqlite::Error::SqliteFailure(ref inner, _) => match inner.code {
-                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked => {
-                    ErrorCode::Busy
-                }
-                rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase => {
-                    ErrorCode::Corrupt
-                }
-                rusqlite::ErrorCode::DiskFull => ErrorCode::DiskFull,
-                rusqlite::ErrorCode::OperationInterrupted => ErrorCode::Timeout,
-                _ => ErrorCode::Storage,
-            },
-            _ => ErrorCode::Storage,
-        };
-        Self::new(
-            code,
-            error.to_string(),
-            code == ErrorCode::Busy || code == ErrorCode::Timeout,
-        )
-    }
-}
-
 pub type Result<T> = std::result::Result<T, LiliaError>;

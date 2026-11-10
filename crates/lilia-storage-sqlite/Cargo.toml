@@ -8,7 +8,7 @@ repository.workspace = true
 
 [features]
 default = []
-bench-bin = ["dep:clap"]
+bench-bin = ["dep:clap", "dep:rusqlite"]
 
 [[bin]]
 name = "lilia_bench"
@@ -21,18 +21,18 @@ path = "src/bin/bench_rusqlite.rs"
 required-features = ["bench-bin"]
 
 [dependencies]
-lilia-core = { path = "../lilia-core", features = ["sqlite-errors"] }
+lilia-core = { path = "../lilia-core" }
+lilia-sqlite-native = { path = "../lilia-sqlite-native" }
 base64.workspace = true
 clap = { workspace = true, features = ["derive"], optional = true }
 hex.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.48.0", default-features = false, features = ["sync"] }
 uuid.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-lilia-sqlite-native = { path = "../lilia-sqlite-native" }
 tempfile = "3.27.0"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
@@ -41,6 +41,7 @@ js-sys = "0.3"
 
 [dev-dependencies]
 criterion.workspace = true
+rusqlite.workspace = true
 
 [[bench]]
 name = "storage"

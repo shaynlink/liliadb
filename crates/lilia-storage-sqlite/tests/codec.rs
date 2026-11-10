@@ -32,7 +32,13 @@ fn codec_encrypts_kv_and_json_at_rest() {
     let options = DatabaseOptions::durable(&db_path).with_codec(codec.clone());
     let db = Database::open(options).expect("open database with codec");
 
-    // 1. Write KV and JSON
+    // 1. Write KV, JSON and Vector
+    let secret_vec = vec![0.123f32, -0.456f32, 0.789f32];
+    let mut vec_bytes = Vec::new();
+    for f in &secret_vec {
+        vec_bytes.extend_from_slice(&f.to_le_bytes());
+    }
+
     db.batch(&[
         BatchOperation::KvSet {
             namespace: "secrets".into(),
@@ -50,6 +56,13 @@ fn codec_encrypts_kv_and_json_at_rest() {
             }),
             if_version: None,
         },
+        BatchOperation::VectorSet {
+            collection: "biometrics".into(),
+            id: "face_1".into(),
+            dim: 3,
+            element_type: lilia_core::VectorElementType::Float32,
+            vector: vec_bytes.clone(),
+        },
     ])
     .expect("batch insert");
 
@@ -59,6 +72,28 @@ fn codec_encrypts_kv_and_json_at_rest() {
         .expect("kv_get")
         .expect("exists");
     assert_eq!(kv_val.value, b"sk-super-secret-12345");
+
+    let vec_val = db
+        .vector_get("biometrics", "face_1")
+        .expect("vector_get")
+        .expect("exists");
+    assert_eq!(vec_val.0, 3);
+    assert_eq!(vec_val.1, lilia_core::VectorElementType::Float32);
+    assert_eq!(vec_val.2, vec_bytes);
+
+    let vec_hits = db
+        .vector_search(
+            "biometrics",
+            &vec_bytes,
+            3,
+            lilia_core::VectorElementType::Float32,
+            lilia_core::VectorMetric::Cosine,
+            1,
+        )
+        .expect("vector_search");
+    assert_eq!(vec_hits.len(), 1);
+    assert_eq!(vec_hits[0].id, "face_1");
+    assert!(vec_hits[0].distance < 1e-6);
 
     let kv_scan = db.kv_scan("secrets", None, 10).expect("kv_scan");
     assert_eq!(kv_scan.len(), 1);
@@ -106,4 +141,16 @@ fn codec_encrypts_kv_and_json_at_rest() {
     assert_eq!(raw_envelope["$codec"], "rot13");
     assert!(raw_envelope["$data"].is_string());
     assert!(!raw_json_str.contains("secret-key-999"));
+
+    // Verify Vector blob is encoded at rest
+    let raw_vec: Vec<u8> = raw_conn
+        .query_row(
+            "SELECT vector FROM _lilia_vectors WHERE collection = 'biometrics' AND id = 'face_1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query raw vector");
+    assert_ne!(raw_vec, vec_bytes);
+    let decoded_vec = codec.decode(&raw_vec).expect("decode raw vector");
+    assert_eq!(decoded_vec, vec_bytes);
 }

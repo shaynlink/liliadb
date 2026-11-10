@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
-use rusqlite::params;
+use lilia_sqlite_native::StmtSlot;
 
 use crate::storage::{normalize_limit, validate_name};
 use crate::Database;
@@ -11,15 +11,21 @@ impl Database {
         validate_name("collection", collection)?;
         validate_name("doc_id", doc_id)?;
         let mut writer = self.lock_writer()?;
-        let tx = writer.transaction()?;
-        tx.execute(
-            "DELETE FROM _lilia_fts WHERE collection = ?1 AND doc_id = ?2",
-            params![collection, doc_id],
-        )?;
-        tx.execute(
-            "INSERT INTO _lilia_fts(collection, doc_id, content) VALUES(?1, ?2, ?3)",
-            params![collection, doc_id, content],
-        )?;
+        let mut tx = writer.transaction()?;
+        let stmt_del = tx.slot(StmtSlot::FtsIndexDelete)?;
+        stmt_del.reset()?;
+        stmt_del.bind_text_static(1, collection)?;
+        stmt_del.bind_text_static(2, doc_id)?;
+        stmt_del.step()?;
+        stmt_del.reset()?;
+
+        let stmt_ins = tx.slot(StmtSlot::FtsIndexInsert)?;
+        stmt_ins.reset()?;
+        stmt_ins.bind_text_static(1, collection)?;
+        stmt_ins.bind_text_static(2, doc_id)?;
+        stmt_ins.bind_text_static(3, content)?;
+        stmt_ins.step()?;
+        stmt_ins.reset()?;
         tx.commit()?;
         Ok(())
     }
@@ -27,22 +33,26 @@ impl Database {
     pub fn fts_delete(&self, collection: &str, doc_id: &str) -> Result<bool> {
         validate_name("collection", collection)?;
         validate_name("doc_id", doc_id)?;
-        let writer = self.lock_writer()?;
-        let mut stmt = writer
-            .prepare_cached("DELETE FROM _lilia_fts WHERE collection = ?1 AND doc_id = ?2")?;
-        let deleted = stmt.execute(params![collection, doc_id])? > 0;
+        let mut writer = self.lock_writer()?;
+        let stmt = writer.slot(StmtSlot::FtsIndexDelete)?;
+        stmt.reset()?;
+        stmt.bind_text_static(1, collection)?;
+        stmt.bind_text_static(2, doc_id)?;
+        stmt.step()?;
+        stmt.reset()?;
+        let deleted = writer.changes() > 0;
         Ok(deleted)
     }
 
     pub fn fts_search(&self, collection: &str, query: &str, limit: u32) -> Result<Vec<FtsHit>> {
         validate_name("collection", collection)?;
         let conn = self.read_lock()?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT doc_id, snippet(_lilia_fts, 2, '<b>', '</b>', '...', 32), rank
-             FROM _lilia_fts
-             WHERE collection = ?1 AND _lilia_fts MATCH ?2
-             ORDER BY rank
-             LIMIT ?3",
+        let mut stmt = conn.prepare(
+            "SELECT doc_id, snippet(_lilia_fts, 2, '<b>', '</b>', '...', 32), rank \
+             FROM _lilia_fts \
+             WHERE collection = ?1 AND _lilia_fts MATCH ?2 \
+             ORDER BY rank \
+             LIMIT ?3;",
         )?;
         let match_query = if query.contains(':')
             || query.contains('"')
@@ -61,20 +71,19 @@ impl Database {
             }
             tokens.join(" ")
         };
-        let rows = stmt.query_map(
-            params![collection, match_query, normalize_limit(limit)],
-            |r| {
-                Ok(FtsHit {
-                    collection: collection.to_owned(),
-                    doc_id: r.get(0)?,
-                    snippet: r.get(1)?,
-                    rank: r.get(2)?,
-                })
-            },
-        )?;
+
+        stmt.bind_text_static(1, collection)?;
+        stmt.bind_text_static(2, &match_query)?;
+        stmt.bind_int64(3, normalize_limit(limit))?;
+
         let mut hits = Vec::new();
-        for r in rows {
-            hits.push(r?);
+        while stmt.step()? {
+            hits.push(FtsHit {
+                collection: collection.to_owned(),
+                doc_id: stmt.column_text(0).to_string(),
+                snippet: stmt.column_text(1).to_string(),
+                rank: stmt.column_double(2),
+            });
         }
         Ok(hits)
     }
