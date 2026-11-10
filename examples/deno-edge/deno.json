@@ -1,8 +1,0 @@
-{
-  "tasks": {
-    "start": "deno run --allow-read --allow-net main.ts"
-  },
-  "imports": {
-    "@liliadb/wasm": "../../packages/wasm/dist/index.js"
-  }
-}
