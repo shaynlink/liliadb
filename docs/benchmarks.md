@@ -1,10 +1,10 @@
 # Official Performance Benchmarks & Calibrated Metrics
 
-**Date**: 2026-10-27  
+**Date**: 2026-11-10  
 **Platform**: Darwin 25.6.0 (arm64)  
 **CPU**: Apple M3 Max (14 cores)  
 **Node.js**: v26.5.0  
-**Engine**: LiliaDB v0.1.0-alpha.2 - v0.1.0-alpha.4 (SQLite engine, WAL, Durability::Durable)
+**Engine**: LiliaDB v0.1.0-alpha.7 (SQLite engine, WAL, Durability::Durable)
 
 ---
 
@@ -26,30 +26,36 @@ Metrics are reported across two workloads:
 
 | Surface | Security Codec | Workload | Batch Size | Throughput (ops/sec) | Latency $p_{50}$ | Latency $p_{95}$ | Latency $p_{99}$ | Mean Latency | Disk Size |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Rust Native Embedded** | `cleartext` | 10,000 | 1 | **8,380** | 85.17 µs | 199.89 µs | 266.42 µs | 119.02 µs | 3280 KB |
-| **Rust Native Embedded** | `aes-256-gcm` | 10,000 | 1 | **7,652** | 66.21 µs | 363.30 µs | 1221.34 µs | 130.34 µs | 3636 KB |
-| **Node.js (Node-API) Embedded** | `cleartext` | 10,000 | 1 | **4,034** | 216.46 µs | 365.00 µs | 628.80 µs | 246.46 µs | 3232 KB |
-| **Node.js (Node-API) Embedded** | `aes-256-gcm` | 10,000 | 1 | **3,896** | 214.23 µs | 318.97 µs | 641.84 µs | 255.29 µs | 3232 KB |
-| **Daemon via IPC (Socket / Pipe)** | `cleartext` | 10,000 | 1 | **5,711** | 155.23 µs | 258.67 µs | 509.61 µs | 173.98 µs | 105621 KB |
-| **Daemon via IPC (Socket / Pipe)** | `aes-256-gcm` | 10,000 | 1 | **5,520** | 162.79 µs | 281.00 µs | 399.46 µs | 180.02 µs | 116537 KB |
-| **Daemon via HTTP Loopback** | `cleartext` | 10,000 | 1 | **4,519** | 161.96 µs | 281.80 µs | 375.02 µs | 220.23 µs | 105621 KB |
-| **Daemon via HTTP Loopback** | `aes-256-gcm` | 10,000 | 1 | **4,984** | 158.83 µs | 246.59 µs | 367.47 µs | 199.66 µs | 116537 KB |
-| **Rust Native Embedded** | `cleartext` | 10,000 | 100 | **158,192** | 3.51 µs | 4.23 µs | 89.10 µs | 6.14 µs | 3280 KB |
-| **Rust Native Embedded** | `aes-256-gcm` | 10,000 | 100 | **75,563** | 5.94 µs | 31.78 µs | 111.40 µs | 13.04 µs | 3636 KB |
-| **Node.js (Node-API) Embedded** | `cleartext` | 10,000 | 100 | **11,340** | 72.93 µs | 164.69 µs | 278.61 µs | 87.64 µs | 3232 KB |
-| **Node.js (Node-API) Embedded** | `aes-256-gcm` | 10,000 | 100 | **12,966** | 75.52 µs | 88.61 µs | 111.93 µs | 76.63 µs | 3232 KB |
-| **Daemon via IPC (Socket / Pipe)** | `cleartext` | 10,000 | 100 | **99,351** | 8.68 µs | 14.92 µs | 23.54 µs | 9.56 µs | 6582 KB |
-| **Daemon via IPC (Socket / Pipe)** | `aes-256-gcm` | 10,000 | 100 | **72,174** | 11.02 µs | 18.76 µs | 32.54 µs | 13.44 µs | 7254 KB |
-| **Daemon via HTTP Loopback** | `cleartext` | 10,000 | 100 | **116,798** | 7.89 µs | 10.74 µs | 11.29 µs | 8.21 µs | 6582 KB |
-| **Daemon via HTTP Loopback** | `aes-256-gcm` | 10,000 | 100 | **86,669** | 10.95 µs | 12.59 µs | 13.16 µs | 11.14 µs | 7254 KB |
-| **Rust Native Embedded** | `cleartext` | 100,000 | 500 | **281,016** | 3.20 µs | 4.33 µs | 5.33 µs | 3.40 µs | 31292 KB |
-| **Rust Native Embedded** | `aes-256-gcm` | 100,000 | 500 | **152,027** | 5.65 µs | 10.28 µs | 19.09 µs | 6.41 µs | 34760 KB |
-| **Node.js (Node-API) Embedded** | `cleartext` | 100,000 | 500 | **13,507** | 73.59 µs | 84.83 µs | 88.29 µs | 73.56 µs | 31092 KB |
-| **Node.js (Node-API) Embedded** | `aes-256-gcm` | 100,000 | 500 | **14,621** | 67.86 µs | 74.96 µs | 80.31 µs | 68.03 µs | 31092 KB |
-| **Daemon via IPC (Socket / Pipe)** | `cleartext` | 100,000 | 500 | **161,154** | 5.36 µs | 8.72 µs | 11.05 µs | 5.82 µs | 65240 KB |
-| **Daemon via IPC (Socket / Pipe)** | `aes-256-gcm` | 100,000 | 500 | **123,642** | 7.38 µs | 9.85 µs | 12.89 µs | 7.71 µs | 69870 KB |
-| **Daemon via HTTP Loopback** | `cleartext` | 100,000 | 500 | **171,051** | 5.42 µs | 6.92 µs | 7.81 µs | 5.60 µs | 65240 KB |
-| **Daemon via HTTP Loopback** | `aes-256-gcm` | 100,000 | 500 | **115,644** | 8.08 µs | 10.41 µs | 15.14 µs | 8.38 µs | 69870 KB |
+| **Rust Native Embedded** | `cleartext` | 10,000 | 1 | **5,466** | 56.27 µs | 1135.40 µs | 3121.45 µs | 182.71 µs | 3280 KB |
+| **Rust Native Embedded** | `aes-256-gcm` | 10,000 | 1 | **5,693** | 54.17 µs | 1147.44 µs | 1833.49 µs | 175.41 µs | 3636 KB |
+| **Node.js (Node-API) Embedded** | `cleartext` | 10,000 | 1 | **7,455** | 75.79 µs | 183.52 µs | 1700.21 µs | 133.47 µs | 3248 KB |
+| **Node.js (Node-API) Embedded** | `aes-256-gcm` | 10,000 | 1 | **8,595** | 77.29 µs | 173.17 µs | 943.97 µs | 115.79 µs | 3616 KB |
+| **Node.js (Node-API Sync) Embedded** | `cleartext` | 10,000 | 1 | **9,799** | 59.58 µs | 144.88 µs | 1453.57 µs | 101.49 µs | 3248 KB |
+| **Node.js (Node-API Sync) Embedded** | `aes-256-gcm` | 10,000 | 1 | **8,489** | 62.25 µs | 157.18 µs | 1197.93 µs | 117.29 µs | 3616 KB |
+| **Daemon via IPC (Socket / Pipe)** | `cleartext` | 10,000 | 1 | **7,519** | 101.29 µs | 172.13 µs | 205.71 µs | 132.37 µs | 105621 KB |
+| **Daemon via IPC (Socket / Pipe)** | `aes-256-gcm` | 10,000 | 1 | **6,634** | 105.08 µs | 195.96 µs | 243.09 µs | 150.11 µs | 116537 KB |
+| **Daemon via HTTP Loopback** | `cleartext` | 10,000 | 1 | **7,075** | 109.92 µs | 193.39 µs | 241.76 µs | 140.66 µs | 105621 KB |
+| **Daemon via HTTP Loopback** | `aes-256-gcm` | 10,000 | 1 | **7,650** | 111.83 µs | 185.83 µs | 218.96 µs | 130.09 µs | 116537 KB |
+| **Rust Native Embedded** | `cleartext` | 10,000 | 100 | **172,503** | 4.61 µs | 7.16 µs | 23.10 µs | 5.70 µs | 3280 KB |
+| **Rust Native Embedded** | `aes-256-gcm` | 10,000 | 100 | **133,957** | 6.01 µs | 15.84 µs | 26.39 µs | 7.37 µs | 3636 KB |
+| **Node.js (Node-API) Embedded** | `cleartext` | 10,000 | 100 | **186,685** | 4.96 µs | 5.87 µs | 6.90 µs | 5.08 µs | 3248 KB |
+| **Node.js (Node-API) Embedded** | `aes-256-gcm` | 10,000 | 100 | **129,278** | 6.93 µs | 10.65 µs | 15.71 µs | 7.49 µs | 3616 KB |
+| **Node.js (Node-API Sync) Embedded** | `cleartext` | 10,000 | 100 | **207,250** | 4.47 µs | 4.94 µs | 5.35 µs | 4.53 µs | 3248 KB |
+| **Node.js (Node-API Sync) Embedded** | `aes-256-gcm` | 10,000 | 100 | **146,980** | 6.44 µs | 7.11 µs | 8.05 µs | 6.54 µs | 3616 KB |
+| **Daemon via IPC (Socket / Pipe)** | `cleartext` | 10,000 | 100 | **172,747** | 5.34 µs | 6.37 µs | 7.25 µs | 5.49 µs | 6582 KB |
+| **Daemon via IPC (Socket / Pipe)** | `aes-256-gcm` | 10,000 | 100 | **119,510** | 7.65 µs | 9.97 µs | 15.20 µs | 8.10 µs | 7254 KB |
+| **Daemon via HTTP Loopback** | `cleartext` | 10,000 | 100 | **149,918** | 6.30 µs | 7.19 µs | 7.86 µs | 6.40 µs | 6582 KB |
+| **Daemon via HTTP Loopback** | `aes-256-gcm` | 10,000 | 100 | **114,737** | 8.37 µs | 8.89 µs | 9.61 µs | 8.42 µs | 7254 KB |
+| **Rust Native Embedded** | `cleartext` | 100,000 | 500 | **298,308** | 3.23 µs | 3.73 µs | 3.92 µs | 3.28 µs | 31292 KB |
+| **Rust Native Embedded** | `aes-256-gcm` | 100,000 | 500 | **169,172** | 5.62 µs | 6.63 µs | 10.04 µs | 5.84 µs | 34760 KB |
+| **Node.js (Node-API) Embedded** | `cleartext` | 100,000 | 500 | **235,520** | 3.79 µs | 5.06 µs | 7.38 µs | 3.95 µs | 31108 KB |
+| **Node.js (Node-API) Embedded** | `aes-256-gcm` | 100,000 | 500 | **147,688** | 6.16 µs | 7.66 µs | 10.09 µs | 6.52 µs | 34736 KB |
+| **Node.js (Node-API Sync) Embedded** | `cleartext` | 100,000 | 500 | **256,193** | 3.53 µs | 4.14 µs | 5.15 µs | 3.62 µs | 31108 KB |
+| **Node.js (Node-API Sync) Embedded** | `aes-256-gcm` | 100,000 | 500 | **165,873** | 5.65 µs | 6.39 µs | 9.01 µs | 5.78 µs | 34736 KB |
+| **Daemon via IPC (Socket / Pipe)** | `cleartext` | 100,000 | 500 | **196,967** | 4.48 µs | 6.50 µs | 9.43 µs | 4.78 µs | 65240 KB |
+| **Daemon via IPC (Socket / Pipe)** | `aes-256-gcm` | 100,000 | 500 | **144,427** | 6.35 µs | 8.28 µs | 11.06 µs | 6.64 µs | 69870 KB |
+| **Daemon via HTTP Loopback** | `cleartext` | 100,000 | 500 | **203,038** | 4.59 µs | 5.34 µs | 6.15 µs | 4.70 µs | 65240 KB |
+| **Daemon via HTTP Loopback** | `aes-256-gcm` | 100,000 | 500 | **143,820** | 6.55 µs | 7.60 µs | 9.12 µs | 6.73 µs | 69870 KB |
 
 ---
 
@@ -59,18 +65,21 @@ LiliaDB provides hardware-accelerated AES-256-GCM authenticated encryption at re
 
 | Surface | Workload | Batch Size | Cleartext Throughput | AES-256 Throughput | Throughput Impact | Latency $p_{50}$ Overhead | Disk Growth |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Rust Native Embedded** | 10,000 | 1 | 8,380 op/s | 7,652 op/s | **-8.7%** | -18.96 µs (-22.3%) | 10.9% |
-| **Node.js (Node-API) Embedded** | 10,000 | 1 | 4,034 op/s | 3,896 op/s | **-3.4%** | -2.23 µs (-1.0%) | 0.0% |
-| **Daemon via IPC (Socket / Pipe)** | 10,000 | 1 | 5,711 op/s | 5,520 op/s | **-3.3%** | +7.56 µs (+4.9%) | 10.3% |
-| **Daemon via HTTP Loopback** | 10,000 | 1 | 4,519 op/s | 4,984 op/s | **10.3%** | -3.13 µs (-1.9%) | 10.3% |
-| **Rust Native Embedded** | 10,000 | 100 | 158,192 op/s | 75,563 op/s | **-52.2%** | +2.44 µs (+69.5%) | 10.9% |
-| **Node.js (Node-API) Embedded** | 10,000 | 100 | 11,340 op/s | 12,966 op/s | **14.3%** | +2.59 µs (+3.6%) | 0.0% |
-| **Daemon via IPC (Socket / Pipe)** | 10,000 | 100 | 99,351 op/s | 72,174 op/s | **-27.4%** | +2.34 µs (+26.9%) | 10.2% |
-| **Daemon via HTTP Loopback** | 10,000 | 100 | 116,798 op/s | 86,669 op/s | **-25.8%** | +3.06 µs (+38.8%) | 10.2% |
-| **Rust Native Embedded** | 100,000 | 500 | 281,016 op/s | 152,027 op/s | **-45.9%** | +2.45 µs (+76.5%) | 11.1% |
-| **Node.js (Node-API) Embedded** | 100,000 | 500 | 13,507 op/s | 14,621 op/s | **8.2%** | -5.73 µs (-7.8%) | 0.0% |
-| **Daemon via IPC (Socket / Pipe)** | 100,000 | 500 | 161,154 op/s | 123,642 op/s | **-23.3%** | +2.02 µs (+37.6%) | 7.1% |
-| **Daemon via HTTP Loopback** | 100,000 | 500 | 171,051 op/s | 115,644 op/s | **-32.4%** | +2.67 µs (+49.2%) | 7.1% |
+| **Rust Native Embedded** | 10,000 | 1 | 5,466 op/s | 5,693 op/s | **4.2%** | -2.10 µs (-3.7%) | 10.9% |
+| **Node.js (Node-API) Embedded** | 10,000 | 1 | 7,455 op/s | 8,595 op/s | **15.3%** | +1.50 µs (+2.0%) | 11.3% |
+| **Node.js (Node-API Sync) Embedded** | 10,000 | 1 | 9,799 op/s | 8,489 op/s | **-13.4%** | +2.67 µs (+4.5%) | 11.3% |
+| **Daemon via IPC (Socket / Pipe)** | 10,000 | 1 | 7,519 op/s | 6,634 op/s | **-11.8%** | +3.79 µs (+3.7%) | 10.3% |
+| **Daemon via HTTP Loopback** | 10,000 | 1 | 7,075 op/s | 7,650 op/s | **8.1%** | +1.92 µs (+1.7%) | 10.3% |
+| **Rust Native Embedded** | 10,000 | 100 | 172,503 op/s | 133,957 op/s | **-22.3%** | +1.40 µs (+30.3%) | 10.9% |
+| **Node.js (Node-API) Embedded** | 10,000 | 100 | 186,685 op/s | 129,278 op/s | **-30.8%** | +1.97 µs (+39.7%) | 11.3% |
+| **Node.js (Node-API Sync) Embedded** | 10,000 | 100 | 207,250 op/s | 146,980 op/s | **-29.1%** | +1.97 µs (+44.1%) | 11.3% |
+| **Daemon via IPC (Socket / Pipe)** | 10,000 | 100 | 172,747 op/s | 119,510 op/s | **-30.8%** | +2.31 µs (+43.3%) | 10.2% |
+| **Daemon via HTTP Loopback** | 10,000 | 100 | 149,918 op/s | 114,737 op/s | **-23.5%** | +2.06 µs (+32.7%) | 10.2% |
+| **Rust Native Embedded** | 100,000 | 500 | 298,308 op/s | 169,172 op/s | **-43.3%** | +2.39 µs (+74.1%) | 11.1% |
+| **Node.js (Node-API) Embedded** | 100,000 | 500 | 235,520 op/s | 147,688 op/s | **-37.3%** | +2.37 µs (+62.5%) | 11.7% |
+| **Node.js (Node-API Sync) Embedded** | 100,000 | 500 | 256,193 op/s | 165,873 op/s | **-35.3%** | +2.12 µs (+60.2%) | 11.7% |
+| **Daemon via IPC (Socket / Pipe)** | 100,000 | 500 | 196,967 op/s | 144,427 op/s | **-26.7%** | +1.87 µs (+41.8%) | 7.1% |
+| **Daemon via HTTP Loopback** | 100,000 | 500 | 203,038 op/s | 143,820 op/s | **-29.2%** | +1.97 µs (+42.9%) | 7.1% |
 
 ---
 
@@ -85,16 +94,3 @@ LiliaDB provides hardware-accelerated AES-256-GCM authenticated encryption at re
 2. **At-Rest Encryption Efficiency**:
    - Hardware-accelerated AES-NI / ARM Crypto instructions ensure AES-256-GCM encryption throughput remains exceptionally high across all surfaces.
    - Strict Poly1305 authentication verification prevents ciphertext tampering at rest without requiring external cipher plugins.
-
----
-
-## 5. Ecosystem & Native SQLite Comparative Benchmarks
-
-For an exhaustive benchmark comparing **LiliaDB** against **SQLite Native (C / Rusqlite)**, and the **Node.js, Bun, and Deno** ecosystems (`better-sqlite3`, `node:sqlite`, `bun:sqlite`, `@db/sqlite`), consult the dedicated report:
-👉 **[Comparative Benchmark: LiliaDB vs Native SQLite & Ecosystems](benchmarks_comparison.md)**
-
-Run the full comparative suite locally anytime via:
-```bash
-pnpm bench:compare
-```
-

@@ -234,6 +234,94 @@ for (const hit of hits) {
 
 ---
 
+### Vector Search & HNSW (`db.vector`)
+
+Native high-dimensional vector storage and approximate nearest neighbor (ANN) search:
+
+```typescript
+// Store vector embedding (Float32, Int8, or 1-bit binary)
+await db.vector.set("catalog", "item_1", [0.15, -0.42, 0.91, 0.05], {
+  elementType: "float32",
+});
+
+// Retrieve vector
+const entry = await db.vector.get("catalog", "item_1");
+console.log("Vector dim:", entry?.dim, entry?.vector);
+
+// HNSW Approximate Nearest Neighbor Search
+const hits = await db.vector.search("catalog", [0.12, -0.40, 0.88, 0.02], {
+  metric: "cosine", // "cosine" | "l2" | "dot" | "hamming"
+  limit: 5,
+});
+for (const hit of hits) {
+  console.log(`Match ${hit.id} (distance: ${hit.distance})`);
+}
+```
+
+---
+
+### Hybrid Search & Reciprocal Rank Fusion (`db.hybrid`)
+
+Atomically combine lexical FTS5 BM25 search with semantic vector search in a single call:
+
+```typescript
+const hybridHits = await db.hybrid.search("catalog", {
+  ftsQuery: "wireless headphones",
+  vector: [0.12, -0.40, 0.88, 0.02],
+  metric: "cosine",
+  rrfK: 60,
+  ftsWeight: 1.0,
+  vectorWeight: 1.0,
+  limit: 10,
+});
+
+for (const hit of hybridHits) {
+  console.log(`${hit.id} - RRF: ${hit.rrfScore.toFixed(4)} (FTS rank: ${hit.ftsRank}, Vec dist: ${hit.vectorDistance})`);
+}
+```
+
+---
+
+### Synchronous Mode (`db.sync`)
+
+Direct low-latency synchronous accessors for embedded Node.js and Bun workloads:
+
+```typescript
+// Synchronous KV
+db.sync.kv.set("cache", "k1", "v1");
+const val = db.sync.kv.get("cache", "k1");
+
+// Synchronous JSON
+db.sync.json.put("users", "u1", { name: "Rayane" });
+const user = db.sync.json.get("users", "u1");
+
+// Synchronous SQL
+const rows = db.sync.sql.query("SELECT * FROM lilia_json WHERE space = ?1", ["users"]);
+```
+
+---
+
+### Vector Quantization Helpers (`quantization`)
+
+Built-in utilities for Int8 scalar quantization and 1-bit binary packing:
+
+```typescript
+import { quantization } from "@liliadb/node";
+
+const floats = [0.15, -0.42, 0.91, 0.05];
+
+// Quantize to Int8 (4x RAM reduction)
+const { quantized, scale } = quantization.toInt8(floats);
+
+// Pack to 1-bit binary (32x RAM reduction)
+const bitPacked = quantization.toBit(floats);
+
+// Fast cosine distance
+const dist = quantization.cosineDistance(floats, [0.10, -0.40, 0.90, 0.0]);
+```
+
+---
+
 ### Declarative SQL Querying (`db.sql`)
 
 LiliaDB exposes structured SQLite views with on-the-fly transparent decryption functions:

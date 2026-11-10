@@ -4,6 +4,29 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 
 ---
 
+## [0.1.0-alpha.7] - 2026-11-10
+
+### Added
+- **Native Vector Search & HNSW (`db.vector`)**:
+  - `db.vector.set()`: Store dense vectors in Float32, Int8, or 1-bit binary formats.
+  - `db.vector.get()`: Retrieve vector dimension, element type, and vector data.
+  - `db.vector.delete()`: Remove vectors from collections.
+  - `db.vector.search()`: Approximate nearest neighbor (ANN) similarity search using Cosine, L2, Dot, or Hamming metrics.
+- **ACID Hybrid Search (`db.hybrid`)**:
+  - `db.hybrid.search()`: Unified reciprocal rank fusion (RRF) combining FTS5 BM25 text rank and HNSW vector distance with configurable weights and $k$ smoothing.
+- **Quantization Utilities**:
+  - `quantization.toInt8()`: Scalar quantization from Float32 to Int8 with scaling factor.
+  - `quantization.toBit()`: 1-bit binary packing for 32x memory compression.
+  - `quantization.cosineDistance()`: High-performance cosine distance calculation.
+- **Synchronous Multimodel Accessors (`db.sync`)**:
+  - Synchronous KV, JSON, SQL, and Batch operations for ultra-low latency embedded usage in Node.js and Bun.
+- **AbortSignal Support**:
+  - Native cancellation support via `options.signal` on all asynchronous queries and streams.
+- **WHATWG ReadableStream Support**:
+  - Export standard web streams for browser and universal streaming environments.
+
+---
+
 ## [0.1.0-alpha.6] - 2026-11-06
 
 ### Added

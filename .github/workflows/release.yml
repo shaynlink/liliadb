@@ -125,7 +125,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: cargo build --target ${{ matrix.target }} -p lilia-node-native -p lilia-cli -p lilia-daemon -p lilia-mcp --release
+      - run: cargo build --target ${{ matrix.target }} -p lilia-node-native -p lilia-cli -p lilia-daemon --release
       - name: Build and stage prebuild package
         shell: bash
         run: node tools/build-prebuilds.mjs --target "${{ matrix.target }}" --pack --skip-build --dest release
@@ -136,12 +136,10 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             cp "target/${{ matrix.target }}/release/lilia.exe" bin-archive/ 2>/dev/null || cp "target/release/lilia.exe" bin-archive/
             cp "target/${{ matrix.target }}/release/lilia-daemon.exe" bin-archive/ 2>/dev/null || cp "target/release/lilia-daemon.exe" bin-archive/
-            cp "target/${{ matrix.target }}/release/lilia-mcp.exe" bin-archive/ 2>/dev/null || cp "target/release/lilia-mcp.exe" bin-archive/
             tar -czf "release/lilia-${{ matrix.artifact }}.tar.gz" -C bin-archive .
           else
             cp "target/${{ matrix.target }}/release/lilia" bin-archive/ 2>/dev/null || cp "target/release/lilia" bin-archive/
             cp "target/${{ matrix.target }}/release/lilia-daemon" bin-archive/ 2>/dev/null || cp "target/release/lilia-daemon" bin-archive/
-            cp "target/${{ matrix.target }}/release/lilia-mcp" bin-archive/ 2>/dev/null || cp "target/release/lilia-mcp" bin-archive/
             tar -czf "release/lilia-${{ matrix.artifact }}.tar.gz" -C bin-archive .
           fi
       - uses: actions/upload-artifact@v4

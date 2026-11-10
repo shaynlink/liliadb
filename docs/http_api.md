@@ -515,6 +515,131 @@ curl -s -X POST http://127.0.0.1:4444/v1/fts/search \
 
 ---
 
+### Vector Embeddings & Hybrid Search Endpoints
+
+High-performance native HNSW vector similarity search and Reciprocal Rank Fusion (RRF) hybrid search.
+
+#### `POST /v1/vector/set`
+Store or update a dense embedding vector in a collection.
+
+**Request:**
+```bash
+curl -s -X POST http://127.0.0.1:4444/v1/vector/set \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collection": "embeddings",
+    "id": "doc_1",
+    "dim": 3,
+    "element_type": "float32",
+    "vector": [0.12, -0.45, 0.88]
+  }'
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "ok": true
+}
+```
+
+#### `POST /v1/vector/get`
+Retrieve a stored vector embedding by collection and identifier.
+
+**Request:**
+```bash
+curl -s -X POST http://127.0.0.1:4444/v1/vector/get \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collection": "embeddings",
+    "id": "doc_1"
+  }'
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "ok": true,
+  "found": true,
+  "dim": 3,
+  "element_type": "float32",
+  "vector": [0.12, -0.45, 0.88]
+}
+```
+
+#### `POST /v1/vector/search`
+Perform approximate nearest neighbor (ANN) vector search via HNSW with Cosine, L2, Dot, or Hamming metrics.
+
+**Request:**
+```bash
+curl -s -X POST http://127.0.0.1:4444/v1/vector/search \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collection": "embeddings",
+    "vector": [0.10, -0.40, 0.85],
+    "dim": 3,
+    "element_type": "float32",
+    "metric": "cosine",
+    "limit": 5
+  }'
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "ok": true,
+  "hits": [
+    {
+      "collection": "embeddings",
+      "id": "doc_1",
+      "distance": 0.0034
+    }
+  ]
+}
+```
+
+#### `POST /v1/hybrid/search`
+Perform atomic Reciprocal Rank Fusion (RRF) search fusing FTS5 lexical ranking and HNSW semantic vector similarity.
+
+**Request:**
+```bash
+curl -s -X POST http://127.0.0.1:4444/v1/hybrid/search \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collection": "knowledge",
+    "fts_query": "embedded database",
+    "vector": [0.10, -0.40, 0.85],
+    "dim": 3,
+    "metric": "cosine",
+    "rrf_k": 60,
+    "fts_weight": 1.0,
+    "vector_weight": 1.0,
+    "limit": 5
+  }'
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "ok": true,
+  "hits": [
+    {
+      "id": "doc_1",
+      "rrf_score": 0.0328,
+      "fts_rank": 1,
+      "fts_snippet": "LiliaDB delivers local-first <b>embedded</b> <b>database</b> storage.",
+      "vector_rank": 1,
+      "vector_distance": 0.0034
+    }
+  ]
+}
+```
+
+---
+
 ### Real-Time Change Data Capture (SSE Stream)
 
 #### `GET /v1/watch`
@@ -538,6 +663,9 @@ data: {"type":"json_put","space":"users","id":"alice","version":"1","deleted":fa
 
 event: mutation
 data: {"type":"json_delete","space":"users","id":"bob","version":"2","deleted":true}
+
+event: mutation
+data: {"type":"vector_mutated","collection":"embeddings","id":"doc_1","deleted":false}
 ```
 
 ---
@@ -558,6 +686,8 @@ Execute multiple Key/Value, JSON, Graph, and FTS mutations atomically in a singl
 - `graph_remove_edge` (`graph`, `source`, `target`, `kind`)
 - `fts_index` (`collection`, `doc_id`, `content`)
 - `fts_delete` (`collection`, `doc_id`)
+- `vector_set` (`collection`, `id`, `dim`, `element_type`, `vector`)
+- `vector_delete` (`collection`, `id`)
 
 **Request:**
 ```bash

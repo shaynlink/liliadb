@@ -4,7 +4,7 @@
 
 `lilia-core` owns stable contracts and errors. `lilia-storage-sqlite` owns the standard SQLite
 adapter, lifecycle, migrations, transactions, read pool, and writer admission. Neither depends on
-the CLI, Node, daemon, MCP, or plugin loader.
+the CLI, Node, daemon, or plugin loader.
 
 The standard storage adapter is bundled SQLite in WAL mode with `synchronous=FULL`. A process may
 run concurrent reads while writes are serialized by SQLite and the in-process writer mutex. LiliaDB
@@ -28,7 +28,7 @@ MessagePack retains native integer fields, so protocol 1.0 framing is unchanged.
 The SDK uses 64-bit integer encoding/decoding and never routes versions through
 JavaScript `number`.
 
-Human-readable serialization (native JSON, CLI JSON/JSONL, and MCP) now emits
+Human-readable serialization (native JSON and CLI JSON/JSONL) now emits
 canonical decimal strings for `version` and `if_version`, including small values.
 Absent versions remain null. Integer JSON inputs remain accepted for compatibility,
 but clients should send decimal strings to avoid rounding before transmission.
@@ -50,7 +50,6 @@ requires a separate format migration; this transport fix does not perform one.
 - Embedded Node calls `lilia-node-native`; blocking SQLite work runs outside the JavaScript loop.
 - Daemon clients use size-prefixed MessagePack over a Unix socket or Windows named pipe.
 - CLI uses the embedded core and emits human, JSON, or JSONL output.
-- MCP uses stdio and opens only aliases declared by the operator at startup.
 
 The daemon handshake has protocol major/minor `1.0`, a 16 MiB frame limit, per-request UUIDs, a
 random local token stored with user-only permissions, bounded connections, and idle/deadline
@@ -276,12 +275,11 @@ Declarative SQL querying is integrated into LiliaDB's SQLite engine and plugin a
   - Node.js SDK: `db.sql.query<T>()`, `db.sql.raw()`, and `db.sql.execute()`
   - Local Daemon & IPC: `Operation::SqlQuery` and `ResponseValue::Sql`
   - CLI: `lilia sql <QUERY> [--param <P>]` with human ASCII table, JSON, and JSONL output
-  - MCP: `lilia_sql_query` tool
 
 ## Roadmap boundaries
 
 The [shared conformance suite](../tools/conformance/README.md) runs one ordered
-fixture corpus through Rust embedded, Node embedded, daemon, CLI JSON and MCP.
+fixture corpus through Rust embedded, Node embedded, daemon, and CLI JSON.
 CLI execution errors now preserve the structured Lilia error on stderr with exit
 code 1 and no result on stdout; JSON parse failures use `INVALID_INPUT`. Clap's
 command-line usage errors remain separate (exit code 2). Node native errors are
@@ -293,10 +291,38 @@ the same transaction boundary and protecting `_lilia_*` tables.
 ## Real-Time CDC & Event Streaming Architecture
 
 LiliaDB includes a zero-copy Change Data Capture (CDC) event streaming engine:
-- **Transaction Ingestion**: Whenever mutations commit to the SQLite WAL, structured change events (`kv_mutated`, `json_mutated`, `graph_node_mutated`, `graph_edge_mutated`, `fts_mutated`) are generated within the transaction boundary.
+- **Transaction Ingestion**: Whenever mutations commit to the SQLite WAL, structured change events (`kv_mutated`, `json_mutated`, `graph_node_mutated`, `graph_edge_mutated`, `fts_mutated`, `vector_mutated`) are generated within the transaction boundary.
 - **In-Memory Ring Buffer**: Events pass through a bounded, non-blocking broadcast channel to active subscribers without stalling writer transactions.
 - **IPC Streaming Framing**: Over local Unix domain sockets and Windows named pipes, streaming subscriptions use dedicated protocol framing (`RequestPayload::SubscribeWatch`, `ResponsePayload::WatchEvent`) maintaining sub-millisecond dispatch.
 - **HTTP Server-Sent Events (SSE)**: The daemon's HTTP gateway exposes `GET /v1/watch?namespace=<ns>`, allowing any HTTP/SSE client to consume real-time change events without proprietary drivers.
+
+## Le 6ᵉ Modèle : Moteur Vectoriel Natif & Recherche Hybride
+
+Au-delà du KV, JSON, Graphe, FTS5 et SQL, LiliaDB intègre un sous-moteur vectoriel natif de pointe dans `lilia-storage-sqlite` et `lilia-core` :
+
+1. **Indexation HNSW (Hierarchical Navigable Small World) en Rust Natif** :
+   - Multi-couches probabilistes ($P(l) \propto e^{-l / m_L}$ avec $m_L = 1 / \ln(M)$) garantissant une traversée de graphe approximative (ANN) en temps sub-milliseconde $O(\log N)$.
+   - Zéro dépendance C/C++ externe (compilation native directe sur Linux, macOS, Windows, iOS, Android et WebAssembly OPFS).
+   - Persistance relationnelle ACID dans SQLite (`_lilia_hnsw_meta`, `_lilia_hnsw_edges`), synchronisée de manière atomique au commit WAL dans la même transaction que les données KV, JSON ou FTS5.
+   - Routage automatique : si un index HNSW existe sur une collection, `vector_search` bascule automatiquement sur la recherche par faisceau HNSW ; sinon, un scan séquentiel exact (flat scan) sert de repli transparent.
+
+2. **Quantification Scalaire Matérielle (SQ8 / Binary 1-bit) & Re-ranking Coarse-to-Fine** :
+   - Compression symétrique des vecteurs flottants `f32` vers entiers signés `i8` (SQ8, division par 4 de la RAM) ou binaires `1bit` (division par 32 de la RAM, crucial sur montres et mobiles sous profil `ResourceProfile::Constrained`).
+   - Opérations accélérées par le processeur : calcul de produit scalaire entier vectorisé et instructions POPCOUNT (`count_ones` matériel pour la distance de Hamming binaire).
+   - Pipeline de recherche en 2 étapes (*Coarse-to-Fine Re-ranking*) : traversée ultra-rapide de l'index quantifié avec sur-échantillonnage 2x, suivie d'un réordonnancement exact sur les vecteurs `f32` d'origine stockés dans `_lilia_vectors`, combinant débit maximal et 99%+ de précision topologique.
+
+3. **Recherche Hybride ACID (FTS5 + HNSW via RRF)** :
+   - Fusion dans une seule transaction de lecture et un seul snapshot WAL du score lexical BM25 (`_lilia_fts`) et de la similarité cosinus sémantique (HNSW) via l'algorithme Reciprocal Rank Fusion (RRF) :
+     $$RRF(d) = \frac{w_{\text{fts}}}{k + \text{rank}_{\text{fts}}(d)} + \frac{w_{\text{vec}}}{k + \text{rank}_{\text{vec}}(d)}$$
+     avec constante de lissage configurable $k$ (défaut: 60) et pondérations relatives.
+
+4. **Filtrage Combiné Pré-Filtré (Pre-filtered Vector Search)** :
+   - Élimine le problème classique du *post-filtrage* (qui produit des résultats vides si les top candidats HNSW ne satisfont pas les critères).
+   - L'algorithme traverse l'ensemble du graphe pour préserver la navigabilité *small-world*, mais n'admet dans le tas final de résultats que les nœuds validant les filtres de clés secondaires JSON (`vector_search_by_json_index`), de sous-graphes connectés (`vector_search_in_graph_neighbors`) ou de listes de candidats arbitraires (`vector_search_filtered`).
+
+5. **Intégration Déclarative SQL** :
+   - Fonctions scalaires enregistrées : `lilia_vec_distance_cosine`, `lilia_vec_distance_l2`, `lilia_vec_distance_hamming`, `lilia_vec_quantize_sq8`, `lilia_vec_quantize_bit`, `lilia_vec_dimension`, `lilia_vec_to_json`, `lilia_vec_from_json`.
+   - Vues SQL de supervision : `lilia_vectors` (vecteurs déchiffrés à la volée) et `lilia_vector_indexes` (métadonnées des index HNSW actifs).
 
 ## Multi-Runtime Ecosystem (Node.js, Bun, Deno)
 
@@ -304,5 +330,36 @@ The `@liliadb/node` package is engineered for broad compatibility across modern 
 - **Node.js (>=22)**: Fully supports in-process embedded storage via Node-API precompiled binaries and daemon IPC via `node:net`.
 - **Bun (>=1.0)**: Native Node-API support allows Bun to execute both embedded `.node` prebuilds and daemon IPC natively at high throughput.
 - **Deno (>=2.0)**: Supports `npm:@liliadb/node` via Deno's standard Node compatibility layer, connecting over Unix domain sockets with zero external dependencies.
+
+## Spatial Indexing & Geofencing Sub-Engine
+
+Embedded geographic and spatial query engine (`crates/lilia-core/src/geo.rs` and `crates/lilia-storage-sqlite/src/geofence.rs`):
+- **Haversine Distance & Bounding Boxes**: Microsecond spatial calculations and bounding box intersections.
+- **Polygon Containment via SQLite Geopoly**: Native representation of complex geographical boundaries and geofences.
+- **Geofence Breach Event Streams**: Automated evaluation during track point insertion generating real-time entry and exit breach notifications over the CDC bus.
+
+## Time-Series Compression & Retention Sub-Engine
+
+Optimized telemetry and time-series sub-engine (`crates/lilia-core/src/timeseries.rs` and `crates/lilia-storage-sqlite/src/timeseries.rs`):
+- **Gorilla-Style Lossless Compression**: Bit-packed delta-of-delta timestamp encoding paired with XOR floating-point value compression achieving 80–90% disk space reduction for sensor data.
+- **Automated Downsampling & Rollups**: Aggregation windows (`min`, `max`, `avg`, `count`, `sum`) for long-term historical trend analysis.
+- **Configurable Retention Policies**: Background pruning of outdated metric intervals preserving operational storage budgets on constrained edge devices.
+
+## Universal C-ABI FFI (`crates/lilia-ffi`) & Mobile Targets
+
+To provide cross-platform database support without JVM or V8 overhead, `crates/lilia-ffi` delivers a stable C-compatible interface:
+- **Zero-Copy Handle Lifecycle**: Thread-safe pointer wrapping for `Database` instances with synchronized mutex admission.
+- **Apple Ecosystem (`packages/apple-spm`)**: Swift Package Manager module with universal XCFramework support for iOS, macOS, watchOS, and tvOS (`tools/mobile/build-apple.sh`).
+- **Android SDK (`packages/android-sdk`)**: Kotlin bindings with JNI/NDK prebuilts targeting `aarch64-linux-android` and `armv7-linux-androideabi` (`tools/mobile/build-android.sh`).
+- **React Native (`packages/react-native`)**: Native C++ JSI bindings for high-performance direct execution on iOS and Android without bridge serialization bottlenecks.
+- **Flutter (`packages/flutter`)**: Dart FFI plugin delivering direct native execution across mobile platforms.
+
+## Visual Studio Code Extension (`apps/lilia-vscode`)
+
+Official VSCode extension offering developer tooling for local LiliaDB files:
+- Interactive multimodel explorer (inspect KV namespaces, JSON spaces, Graph networks, and FTS collections).
+- SQL query editor with live table preview and schema inspection.
+- Integrated database health and doctor diagnostic tools.
+
 
 

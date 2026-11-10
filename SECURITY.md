@@ -25,7 +25,6 @@ mitigation when available.
 ### 3. IPC & Daemon Authentication
 - **Local Loopback Only**: The daemon binds strictly to local Unix domain sockets, local Windows named pipes (`\\.\pipe\...`), or local loopback HTTP (`127.0.0.1`). Remote pipes and network-exposed IPC endpoints are strictly rejected.
 - **Per-Session Bearer Tokens**: Daemon interactions require a cryptographically random token generated at daemon initialization. Token files are created with private DACLs and verified on every IPC and HTTP request.
-- **MCP Surface Restrictions**: The Model Context Protocol (MCP) server accesses only database aliases explicitly declared via `--database <alias>=<path>` at process launch.
 
 ### 4. Native Plugin Signature & Capability Verification
 - **Cryptographic Signatures**: Native dynamic plugins (`.dylib`, `.so`, `.dll`) packaged with `lilia plugin package` must be cryptographically signed using Ed25519.

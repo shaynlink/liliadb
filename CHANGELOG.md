@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.0-alpha.7] - 2026-11-10
+
+### Added
+- **The 6th Model: Native Vector Engine & HNSW Search (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Pure Rust Hierarchical Navigable Small World (HNSW) graph index with zero external C/C++ dependencies.
+  - Multi-layer probabilistic beam search ($O(\log N)$ ANN traversal) with atomic ACID persistence directly within SQLite WAL transactions (`_lilia_hnsw_meta`, `_lilia_hnsw_edges`, `_lilia_vectors`).
+  - Hardware-accelerated vector quantization: Float32 (exact), Int8 / SQ8 scalar quantization (4x memory reduction), and 1-bit binary packing (32x memory reduction with SIMD/POPCOUNT Hamming distance).
+  - Multiple distance metrics: Cosine similarity, Euclidean distance ($L_2$), Dot product, and Hamming distance.
+  - Pre-filtered vector search bypassing post-filter emptiness: beam traversal constrained via secondary JSON indexes (`vector_search_by_json_index`) and Graph neighborhood constraints (`vector_search_in_graph_neighbors`).
+  - Coarse-to-fine two-stage re-ranking: rapid quantized HNSW beam search candidate retrieval followed by exact $f32$ re-ranking.
+  - Full CLI support (`lilia vector create-index`, `set`, `get`, `delete`, `search`).
+  - Daemon HTTP REST endpoints (`POST /v1/vector/set`, `POST /v1/vector/get`, `POST /v1/vector/search`).
+  - Node.js SDK and WebAssembly SDK integration (`db.vector.set`, `db.vector.get`, `db.vector.delete`, `db.vector.search`).
+
+- **ACID Hybrid Search via Reciprocal Rank Fusion (RRF)**:
+  - Single-query lexical (FTS5 BM25) and semantic (HNSW vector) fusion evaluated inside one transactional read snapshot.
+  - Configurable $k$ smoothing and relative weights ($w_{\text{fts}}, w_{\text{vec}}$).
+  - CLI command `lilia hybrid search` and HTTP endpoint `POST /v1/hybrid/search`.
+  - Node.js SDK & WebAssembly SDK `db.hybrid.search()`.
+
+- **Spatial Indexing & Geofencing Sub-Engine (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Haversine distance calculations and spatial bounding box evaluations.
+  - Native polygon containment via SQLite Geopoly integration.
+  - Automated geofence breach event generation streaming over the CDC bus.
+
+- **Time-Series Sub-Engine with Lossless Compression**:
+  - Gorilla-style delta-of-delta timestamp and XOR floating-point value compression (80–90% reduction on telemetry datasets).
+  - Automated window rollups and aggregations (`min`, `max`, `avg`, `count`, `sum`).
+  - Declarative lifecycle policies (`TimeSeriesLifecyclePolicy`) with multi-tier downsampling rules and automated background retention pruning (`TimeSeriesWorker`).
+
+- **Native Transactional Undo/Redo & Change Tracking (`lilia-sqlite-native`, `lilia-storage-sqlite`)**:
+  - Native VDBE-level change recording using SQLite session extension changesets and compact binary inversion.
+  - Inverted changeset history ring buffer in `_lilia_undo_log` with Deflate compression.
+  - Instant transactional mutations rollback and forward replay (`db.undo()`, `db.redo()`).
+
+- **JSON RFC 6902 Delta History & Temporal Time-Travel (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Keyframe and RFC 6902 JSON Patch delta encoding (`_lilia_json_revisions`) saving up to 85% storage on mutable documents.
+  - Time-travel queries: `db.json_get_at_version()`, `db.json_get_at_timestamp()`.
+  - Full revision timeline inspection and version-to-version diffing: `db.json_history()`, `db.json_diff()`.
+
+- **Universal C-ABI FFI (`crates/lilia-ffi`) & Cross-Platform Mobile Targets**:
+  - Thread-safe C-ABI wrapper for foreign language bindings and embedded targets.
+  - **Apple Ecosystem (`packages/apple-spm`)**: Swift Package Manager module with universal XCFramework build script (`tools/mobile/build-apple.sh`) for iOS, macOS, watchOS, and tvOS.
+  - **Android SDK (`packages/android-sdk`)**: Kotlin bindings with JNI/NDK prebuilds (`tools/mobile/build-android.sh`).
+  - **React Native & Expo (`@liliadb/react-native`)**: High-performance C++ JSI module with zero-serialization overhead.
+  - **Flutter (`packages/flutter`)**: Dart FFI plugin.
+  - Automated GitHub Actions CI workflow for Apple and Android targets (`.github/workflows/mobile-targets.yml`).
+
+- **Official Visual Studio Code Extension (`apps/lilia-vscode`)**:
+  - Multimodel explorer, schema viewer, SQL runner, and database diagnostics inside VSCode.
+
+- **Synchronous Engine Accessors (`db.sync`) & Bun / Deno Compatibility**:
+  - Synchronous low-latency embedded accessors in `@liliadb/node` for embedded Node.js and Bun workloads.
+  - Native Bun compatibility tests and Deno Node-compat verification.
+
+### Changed & Performance
+- **Engine Streamlining & Direct SQLite Amalgamation**:
+  - Bundled SQLite 3.49 amalgamation in `crates/lilia-sqlite-native`, replacing the 600K-line `libsqlite3-sys` fork.
+  - Native SQLite extension loading (`sqlite3ext.h`), online backup API (`sqlite3_backup_*`), and session changeset API.
+  - Codebase cleanup: removed obsolete micro-examples (`examples/`) and standalone `apps/lilia-mcp`.
+- **Calibrated Performance Benchmarks (2026-11-10)**:
+  - Sustained throughput of up to 298k ops/s in Rust native and 203k ops/s over HTTP gateway.
+
+---
+
 ## [0.1.0-alpha.6] - 2026-11-06
 
 ### Added
@@ -108,7 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Binary protocol streaming request framing (`RequestPayload::SubscribeWatch`, `ResponsePayload::WatchEvent`).
 - **Graph Engine & Full-Text Search (FTS5)**:
   - Directed graph representation (`lilia-graph`), adjacency storage, neighborhood traversal (`graphNeighbors`), and transitive reachability analysis (`graphReachability`).
-  - SQLite FTS5 integration with BM25 ranking, snippet generation, and highlighted query matching across CLI, Node SDK, and MCP server.
+  - SQLite FTS5 integration with BM25 ranking, snippet generation, and highlighted query matching across CLI and Node SDK.
 - **Encryption at Rest (AES-256-GCM AEAD)**:
   - Hardware-accelerated native encryption via `plugins/lilia-plugin-codec` protecting KV and JSON values on disk and in WAL frames with zero plaintext leakage.
 - **Declarative SQL Engine**:
@@ -138,5 +203,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial project release with SQLite WAL multi-model engine (KV, JSON).
 - Node-API native bindings in `@liliadb/node`.
-- Standalone CLI (`lilia`), Daemon (`lilia-daemon`), and MCP server (`lilia-mcp`).
+- Standalone CLI (`lilia`) and Daemon (`lilia-daemon`).
 - Conformance test suite with shared 28-fixture oracle.

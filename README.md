@@ -6,34 +6,38 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 LiliaDB is a local-first multimodel embedded & daemon database written in Rust. It provides
-durable Key/Value, JSON documents, Graph, and Full-Text Search through the same SQLite ACID
-transaction boundary, with embedded Rust, WebAssembly (browser OPFS & Edge), Node.js / Bun (C-API), CLI, Daemon, and MCP entry points.
+durable Key/Value, JSON documents, Graph, Full-Text Search (FTS5), Declarative SQL, and Native Vector Search (HNSW + Quantization) with Geofencing and Time-Series through the same SQLite ACID
+transaction boundary, across embedded Rust, WebAssembly (browser OPFS & Edge), Node.js / Bun / Deno (Node-API), Mobile (iOS, Android, React Native, Flutter), CLI, and Daemon entry points.
 
 ---
 
-## Status: v0.1.0-alpha.6
+## Status: v0.1.0-alpha.7
 
-This repository contains the `0.1.0-alpha.6` release featuring:
-- **WebAssembly & OPFS (Origin Private File System)**: `@liliadb/wasm` bringing 100% multimodel database capabilities directly into web browsers (with high-speed OPFS SAHPool zero-copy persistence and dedicated Web Worker bridge) and Edge runtimes (Cloudflare Workers, Deno Deploy, Vercel Edge).
-- **WebAssembly Plugin Sandboxing**: Hardened, fault-isolated Wasmtime/WASI plugin runtime with isolated 32-bit linear memory, CPU fuel metering (`--plugin-fuel-limit`), strict memory quotas (`--plugin-memory-limit-mb`), and fail-closed daemon security policy (`--require-sandboxed-plugins`).
-- **Global Package Manager Distribution**:
-  - **Official Homebrew Tap** (`brew tap liliadb/tap && brew install lilia`) with daemon background service support (`brew services start liliadb`).
-  - **Universal npm SDKs**: `@liliadb/node` for Node.js, Bun, and Deno with multi-platform prebuilds, and `@liliadb/wasm` for browsers and edge runtimes.
-- **Real-Time CDC & Live Event Streaming**: Sub-millisecond reactive subscriptions via `db.watch()` in Node/Bun/Deno, and Server-Sent Events (`/v1/watch` SSE) over HTTP.
-- **Graph & Full-Text Search (FTS5)**: Embedded graph traversal (`setNode`, `addEdge`, `neighbors`, `reachability`) and BM25-ranked full-text search with highlighting and snippets across all entry points.
-- **Encryption at Rest**: Native authenticated encryption (AES-256-GCM AEAD) via `plugins/lilia-plugin-codec`, ensuring zero plaintext is stored on disk or in WAL frames, with transparent decryption across KV, JSON, and SQL views.
-- **Declarative SQL Engine**: Integrated via `plugins/lilia-plugin-sql`, providing read/write SQL queries, preconfigured views (`lilia_kv`, `lilia_json`, `lilia_graph_nodes`, `lilia_graph_edges`), and custom scalar functions.
-- **Physical Crash & Chaos Resilience**: Proven tolerance against physical power loss (torn WAL frame recovery), bit-flips in WAL frame checksums, abrupt process termination (`SIGKILL`), and disk exhaustion (`ENOSPC`) with atomic self-healing.
-- **Windows Security Hardening**: Restrictive, protected DACLs applied to IPC directories, authentication tokens, database files, and backup staging, guaranteeing multi-user access denial parity with Unix (`0700`/`0600`).
-- **Keyset Streaming & Async Iteration**: Native async generator `scanStream()` and `createReadStream()` in `@liliadb/node` for unbounded, memory-efficient traversals without offset drift.
-- **Calibrated Performance Benchmarks**: Formal throughput and latency metrics (up to 281k ops/s in Rust native and 171k ops/s via HTTP gateway).
+This repository contains the `0.1.0-alpha.7` release featuring:
+- **Native Vector Engine & HNSW Search**: Pure Rust Hierarchical Navigable Small World (HNSW) graph index with zero external C/C++ dependencies. Fully ACID persistent in SQLite (`_lilia_hnsw_meta`, `_lilia_hnsw_edges`, `_lilia_vectors`) and committed atomically within WAL transactions.
+- **Hardware-Accelerated Quantization (SQ8 & 1-Bit Binary)**: Scalar Int8 quantization (4x memory reduction) and 1-bit binary packing (32x memory reduction with fast POPCOUNT Hamming distance) with coarse-to-fine candidate re-ranking.
+- **Hybrid Search (Reciprocal Rank Fusion - RRF)**: Single-query fusion of lexical FTS5 BM25 ranking and semantic vector similarity with configurable $k$ smoothing and weights.
+- **Pre-Filtered Vector Queries**: Eliminates empty-result post-filtering anomalies by evaluating HNSW beam traversal against secondary JSON indexes and Graph neighborhood constraints.
+- **Spatial Indexing & Geofencing**: Microsecond Haversine distance, bounding box filters, Geopoly polygon containment, and automated CDC geofence breach event generation.
+- **Time-Series Compression**: Gorilla-style delta-of-delta timestamp and XOR float compression (80–90% reduction), downsampling rollups (`min`, `max`, `avg`, `count`, `sum`), and automated retention pruning.
+- **Universal C-ABI FFI (`crates/lilia-ffi`) & Mobile SDKs**:
+  - **React Native & Expo (`@liliadb/react-native`)**: Native C++ JSI bindings for zero-bridge execution.
+  - **Apple Ecosystem (`packages/apple-spm`)**: Swift Package Manager module with universal XCFramework for iOS, macOS, watchOS, and tvOS.
+  - **Android SDK (`packages/android-sdk`)**: Kotlin / JNI bindings with NDK prebuilds.
+  - **Flutter (`packages/flutter`)**: Dart FFI plugin.
+- **Official Visual Studio Code Extension (`apps/lilia-vscode`)**: Interactive multimodel data explorer, schema inspector, and live SQL query runner.
+- **Engine De-bloating & SQLite Native Integration**: Direct integration of SQLite amalgamation in `crates/lilia-sqlite-native` with extension loading, backup API, session tracking, and removal of external 600K-line `libsqlite3-sys` fork.
+- **WebAssembly & OPFS (Origin Private File System)**: `@liliadb/wasm` bringing 100% multimodel database capabilities directly into web browsers and Edge runtimes.
+- **Real-Time CDC & Live Event Streaming**: Sub-millisecond reactive subscriptions via `db.watch()` and Server-Sent Events (`/v1/watch` SSE) over HTTP.
+- **Encryption at Rest**: Native authenticated AES-256-GCM AEAD encryption, protecting KV, JSON, vectors, and WAL frames on disk.
+- **Calibrated Performance Benchmarks**: Formal throughput and latency metrics (up to 298k ops/s in Rust native and 203k ops/s via HTTP gateway).
 
 ---
 
 ## Installation
 
 ### 1. Homebrew (macOS & Linux)
-Install the standalone CLI (`lilia`), Daemon (`lilia-daemon`), and MCP server (`lilia-mcp`):
+Install the standalone CLI (`lilia`) and Daemon (`lilia-daemon`):
 
 ```bash
 # Add the official tap and install
@@ -219,18 +223,7 @@ See [HTTP REST API Reference](docs/http_api.md) for endpoint details.
 
 ---
 
-### 5. Model Context Protocol (MCP) Server
-Run the MCP server to give AI agents access to LiliaDB:
-
-```sh
-lilia-mcp --database primary=./app.lilia
-```
-
-Exposed Tools: `lilia_kv_get`, `lilia_kv_set`, `lilia_json_get`, `lilia_json_put`, `lilia_sql_query`, `lilia_backup`, `lilia_integrity_check`, `lilia_checkpoint_stats`.
-
----
-
-### 6. WebAssembly Plugin Sandboxing (Wasmtime / WASI)
+### 5. WebAssembly Plugin Sandboxing (Wasmtime / WASI)
 Safely execute untrusted third-party plugins with out-of-bounds protection, fault isolation, and resource caps:
 - **Linear Memory Boundaries**: Guest plugins operate inside isolated 32-bit linear memory—panics or traps never crash the host daemon.
 - **Resource Limiter**: Memory bounded via `--plugin-memory-limit-mb` (default 64MB).
@@ -248,7 +241,7 @@ See [Plugin Architecture & Sandboxing Guide](docs/plugins.md).
 
 ---
 
-### 7. WebAssembly & OPFS Storage for Browsers & Edge (`@liliadb/wasm`)
+### 6. WebAssembly & OPFS Storage for Browsers & Edge (`@liliadb/wasm`)
 Run identical LiliaDB storage engines across web browsers and serverless edge functions:
 - **Browser Origin Private File System (OPFS)**: High-speed zero-copy persistence using Synchronous Access Handle Pool (`opfs-sahpool`) without locking the browser's UI thread.
 - **Serverless Edge Runtimes**: Zero-native-dependency deployment on Cloudflare Workers, Deno Deploy, and Vercel Edge.
@@ -258,17 +251,22 @@ Run identical LiliaDB storage engines across web browsers and serverless edge fu
 
 ## Performance Benchmarks
 
-Calibrated throughput and latency distributions measured on Apple M3 Max (14 cores, macOS 25.6, SQLite WAL `Durability::Durable`):
+Calibrated throughput and latency distributions measured on Apple M3 Max (14 cores, macOS 25.6, SQLite WAL `Durability::Durable`, November 2026):
 
 | Surface | Workload | Batch Size | Throughput (ops/sec) | Latency $p_{50}$ | Latency $p_{99}$ |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Rust Native Embedded** | 10,000 | 1 | **8,380 ops/s** | 85.17 µs | 266.42 µs |
-| **Daemon via IPC (Socket)** | 10,000 | 1 | **5,711 ops/s** | 155.23 µs | 509.61 µs |
-| **Daemon via HTTP Loopback** | 10,000 | 1 | **4,519 ops/s** | 161.96 µs | 375.02 µs |
-| **Rust Native Embedded** | 10,000 | 100 | **158,192 ops/s** | 3.51 µs | 89.10 µs |
-| **Daemon via HTTP Loopback** | 10,000 | 100 | **116,798 ops/s** | 7.89 µs | 11.29 µs |
-| **Rust Native Bulk Ingest** | 100,000 | 500 | **281,016 ops/s** | 3.20 µs | 5.33 µs |
-| **Daemon via HTTP Bulk Ingest** | 100,000 | 500 | **171,051 ops/s** | 5.42 µs | 7.81 µs |
+| **Node.js (Node-API Sync)** | 10,000 | 1 | **9,799 ops/s** | 59.58 µs | 1453.57 µs |
+| **Daemon via IPC (Socket)** | 10,000 | 1 | **7,519 ops/s** | 101.29 µs | 205.71 µs |
+| **Daemon via HTTP Loopback** | 10,000 | 1 | **7,075 ops/s** | 109.92 µs | 241.76 µs |
+| **Rust Native Embedded** | 10,000 | 1 | **5,466 ops/s** | 56.27 µs | 3121.45 µs |
+| **Node.js (Node-API Sync)** | 10,000 | 100 | **207,250 ops/s** | 4.47 µs | 5.35 µs |
+| **Rust Native Embedded** | 10,000 | 100 | **172,503 ops/s** | 4.61 µs | 23.10 µs |
+| **Daemon via IPC (Socket)** | 10,000 | 100 | **172,747 ops/s** | 5.34 µs | 7.25 µs |
+| **Daemon via HTTP Loopback** | 10,000 | 100 | **149,918 ops/s** | 6.30 µs | 7.86 µs |
+| **Rust Native Bulk Ingest** | 100,000 | 500 | **298,308 ops/s** | 3.23 µs | 3.92 µs |
+| **Node.js (Node-API Sync)** | 100,000 | 500 | **256,193 ops/s** | 3.53 µs | 5.15 µs |
+| **Daemon via HTTP Bulk Ingest** | 100,000 | 500 | **203,038 ops/s** | 4.59 µs | 6.15 µs |
+| **Daemon via IPC Bulk Ingest** | 100,000 | 500 | **196,967 ops/s** | 4.48 µs | 9.43 µs |
 
 Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) and the [Comparative Benchmark: LiliaDB vs Native SQLite & Ecosystems](docs/benchmarks_comparison.md).
 
@@ -276,10 +274,12 @@ Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) an
 
 ## Workspace Structure
 
-- `apps/`: CLI (`lilia-cli`), local daemon (`lilia-daemon`), and MCP server (`lilia-mcp`).
+- `apps/`: CLI (`lilia-cli`), local daemon (`lilia-daemon`), and VSCode extension (`apps/lilia-vscode`).
 - `crates/`:
-  - `lilia-core`: Storage primitives, error models, and AES-256-GCM AEAD codec.
-  - `lilia-storage-sqlite`: SQLite engine adapter, migrations, views, and benchmarks (`lilia_bench`).
+  - `lilia-core`: Storage primitives, vector types, HNSW algorithm, quantization, time-series, and geofencing.
+  - `lilia-storage-sqlite`: SQLite engine adapter, HNSW vector storage, hybrid RRF search, migrations, and views.
+  - `lilia-sqlite-native`: Direct SQLite amalgamation integration, extension loading, backup, and session API.
+  - `lilia-ffi`: Universal C-ABI FFI wrapper for mobile and foreign language bindings.
   - `lilia-protocol`: Binary MessagePack IPC framing, handshake, and streaming request/response envelopes.
   - `lilia-plugin-api`: Plugin C-ABI, trust store, and ed25519 signature verification.
   - `lilia-graph`: Graph reachability and adjacency engine.
@@ -289,11 +289,12 @@ Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) an
 - `packages/`:
   - `@liliadb/node`: Universal Node.js, Bun, and Deno SDK (`packages/node`) and native prebuilds (`packages/node-*`).
   - `@liliadb/wasm`: WebAssembly and OPFS browser / edge SDK (`packages/wasm`).
+  - `@liliadb/react-native`: React Native and Expo module (`packages/react-native`).
+  - `packages/apple-spm`: Swift Package Manager module with universal XCFramework for iOS, macOS, watchOS, and tvOS.
+  - `packages/android-sdk`: Android Kotlin SDK and JNI/NDK prebuilds.
+  - `packages/flutter`: Flutter Dart FFI plugin.
+- `tools/`: Cross-platform mobile build scripts (`tools/mobile/`), conformance test suite (`tools/conformance/`), and benchmarks (`tools/benchmarks/`).
 - `Formula/`: Homebrew packaging (`Formula/liliadb.rb`, `Formula/lilia.rb`).
-- `examples/`: Runnable examples for Node.js, Bun, WebAssembly, and native Rust, including:
-  - Custom Extension plugin development & signing lifecycle (`examples/custom-extension/`).
-  - Second Brain & Knowledge Graph Engine (`examples/project-knowledge-graph/`).
-  - Smart Home Edge Hub & IoT Gateway (`examples/project-iot-smart-hub/`).
 
 Documentation: [Architecture](docs/architecture.md) | [Node.js SDK](docs/node_sdk.md) | [HTTP REST API](docs/http_api.md) | [Benchmarks](docs/benchmarks.md) | [Comparative Benchmarks](docs/benchmarks_comparison.md) | [Plugins](docs/plugins.md) | [Security Policy](SECURITY.md)
 
