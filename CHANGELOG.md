@@ -7,9 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.2.0] - 2026-11-17
 
 ### Added
+- **Native Query JIT Compilation (`lilia-core`, `lilia-storage-sqlite`, Cranelift)**:
+  - Just-In-Time native machine code compilation (ARM64 & x86_64) for JSON query filter expressions using Cranelift JIT compiler (`JitCompiler`).
+  - Native predicates evaluate directly against raw `BinaryDoc` byte buffers with zero interpreter or AST traversal overhead.
+  - Multi-document vectorized batch evaluation (`CompiledPredicate::eval_batch`) writing match indices directly to memory.
+  - Concurrent thread-safe LRU predicate compilation cache (`JitPredicateCache`) with hit/miss performance metrics.
+- **P2P Set Reconciliation via Invertible Bloom Filters (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Decentralized state synchronization utilizing Invertible Bloom Filters (IBF / IBLT) with 3-way hash peeling for $O(d)$ symmetric difference recovery where $d$ is the divergence size.
+  - Strata Estimator for bandwidth-efficient logarithmic difference size estimation over bandwidth-constrained links (e.g. BLE and P2P mesh).
+  - Multi-peer reconciliation worker with deterministic 3-way merge resolution based on Hybrid Logical Clocks (HLC).
+- **Reed-Solomon Erasure Coding & Automatic Page Repair (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Galois Field $GF(2^8)$ arithmetic with Cauchy systematic generator matrices for $k$ data shards and $m$ parity shards.
+  - Checkpoint-integrated physical database page parity generation (`ParityManager`) persisting companion `.parity` sidecars.
+  - Automatic detection of NAND flash bitflips and single/multi-page corruption, repairing corrupted SQLite B-Tree pages transparently on read/checkpoint.
+- **Row-Level Security (RLS) & Dynamic Data Masking (DDM) (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Session-level security context (`SecurityContext`) with caller identification, roles, and arbitrary security attributes.
+  - Declarative Row-Level Security policies (`NamedPolicy`, `PolicyAction`) evaluating boolean filter expressions across JSON, SQL, and KV operations.
+  - Dynamic Data Masking engine (`MaskFunction`) providing built-in transformations for `CreditCard` (preserving last 4 digits), `Email` (obfuscating username), `Redact`, `Partial` (retaining custom prefix/suffix), and deterministic `Hash` (SHA-256) with role-based exemption expressions.
+- **Flash Wear Leveling & Adaptive WAL Fsync Control (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Continuous telemetry tracking physical NAND flash byte write volume and daily write budgets (`FlashWearManager`).
+  - Adaptive WAL fsync frequency adjustment across four wear pressure tiers (`FlashWearTier::Nominal`, `Elevated`, `Severe`, `Critical`), dynamically stretching fsync/checkpoint intervals to extend mobile flash hardware lifespan.
+- **Sandboxed WebAssembly User-Defined Functions (WASM UDF) (`lilia-storage-sqlite`)**:
+  - In-database execution of user-supplied WebAssembly bytecode as scalar SQL functions powered by Wasmtime.
+  - Strict CPU fuel metering preventing runaway execution or infinite loops, paired with linear memory boundaries.
+  - Function-call auxiliary data caching (`sqlite3_get_auxdata`/`sqlite3_set_auxdata`) preserving instantiated WebAssembly runtime stores across consecutive rows.
+- **Polyglot Virtual Tables & Multi-Model SQL Rewriter (`lilia-storage-sqlite`)**:
+  - Ephemeral SQLite virtual table modules (`lilia_polyglot`) allowing unified SQL joins across JSON documents, KV pairs, Graph nodes, and Timeseries metrics in a single query.
+  - Transparent SQL AST rewriter mapping polyglot functional table expressions to optimized virtual table instances.
 - **Vectorized in-process analytics (new `lilia-analytics`, `lilia-storage-sqlite` feature `analytics`)**: analytical SQL over persistent Apache Arrow columnar segments, executed by DataFusion 55 in vectorized batches of 1,024 rows without leaving the process.
   - `db.analytics()?.create_table(ColumnarTableSpec::json("users_col", "users").column("age", "$.age", ColumnType::Int64))` projects typed columns out of a JSON collection (keyed by `id`) or a SQL table (`ColumnarTableSpec::sql`, keyed by `rowid`). `query(sql)` returns Arrow record batches, `query_json(sql)` the same shape as `sql_query`.
   - Segments are immutable, stored in the database file as one Arrow IPC chunk per column (`_lilia_col_segments`, `_lilia_col_chunks`) with zone maps for segment pruning, and pass through the configured `ValueCodec`. Field-level encrypted values are never decrypted into segments.
@@ -35,6 +62,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (alpha)**: graph nodes link to JSON documents only through an explicit `doc_space` / `doc_id`; the implicit fallback to a JSON space named after the node `kind` was removed (including in `lilia_graph_unified`). `doc_id` defaults to the node id when only `doc_space` is given.
 - Raw SQL writes to `_lilia_json`, `_lilia_kv` and `_lilia_graph_nodes` are refused while integrity contracts or auto-embedded collections are declared; use batch operations.
 - Integer arithmetic in JSON expressions no longer overflows: it evaluates to `NULL`.
+- Undo/redo changesets no longer record the ledger tables (`_lilia_ledger*`): an undo or redo is a new ledger commit. Raw SQL can read the ledger tables but never write them.
+- `BinaryDoc::from_json_value` and `BinaryDocBuilder::build_from_value` now return `Result`: documents beyond the format limits (4 GiB, 65,535-byte keys) are refused with `INVALID_INPUT` instead of being silently corrupted.
+- Writers checkpoint the WAL themselves once it exceeds four times `CheckpointPolicy::wal_bytes` (at least 4 MiB), and `journal_size_limit` shrinks it back after a rewind.
+
+### Fixed
+- **Merkle ledger**: every write path is now recorded, not only `batch`. Interactive transactions, rule actions, integrity cascades, ring-buffer flushes, memory-tier promotion and demotion, undo/redo and raw SQL left rows without a ledger leaf, so the next strict open failed with `TAMPER_DETECTED`. Rows are now captured by triggers on the writer connection only (external tools still trip the verification), and a database that holds data but no ledger history gets a genesis commit on its first open.
+- Reactive rules now fire for writes made through `Database::transaction()` / `with_transaction`, not only through `batch`.
+- Temporal sharding mapped about 5% of days to a wrong date (for example 1970-01-10 became 1971-01-12), routing writes to the wrong monthly shard; calendar arithmetic is now shared and exact. Daily and monthly shard ids are validated as real dates.
+- `strftime('%j')` and `strftime('%w')` on ISO dates returned the day of month and 0; they now return the day of year and the weekday.
+- Rule conditions now support arithmetic (`a + b > 10` used to evaluate to `NULL`), and negating `i64::MIN` no longer panics.
+- Bulk loads no longer grow the WAL without bound (it reached several GiB): prepared statements are reset when a connection is released so they stop pinning a WAL snapshot, and writers checkpoint past the size limit.
+- The CLI silently truncated out-of-range vector elements (an `int8` of 300 became 44); it now rejects them.
+- Cypher `LIMIT` and hop bounds must be non-negative integers; more than 65,536 edge kinds in a graph view is an error instead of a wrapped id.
+- `lilia-wasm` builds again for `wasm32-unknown-unknown` (`getrandom` 0.4 backend and native-only shard archiving).
 
 ---
 

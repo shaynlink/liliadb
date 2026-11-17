@@ -14,6 +14,6 @@ const withLiliaDBPlugin: ConfigPlugin = (config) => {
   ]);
 };
 
-const pkg = { name: '@liliadb/react-native', version: '0.1.0-alpha.6' };
+const pkg = { name: '@liliadb/react-native', version: '0.2.0' };
 
 export default createRunOncePlugin(withLiliaDBPlugin, pkg.name, pkg.version);

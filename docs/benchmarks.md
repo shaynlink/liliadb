@@ -198,7 +198,7 @@ Columnar storage: 5 segments, 19.1 MiB of column data in a 305.5 MiB database; i
 2. **Without the cache the engine remains fast.** Every query then reads its Arrow IPC chunks from the database file and decodes them; this is the cost of a first query after start-up.
 3. **Changed rows cost a point lookup each until compaction.** With 2,000 rows pending, the scan fetches their current version from the row store, which adds about 12 ms here. The background worker compacts a table once 4,096 rows are pending (`AnalyticsOptions::compaction_delta_rows`).
 4. **Scope of the measurement.** One machine, one data shape, 16 low-cardinality groups, and the row-count throughput counts all scanned rows across 14 partitions. These figures were measured on aarch64, where NEON is always enabled; x86_64 builds use the SSE2 baseline unless compiled with `-C target-cpu=x86-64-v3` or `x86-64-v4`, and were not measured.
-5. **Bulk-load note.** Loading 500,000 documents in batches of 1,000 grew the WAL to more than 2 GiB (about 8x the final database) because the background checkpointer cannot catch up with a sustained writer; the harness therefore calls `Database::checkpoint()` every 20,000 rows.
+5. **Bulk loads.** A sustained writer keeps the WAL near its writer limit (four times `CheckpointPolicy::wal_bytes`, at least 4 MiB): past it, writers checkpoint between two transactions so that SQLite can rewind the WAL.
 
 ---
 *Calibrated report generated on Apple Silicon M3 Max using the official LiliaDB benchmark harness.*

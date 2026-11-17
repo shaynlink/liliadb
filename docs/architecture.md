@@ -653,3 +653,181 @@ SIMD comes from the Arrow kernels and follows the target features of the build, 
 - Tables created by another process become queryable after the engine restarts; the engine is meant for a single embedding process.
 - Dropping a source SQL table does not drop its columnar tables: drop them first.
 
+---
+
+## Native Query JIT Compilation (`lilia-core`, Cranelift)
+
+To eliminate interpreter dispatch overhead and recursive AST traversals during query filtering, `lilia-core` incorporates an embedded Just-In-Time (JIT) compiler based on Cranelift.
+
+```text
+JSON Filter AST (Path, Literal, BinaryOp)
+                   │
+                   ▼ Cranelift JIT Compilation
+Native Machine Code (ARM64 / x86_64)
+                   │
+                   ▼ Direct Execution
+Contiguous BinaryDoc Buffers (Zero Copy) ──► Match Index Bitset
+```
+
+### 1. Direct Memory Evaluation over `BinaryDoc`
+Compiled predicates execute directly against contiguous `BinaryDoc` byte buffers in host memory. Fast runtime helper trampolines (`lilia_jit_extract_f64`, `lilia_jit_extract_i64`, `lilia_jit_extract_str`, `lilia_jit_memcmp`, `lilia_jit_strcmp`) inspect binary dictionary offsets without creating intermediate serde structures.
+
+### 2. Batch Execution Loop
+Instead of invoking function pointers per row, the JIT emits a vectorized batch loop (`CompiledPredicate::eval_batch`):
+- Operates over an array of `DocRef { ptr, len }`.
+- Evaluates predicates in tight machine registers.
+- Writes matching row indices directly to an output pointer buffer, achieving multi-million document scan throughput per CPU core.
+
+### 3. Predicate Cache
+Compiled functions are immutable and thread-safe. A shared `JitPredicateCache` uses the serialized AST expression as cache key, tracking hit/miss rates via atomic counters and amortizing JIT compilation time across queries.
+
+---
+
+## P2P Set Reconciliation via Invertible Bloom Filters (`lilia-core`, `lilia-storage-sqlite`)
+
+For decentralized, multi-device, and offline-first synchronization, LiliaDB provides an exact set reconciliation layer using Invertible Bloom Filters (IBF / IBLT).
+
+```text
+Peer A (Set S_A) ◄─── Strata Estimator Exchange ───► Peer B (Set S_B)
+                                │
+                   Calculate Difference Bound d
+                                │
+Peer A ─────────── Transmit IBF of size O(d) ───────► Peer B
+                                │
+             Peel Pure Cells: S_A \ S_B and S_B \ S_A
+                                │
+                   HLC 3-Way Merge Resolution
+```
+
+### 1. Invertible Bloom Lookup Table (IBLT)
+An IBLT maintains an array of cells, where each cell contains:
+- `count: i32`: Number of inserted elements minus deleted elements.
+- `key_sum: u128`: XOR sum of all element keys.
+- `hash_sum: u64`: XOR sum of verification checksums.
+
+A cell with `count == 1` and matching `hash_sum` is a "pure cell", allowing deterministic peeling of elements in $O(d)$ time.
+
+### 2. Strata Estimator
+Before generating an IBF, peers must agree on the expected divergence size $d$ without transmitting full inventory keys. A Strata Estimator partitions keys into geometric hash buckets ($k=32$), estimating set difference size in a single small exchange (under 1 KB).
+
+### 3. Low-Bandwidth Synchronization & 3-Way Merge
+Once differences are identified, mutations are exchanged and resolved using Hybrid Logical Clock (HLC) timestamps and CRDT deterministic rules, enabling reliable peer-to-peer sync over Bluetooth Low Energy (BLE), local Wi-Fi, or message queues.
+
+---
+
+## Reed-Solomon Erasure Coding & Automatic Page Repair (`lilia-core`, `lilia-storage-sqlite`)
+
+To safeguard embedded databases against hardware flash wear, bit rot, and sudden power cuts, LiliaDB implements physical database parity protection using Reed-Solomon erasure coding in Galois Field $GF(2^8)$.
+
+```text
+Database File (SQLite B-Tree Pages 1..N)
+┌──────────┬──────────┬──────────┬──────────┐
+│  Page 1  │  Page 2  │  Page 3  │  Page 4  │ ... Data Shards (k=6)
+└──────────┴──────────┴──────────┴──────────┘
+      │          │          │          │
+      ▼          ▼          ▼          ▼
+Cauchy Generator Matrix Multiplication in GF(2^8)
+      │                     │
+      ▼                     ▼
+┌──────────────┐     ┌──────────────┐
+│ Parity Shard 1│     │ Parity Shard 2│ ... Parity Shards (m=2) (.parity Sidecar)
+└──────────────┘     └──────────────┘
+```
+
+### 1. Cauchy Generator Matrix
+Parity shards are computed using systematic Cauchy generator matrices where $C_{i,j} = \frac{1}{x_i \oplus y_j}$ in $GF(2^8)$. Inverting square submatrices allows reconstruction of up to $m$ corrupted pages out of any $k + m$ shard group.
+
+### 2. Checkpoint Integration & Parity Sidecar
+The `ParityManager` hooks into WAL checkpoint cycles:
+- Pages are organized into groups of $k$ data pages.
+- $m$ parity pages per group are written to a companion `.parity` sidecar file alongside the database.
+- Each page header includes CRC32 checksums for microsecond validation.
+
+### 3. Transparent Auto-Repair
+If an SQLite read trips a checksum mismatch or corrupted page error, the engine automatically reconstructs the exact original page bytes from sister data pages and parity shards, writes the repaired page back to storage, and completes the read without bubbling errors to application code.
+
+---
+
+## Row-Level Security (RLS) & Dynamic Data Masking (DDM) (`lilia-core`, `lilia-storage-sqlite`)
+
+LiliaDB introduces fine-grained, database-enforced security policies and dynamic data masking directly inside the embedded storage engine.
+
+```text
+Caller / API Request
+   │ with SecurityContext { subject: "dr_smith", roles: ["doctor"], tenant_id: "cardio" }
+   ▼
+Row-Level Security Filter
+   │ Evaluates Policy: "$.tenant_id == ctx.tenant_id"
+   ▼ Permitted Rows
+Dynamic Data Masking Pipeline
+   │ Applies Masks: $.ssn -> Redact, $.email -> Email ("s***h@clinic.org")
+   ▼
+Sanitized Result Set
+```
+
+### 1. Security Context
+Database sessions accept a `SecurityContext` specifying caller identity, tenant boundaries, assigned roles, and key-value attributes. Operations executed without an active context operate under default security rules.
+
+### 2. Declarative RLS Policies
+Policies (`NamedPolicy`) specify a target table/collection, an action (`Select`, `Insert`, `Update`, `Delete`, `All`), and an AST expression condition. Unmatched rows are transparently excluded from queries or rejected on write with `SECURITY_VIOLATION`.
+
+### 3. Dynamic Data Masking Algorithms
+Sensitive fields are masked on retrieval based on configured `MaskingRule`s:
+- `CreditCard`: Preserves the last 4 digits (`****-****-****-1234`).
+- `Email`: Preserves first and last local characters and domain (`a***e@example.com`).
+- `Redact`: Completely replaces value with `[REDACTED]`.
+- `Partial`: Retains custom prefix and suffix character counts with configurable mask character.
+- `Hash`: Deterministic 16-hex SHA-256 digest for privacy-preserving correlation.
+- Role-based exemptions: Users with administrative or auditing roles can bypass masks via declarative exemption rules.
+
+---
+
+## Flash Wear Leveling & Adaptive WAL Fsync Control (`lilia-core`, `lilia-storage-sqlite`)
+
+Mobile and edge devices use NAND flash memory with finite write endurance (P/E cycles). Heavy write workloads and frequent fsync operations accelerate device degradation.
+
+### 1. Physical Write Volume Telemetry
+The `FlashWearManager` monitors:
+- Cumulative physical bytes written to the database and WAL files.
+- Daily write quotas (`target_daily_budget_bytes`, defaulting to 5 GiB/day).
+- Write velocity over sliding time windows.
+
+### 2. Adaptive Fsync & Checkpoint Stretching
+Based on write volume, the engine transitions across four tiers:
+1. `Nominal`: Standard fsync/checkpoint interval (e.g. 3,000 ms).
+2. `Elevated`: Moderate interval elongation to coalesce writes.
+3. `Severe`: Aggressive write coalescing with extended checkpoint intervals.
+4. `Critical`: Maximum WAL fsync stretching (up to 15,000 ms) to prevent device endurance exhaustion.
+
+---
+
+## Sandboxed WebAssembly User-Defined Functions (WASM UDF) (`lilia-storage-sqlite`)
+
+Custom scalar SQL functions can be deployed as WebAssembly modules executed safely within Wasmtime runtimes.
+
+### 1. Fault Isolation & Resource Bounding
+- Functions operate inside isolated linear memory spaces. Panics or segmentation faults in guest WASM code cannot crash the host process.
+- CPU execution is restricted by deterministic fuel meters. Runaway calculations or infinite loops trigger an engine trap (`FUEL_EXHAUSTED`).
+
+### 2. Auxdata State Caching
+Using SQLite's `sqlite3_get_auxdata` and `sqlite3_set_auxdata` APIs, WASM module instances, runtime stores, and memory allocations are cached across row evaluations, eliminating instantiation overhead during table scans.
+
+---
+
+## Polyglot Virtual Tables & Multi-Model SQL Rewriter (`lilia-storage-sqlite`)
+
+LiliaDB supports cross-model joins and multi-model querying directly in standard SQL.
+
+```sql
+SELECT 
+    u.id, 
+    u.value->>'name' AS user_name,
+    m.value AS latest_heart_rate
+FROM lilia_json u
+JOIN lilia_polyglot('timeseries', 'heart_rate', 100) m ON m.tag = u.id
+WHERE u.space = 'patients';
+```
+
+The SQL query engine transparently detects `lilia_polyglot(...)` function calls, rewrites the SQL AST, registers ephemeral SQLite virtual table modules on the active connection, and delivers zero-copy unified query results across JSON, KV, Graph, and Timeseries tiers.
+
+

@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 lilia-core = { path = "../lilia-core" }
 async-trait = "0.1.89"
-datafusion.workspace = true
+datafusion = { workspace = true, features = ["parquet"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -11,26 +11,29 @@ transaction boundary, across embedded Rust, WebAssembly (browser OPFS & Edge), N
 
 ---
 
-## Status: v0.1.0-alpha.7
+## Status: v0.2.0
 
-This repository contains the `0.1.0-alpha.7` release featuring:
+This repository contains the `0.2.0` release featuring:
+- **Vectorized Columnar Analytics (`lilia-analytics`, DataFusion 55 & Apache Arrow)**: In-process analytical SQL engine executing on persistent immutable Arrow columnar segments in batches of 1,024 rows. Sub-millisecond aggregations on 500k rows (0.97ms filter/sum/avg) with zone-map pruning and merge-on-read rowstore deltas.
+- **Native Query JIT Compilation (`lilia-core`, Cranelift JIT)**: Direct compilation of JSON query expressions into native host machine code (ARM64 / x86_64) for zero-interpreter batch document filtering.
+- **Sandboxed WebAssembly User-Defined Functions (WASM UDF via Wasmtime)**: Safe in-database execution of user-supplied WebAssembly bytecode as scalar SQL functions with strict CPU fuel metering and linear memory limits.
+- **Reed-Solomon Erasure Coding & Automatic Page Repair**: Transparent NAND flash bitflip detection and automatic recovery of corrupted SQLite B-Tree pages using Cauchy systematic generator matrices in Galois Field $GF(2^8)$.
+- **P2P Set Reconciliation via Invertible Bloom Filters (IBF)**: Decentralized peer-to-peer state synchronization with $O(d)$ symmetric difference recovery, Strata Estimators for bandwidth-constrained connections (BLE/mesh), and HLC 3-way conflict resolution.
+- **Row-Level Security (RLS) & Dynamic Data Masking (DDM)**: Context-aware security sessions with declarative row-level isolation policies and built-in dynamic data masking (CreditCard, Email, Redact, Partial, Hash) with role exemptions.
+- **Flash Wear Leveling & Adaptive WAL Fsync Control**: Physical NAND flash write volume telemetry and daily budget tracking with dynamic multi-tier WAL checkpoint/fsync interval stretching to maximize mobile hardware lifespan.
+- **Cross-Model Integrity Contracts**: Declarative JSON `CHECK` constraints in three-valued SQL logic and cross-model references (`CASCADE`, `RESTRICT`, `SET NULL`) enforced inside write transactions.
+- **In-Database Vector Embeddings (`lilia-embed`)**: Synchronous and asynchronous embedding generation using Candle (`all-MiniLM-L6-v2`) keeping JSON text fields and vector collections in lockstep.
+- **Polyglot Virtual Tables**: Unified SQL query capabilities joining JSON documents, KV namespaces, Graph nodes, and Timeseries metrics in single SQL statements.
 - **Native Vector Engine & HNSW Search**: Pure Rust Hierarchical Navigable Small World (HNSW) graph index with zero external C/C++ dependencies. Fully ACID persistent in SQLite (`_lilia_hnsw_meta`, `_lilia_hnsw_edges`, `_lilia_vectors`) and committed atomically within WAL transactions.
 - **Hardware-Accelerated Quantization (SQ8 & 1-Bit Binary)**: Scalar Int8 quantization (4x memory reduction) and 1-bit binary packing (32x memory reduction with fast POPCOUNT Hamming distance) with coarse-to-fine candidate re-ranking.
 - **Hybrid Search (Reciprocal Rank Fusion - RRF)**: Single-query fusion of lexical FTS5 BM25 ranking and semantic vector similarity with configurable $k$ smoothing and weights.
-- **Pre-Filtered Vector Queries**: Eliminates empty-result post-filtering anomalies by evaluating HNSW beam traversal against secondary JSON indexes and Graph neighborhood constraints.
 - **Spatial Indexing & Geofencing**: Microsecond Haversine distance, bounding box filters, Geopoly polygon containment, and automated CDC geofence breach event generation.
 - **Time-Series Compression**: Gorilla-style delta-of-delta timestamp and XOR float compression (80–90% reduction), downsampling rollups (`min`, `max`, `avg`, `count`, `sum`), and automated retention pruning.
-- **Universal C-ABI FFI (`crates/lilia-ffi`) & Mobile SDKs**:
-  - **React Native & Expo (`@liliadb/react-native`)**: Native C++ JSI bindings for zero-bridge execution.
-  - **Apple Ecosystem (`packages/apple-spm`)**: Swift Package Manager module with universal XCFramework for iOS, macOS, watchOS, and tvOS.
-  - **Android SDK (`packages/android-sdk`)**: Kotlin / JNI bindings with NDK prebuilds.
-  - **Flutter (`packages/flutter`)**: Dart FFI plugin.
+- **Universal C-ABI FFI (`crates/lilia-ffi`) & Mobile SDKs**: React Native (JSI), Apple SPM (XCFramework), Android SDK (Kotlin/JNI), and Flutter (Dart FFI).
 - **Official Visual Studio Code Extension (`apps/lilia-vscode`)**: Interactive multimodel data explorer, schema inspector, and live SQL query runner.
-- **Engine De-bloating & SQLite Native Integration**: Direct integration of SQLite amalgamation in `crates/lilia-sqlite-native` with extension loading, backup API, session tracking, and removal of external 600K-line `libsqlite3-sys` fork.
 - **WebAssembly & OPFS (Origin Private File System)**: `@liliadb/wasm` bringing 100% multimodel database capabilities directly into web browsers and Edge runtimes.
 - **Real-Time CDC & Live Event Streaming**: Sub-millisecond reactive subscriptions via `db.watch()` and Server-Sent Events (`/v1/watch` SSE) over HTTP.
 - **Encryption at Rest**: Native authenticated AES-256-GCM AEAD encryption, protecting KV, JSON, vectors, and WAL frames on disk.
-- **Calibrated Performance Benchmarks**: Formal throughput and latency metrics (up to 298k ops/s in Rust native and 203k ops/s via HTTP gateway).
 
 ---
 
