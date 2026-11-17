@@ -69,7 +69,7 @@ impl std::fmt::Debug for LiveSubscription {
         f.debug_struct("LiveSubscription")
             .field("id", &self.id)
             .field("query", &self.query)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -100,6 +100,7 @@ impl Default for LiveQueryManager {
 }
 
 impl LiveQueryManager {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             next_id: AtomicU64::new(1),
@@ -109,16 +110,15 @@ impl LiveQueryManager {
     }
 
     pub fn has_subscribers(&self) -> bool {
-        self.subscriptions
-            .read()
-            .map(|s| !s.is_empty())
-            .unwrap_or(false)
+        self.subscriptions.read().is_ok_and(|s| !s.is_empty())
     }
 
     pub fn subscriber_count(&self) -> usize {
-        self.subscriptions.read().map(|s| s.len()).unwrap_or(0)
+        self.subscriptions.read().map_or(0, |s| s.len())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn register(
         &self,
         sql: &str,
@@ -150,6 +150,7 @@ impl LiveQueryManager {
         subs.remove(&id);
     }
 
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn process_changeset(&self, changeset: &[u8], conn: &NativeConnection) {
         if changeset.is_empty() || !self.has_subscribers() {
             return;
@@ -206,7 +207,9 @@ impl LiveQueryManager {
                 }
 
                 let (old_row, new_row) = match change.op {
-                    ChangeOp::Update => self.build_update_rows(change_table, &schema, change, conn),
+                    ChangeOp::Update => {
+                        Self::build_update_rows(change_table, &schema, change, conn)
+                    }
                     ChangeOp::Insert => {
                         let row = build_row_map(&schema.columns, &change.new_values);
                         (None, row)
@@ -330,9 +333,8 @@ impl LiveQueryManager {
         info
     }
 
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     fn build_update_rows(
-        &self,
         table: &str,
         schema: &TableSchemaInfo,
         change: &RowChange,
@@ -371,7 +373,7 @@ impl LiveQueryManager {
             if let Ok(mut stmt) = conn.prepare(&query) {
                 let mut str_cache = Vec::new();
                 for (idx, val) in pk_values.iter().enumerate() {
-                    let col_idx = (idx + 1) as i32;
+                    let col_idx = i32::try_from(idx + 1).unwrap_or(i32::MAX);
                     match val {
                         serde_json::Value::Null => {
                             let _ = stmt.bind_null(col_idx);
@@ -400,20 +402,21 @@ impl LiveQueryManager {
                 }
 
                 if let Ok(true) = stmt.step() {
-                    for i in 0..schema.columns.len() {
-                        let v = match stmt.column_type(i as i32) {
+                    let column_count = i32::try_from(schema.columns.len()).unwrap_or(i32::MAX);
+                    for column in 0..column_count {
+                        let v = match stmt.column_type(column) {
                             lilia_sqlite_native::ffi::SQLITE_INTEGER => {
-                                serde_json::Value::Number(stmt.column_int64(i as i32).into())
+                                serde_json::Value::Number(stmt.column_int64(column).into())
                             }
                             lilia_sqlite_native::ffi::SQLITE_FLOAT => {
-                                serde_json::Number::from_f64(stmt.column_double(i as i32))
+                                serde_json::Number::from_f64(stmt.column_double(column))
                                     .map_or(serde_json::Value::Null, serde_json::Value::Number)
                             }
                             lilia_sqlite_native::ffi::SQLITE_TEXT => {
-                                serde_json::Value::String(stmt.column_text(i as i32).to_string())
+                                serde_json::Value::String(stmt.column_text(column).to_string())
                             }
                             lilia_sqlite_native::ffi::SQLITE_BLOB => {
-                                let b = stmt.column_blob(i as i32);
+                                let b = stmt.column_blob(column);
                                 if let Ok(s) = std::str::from_utf8(b) {
                                     if let Ok(jv) = serde_json::from_str(s) {
                                         jv
@@ -511,7 +514,10 @@ fn project_row(
     serde_json::Value::Object(obj)
 }
 
-fn eval_expr(expr: &ValueExpr, row: &HashMap<String, serde_json::Value>) -> serde_json::Value {
+fn eval_expr<S: std::hash::BuildHasher>(
+    expr: &ValueExpr,
+    row: &HashMap<String, serde_json::Value, S>,
+) -> serde_json::Value {
     match expr {
         ValueExpr::Literal(val) => val.clone(),
         ValueExpr::Column(col) => row
@@ -564,7 +570,11 @@ fn extract_json_path(value: &serde_json::Value, path: &str) -> serde_json::Value
     curr.clone()
 }
 
-pub fn eval_predicate(pred: &Predicate, row: &HashMap<String, serde_json::Value>) -> bool {
+#[must_use]
+pub fn eval_predicate<S: std::hash::BuildHasher>(
+    pred: &Predicate,
+    row: &HashMap<String, serde_json::Value, S>,
+) -> bool {
     match pred {
         Predicate::AlwaysTrue => true,
         Predicate::And(preds) => preds.iter().all(|p| eval_predicate(p, row)),
@@ -604,10 +614,10 @@ fn eval_binary_op(left: &serde_json::Value, op: BinaryOp, right: &serde_json::Va
     match op {
         BinaryOp::Eq => values_equal(left, right),
         BinaryOp::NotEq => !values_equal(left, right),
-        BinaryOp::Lt => compare_values(left, right).is_some_and(|c| c.is_lt()),
-        BinaryOp::Lte => compare_values(left, right).is_some_and(|c| c.is_le()),
-        BinaryOp::Gt => compare_values(left, right).is_some_and(|c| c.is_gt()),
-        BinaryOp::Gte => compare_values(left, right).is_some_and(|c| c.is_ge()),
+        BinaryOp::Lt => compare_values(left, right).is_some_and(std::cmp::Ordering::is_lt),
+        BinaryOp::Lte => compare_values(left, right).is_some_and(std::cmp::Ordering::is_le),
+        BinaryOp::Gt => compare_values(left, right).is_some_and(std::cmp::Ordering::is_gt),
+        BinaryOp::Gte => compare_values(left, right).is_some_and(std::cmp::Ordering::is_ge),
         BinaryOp::Like => {
             if let (Some(l), Some(r)) = (left.as_str(), right.as_str()) {
                 sql_like(r, l)
@@ -682,6 +692,9 @@ fn compare_values(a: &serde_json::Value, b: &serde_json::Value) -> Option<std::c
     }
 }
 
+/// # Errors
+/// Returns `InvalidInput` errors detected here, and propagates errors from the
+/// operations it performs.
 pub fn parse_live_query(sql: &str, params: &[serde_json::Value]) -> Result<ParsedLiveQuery> {
     let substituted = substitute_params(sql, params);
     let trimmed = substituted.trim();
@@ -728,18 +741,15 @@ pub fn parse_live_query(sql: &str, params: &[serde_json::Value]) -> Result<Parse
     let after_from = &trimmed[from_idx + 6..];
     let where_pos = after_from.to_ascii_lowercase().find(" where ");
 
-    let (table_part, where_clause) = match where_pos {
-        Some(pos) => {
-            let table = after_from[..pos].trim();
-            let rest = &after_from[pos + 7..];
-            (table, Some(rest))
-        }
-        None => {
-            let end_table = after_from
-                .find(|c: char| c.is_whitespace() || c == ';')
-                .unwrap_or(after_from.len());
-            (&after_from[..end_table], None)
-        }
+    let (table_part, where_clause) = if let Some(pos) = where_pos {
+        let table = after_from[..pos].trim();
+        let rest = &after_from[pos + 7..];
+        (table, Some(rest))
+    } else {
+        let end_table = after_from
+            .find(|c: char| c.is_whitespace() || c == ';')
+            .unwrap_or(after_from.len());
+        (&after_from[..end_table], None)
     };
 
     let table_name = table_part.trim_matches('"').trim_matches('`').to_string();
@@ -748,7 +758,7 @@ pub fn parse_live_query(sql: &str, params: &[serde_json::Value]) -> Result<Parse
         || table_name.eq_ignore_ascii_case("_lilia_json");
 
     let (predicate, json_space_filter) = if let Some(where_str) = where_clause {
-        let (pred, space) = parse_where_clause(where_str)?;
+        let (pred, space) = parse_where_clause(where_str);
         (pred, space)
     } else {
         (Predicate::AlwaysTrue, None)
@@ -790,7 +800,7 @@ fn substitute_params(sql: &str, params: &[serde_json::Value]) -> String {
     result
 }
 
-fn parse_where_clause(where_str: &str) -> Result<(Predicate, Option<String>)> {
+fn parse_where_clause(where_str: &str) -> (Predicate, Option<String>) {
     let lower = where_str.to_ascii_lowercase();
     let order_by_pos = lower.find(" order by ");
     let limit_pos = lower.find(" limit ");
@@ -819,19 +829,18 @@ fn parse_where_clause(where_str: &str) -> Result<(Predicate, Option<String>)> {
             continue;
         }
 
-        if let Some(pred) = parse_comparison(p)? {
-            if let Predicate::Binary {
-                left: ValueExpr::Column(col),
-                op: BinaryOp::Eq,
-                right: ValueExpr::Literal(serde_json::Value::String(space_name)),
-            } = &pred
-            {
-                if col.eq_ignore_ascii_case("space") {
-                    space_filter = Some(space_name.clone());
-                }
+        let pred = parse_comparison(p);
+        if let Predicate::Binary {
+            left: ValueExpr::Column(col),
+            op: BinaryOp::Eq,
+            right: ValueExpr::Literal(serde_json::Value::String(space_name)),
+        } = &pred
+        {
+            if col.eq_ignore_ascii_case("space") {
+                space_filter = Some(space_name.clone());
             }
-            predicates.push(pred);
         }
+        predicates.push(pred);
     }
 
     let final_predicate = match predicates.len() {
@@ -840,7 +849,7 @@ fn parse_where_clause(where_str: &str) -> Result<(Predicate, Option<String>)> {
         _ => Predicate::And(predicates),
     };
 
-    Ok((final_predicate, space_filter))
+    (final_predicate, space_filter)
 }
 
 fn split_where_logical(where_str: &str, op: &str) -> Vec<String> {
@@ -911,90 +920,61 @@ fn split_where_logical(where_str: &str, op: &str) -> Vec<String> {
     parts
 }
 
-fn parse_comparison(part: &str) -> Result<Option<Predicate>> {
+/// Parses `left <op> right`; any other text matches every row. Two-character operators are
+/// tried first so that `>=` is not read as `>`.
+fn parse_comparison(part: &str) -> Predicate {
+    const OPERATORS: [(&str, BinaryOp); 7] = [
+        (">=", BinaryOp::Gte),
+        ("<=", BinaryOp::Lte),
+        ("!=", BinaryOp::NotEq),
+        ("<>", BinaryOp::NotEq),
+        ("=", BinaryOp::Eq),
+        (">", BinaryOp::Gt),
+        ("<", BinaryOp::Lt),
+    ];
     let trimmed = part.trim();
-
-    if let Some((left, right)) = trimmed.split_once(">=") {
-        return Ok(Some(Predicate::Binary {
-            left: parse_val_expr(left.trim())?,
-            op: BinaryOp::Gte,
-            right: parse_val_expr(right.trim())?,
-        }));
-    }
-    if let Some((left, right)) = trimmed.split_once("<=") {
-        return Ok(Some(Predicate::Binary {
-            left: parse_val_expr(left.trim())?,
-            op: BinaryOp::Lte,
-            right: parse_val_expr(right.trim())?,
-        }));
-    }
-    if let Some((left, right)) = trimmed.split_once("!=") {
-        return Ok(Some(Predicate::Binary {
-            left: parse_val_expr(left.trim())?,
-            op: BinaryOp::NotEq,
-            right: parse_val_expr(right.trim())?,
-        }));
-    }
-    if let Some((left, right)) = trimmed.split_once("<>") {
-        return Ok(Some(Predicate::Binary {
-            left: parse_val_expr(left.trim())?,
-            op: BinaryOp::NotEq,
-            right: parse_val_expr(right.trim())?,
-        }));
-    }
-    if let Some((left, right)) = trimmed.split_once('=') {
-        return Ok(Some(Predicate::Binary {
-            left: parse_val_expr(left.trim())?,
-            op: BinaryOp::Eq,
-            right: parse_val_expr(right.trim())?,
-        }));
-    }
-    if let Some((left, right)) = trimmed.split_once('>') {
-        return Ok(Some(Predicate::Binary {
-            left: parse_val_expr(left.trim())?,
-            op: BinaryOp::Gt,
-            right: parse_val_expr(right.trim())?,
-        }));
-    }
-    if let Some((left, right)) = trimmed.split_once('<') {
-        return Ok(Some(Predicate::Binary {
-            left: parse_val_expr(left.trim())?,
-            op: BinaryOp::Lt,
-            right: parse_val_expr(right.trim())?,
-        }));
-    }
-
-    Ok(Some(Predicate::AlwaysTrue))
+    OPERATORS
+        .iter()
+        .find_map(|(token, op)| {
+            trimmed
+                .split_once(token)
+                .map(|(left, right)| Predicate::Binary {
+                    left: parse_val_expr(left.trim()),
+                    op: *op,
+                    right: parse_val_expr(right.trim()),
+                })
+        })
+        .unwrap_or(Predicate::AlwaysTrue)
 }
 
-fn parse_val_expr(expr: &str) -> Result<ValueExpr> {
+fn parse_val_expr(expr: &str) -> ValueExpr {
     let trimmed = expr.trim();
 
-    if (trimmed.starts_with('\'') && trimmed.ends_with('\''))
-        || (trimmed.starts_with('"') && trimmed.ends_with('"'))
-    {
+    let quoted =
+        |quote: char| trimmed.len() >= 2 && trimmed.starts_with(quote) && trimmed.ends_with(quote);
+    if quoted('\'') || quoted('"') {
         let content = &trimmed[1..trimmed.len() - 1];
-        return Ok(ValueExpr::Literal(serde_json::Value::String(
-            content.replace("''", "'"),
-        )));
+        return ValueExpr::Literal(serde_json::Value::String(content.replace("''", "'")));
     }
 
     if let Ok(i) = trimmed.parse::<i64>() {
-        return Ok(ValueExpr::Literal(serde_json::Value::Number(i.into())));
+        return ValueExpr::Literal(serde_json::Value::Number(i.into()));
     }
-    if let Ok(f) = trimmed.parse::<f64>() {
-        if let Some(n) = serde_json::Number::from_f64(f) {
-            return Ok(ValueExpr::Literal(serde_json::Value::Number(n)));
-        }
+    if let Some(n) = trimmed
+        .parse::<f64>()
+        .ok()
+        .and_then(serde_json::Number::from_f64)
+    {
+        return ValueExpr::Literal(serde_json::Value::Number(n));
     }
     if trimmed.eq_ignore_ascii_case("true") {
-        return Ok(ValueExpr::Literal(serde_json::Value::Bool(true)));
+        return ValueExpr::Literal(serde_json::Value::Bool(true));
     }
     if trimmed.eq_ignore_ascii_case("false") {
-        return Ok(ValueExpr::Literal(serde_json::Value::Bool(false)));
+        return ValueExpr::Literal(serde_json::Value::Bool(false));
     }
     if trimmed.eq_ignore_ascii_case("null") {
-        return Ok(ValueExpr::Literal(serde_json::Value::Null));
+        return ValueExpr::Literal(serde_json::Value::Null);
     }
 
     let lower = trimmed.to_ascii_lowercase();
@@ -1003,14 +983,12 @@ fn parse_val_expr(expr: &str) -> Result<ValueExpr> {
         if let Some((col, path)) = inside.split_once(',') {
             let col = col.trim().trim_matches('"').trim_matches('`');
             let path = path.trim().trim_matches('\'').trim_matches('"');
-            return Ok(ValueExpr::JsonExtract {
+            return ValueExpr::JsonExtract {
                 column: col.to_string(),
                 path: path.to_string(),
-            });
+            };
         }
     }
 
-    Ok(ValueExpr::Column(
-        trimmed.trim_matches('"').trim_matches('`').to_string(),
-    ))
+    ValueExpr::Column(trimmed.trim_matches('"').trim_matches('`').to_string())
 }

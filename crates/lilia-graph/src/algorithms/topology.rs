@@ -2,6 +2,7 @@ use lilia_core::Direction;
 
 use crate::snapshot::GraphView;
 
+#[must_use]
 pub fn has_cycle(view: &GraphView, direction: Direction, kind_filter: Option<&str>) -> bool {
     let n = view.node_count();
     let kind_id_filter = kind_filter.and_then(|k| view.kind_id(k));
@@ -46,6 +47,7 @@ fn dfs_has_cycle(
     false
 }
 
+#[must_use]
 pub fn find_cycles(
     view: &GraphView,
     max_cycles: usize,
@@ -131,6 +133,7 @@ fn dfs_find_cycles(
     state[u] = 2; // Black
 }
 
+#[must_use]
 pub fn strongly_connected_components(
     view: &GraphView,
     kind_filter: Option<&str>,
@@ -161,7 +164,7 @@ pub fn strongly_connected_components(
         }
     }
 
-    sccs.sort_by(|a, b| b.len().cmp(&a.len()));
+    sccs.sort_by_key(|component| std::cmp::Reverse(component.len()));
     sccs
 }
 
@@ -221,15 +224,11 @@ fn strongconnect(
     }
 }
 
+#[must_use]
 pub fn weakly_connected_components(
     view: &GraphView,
     kind_filter: Option<&str>,
 ) -> Vec<Vec<String>> {
-    let n = view.node_count();
-    let kind_id_filter = kind_filter.and_then(|k| view.kind_id(k));
-
-    let mut parent: Vec<usize> = (0..n).collect();
-
     fn find(parent: &mut [usize], i: usize) -> usize {
         if parent[i] == i {
             i
@@ -246,6 +245,11 @@ pub fn weakly_connected_components(
             parent[root_i] = root_j;
         }
     }
+
+    let n = view.node_count();
+    let kind_id_filter = kind_filter.and_then(|k| view.kind_id(k));
+
+    let mut parent: Vec<usize> = (0..n).collect();
 
     for u in 0..n {
         for edge in view.out_edges(u) {
@@ -269,6 +273,6 @@ pub fn weakly_connected_components(
     }
 
     let mut wccs: Vec<Vec<String>> = groups.into_values().collect();
-    wccs.sort_by(|a, b| b.len().cmp(&a.len()));
+    wccs.sort_by_key(|component| std::cmp::Reverse(component.len()));
     wccs
 }

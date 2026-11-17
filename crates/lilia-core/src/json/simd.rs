@@ -1,6 +1,6 @@
 //! Vectorized SIMD JSON parser with automatic scalar fallback.
 //!
-//! Uses AVX-512 / AVX2 (x86_64), ARM Neon (aarch64), or Wasm SIMD128 (wasm32) via `simd-json`
+//! Uses AVX-512 / AVX2 (`x86_64`), ARM Neon (aarch64), or Wasm SIMD128 (wasm32) via `simd-json`
 //! when available, with a transparent fallback to scalar `serde_json` for unsupported targets.
 
 use crate::json::binary::BinaryDoc;
@@ -44,7 +44,7 @@ fn parse_with_simd(input: &mut [u8]) -> Result<BinaryDoc> {
     })?;
 
     let json_val: serde_json::Value = borrowed_to_serde(val);
-    Ok(BinaryDoc::from_json_value(&json_val))
+    BinaryDoc::from_json_value(&json_val)
 }
 
 #[cfg(feature = "simd")]
@@ -58,8 +58,7 @@ fn borrowed_to_serde(val: simd_json::BorrowedValue<'_>) -> serde_json::Value {
         BV::Static(StaticNode::I64(n)) => serde_json::Value::Number(n.into()),
         BV::Static(StaticNode::U64(n)) => serde_json::Value::Number(n.into()),
         BV::Static(StaticNode::F64(n)) => serde_json::Number::from_f64(n)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
         BV::String(s) => serde_json::Value::String(s.into_owned()),
         BV::Array(arr) => {
             let items = arr.into_iter().map(borrowed_to_serde).collect();
@@ -79,7 +78,7 @@ fn borrowed_to_serde(val: simd_json::BorrowedValue<'_>) -> serde_json::Value {
 fn parse_with_scalar(input: &[u8]) -> Result<BinaryDoc> {
     let val: serde_json::Value = serde_json::from_slice(input)
         .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
-    Ok(BinaryDoc::from_json_value(&val))
+    BinaryDoc::from_json_value(&val)
 }
 
 #[cfg(test)]

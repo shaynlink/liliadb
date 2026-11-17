@@ -9,6 +9,44 @@ use crate::Database;
 use lilia_core::{CollectionKind, KvEntry, Result, StorageTier};
 
 impl Database {
+    pub(crate) fn is_kv_entry_authorized(
+        &self,
+        namespace: &str,
+        key: &[u8],
+        value: &[u8],
+        action: lilia_core::security::PolicyAction,
+    ) -> bool {
+        let policies = self.security_registry.policies_for_table(namespace);
+        if policies.is_empty() {
+            return true;
+        }
+        let sec_ctx = crate::security::get_active_context();
+        for np in policies {
+            let applies = match action {
+                lilia_core::security::PolicyAction::Select => np.policy.action.applies_to_read(),
+                lilia_core::security::PolicyAction::Insert
+                | lilia_core::security::PolicyAction::Update
+                | lilia_core::security::PolicyAction::Delete => np.policy.action.applies_to_write(),
+                _ => true,
+            };
+            if !applies {
+                continue;
+            }
+            if let Ok(expr) = lilia_core::parse_expr(&np.policy.condition) {
+                if !lilia_core::security::eval_security_condition_kv(
+                    &expr,
+                    namespace,
+                    key,
+                    value,
+                    sec_ctx.as_ref(),
+                ) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub fn kv_get(&self, namespace: &str, key: &[u8]) -> Result<Option<KvEntry>> {
         validate_name("namespace", namespace)?;
         let now = now_ms();
@@ -18,6 +56,14 @@ impl Database {
                     return Ok(None);
                 };
                 let value = self.codec.decode(&snap.value)?;
+                if !self.is_kv_entry_authorized(
+                    namespace,
+                    key,
+                    &value,
+                    lilia_core::security::PolicyAction::Select,
+                ) {
+                    return Ok(None);
+                }
                 return Ok(Some(KvEntry {
                     namespace: namespace.to_owned(),
                     key: key.to_vec(),
@@ -35,6 +81,14 @@ impl Database {
                                 return Ok(None);
                             }
                             let value = self.codec.decode(&encoded)?;
+                            if !self.is_kv_entry_authorized(
+                                namespace,
+                                key,
+                                &value,
+                                lilia_core::security::PolicyAction::Select,
+                            ) {
+                                return Ok(None);
+                            }
                             Ok(Some(KvEntry {
                                 namespace: namespace.to_owned(),
                                 key: key.to_vec(),
@@ -89,9 +143,20 @@ impl Database {
             None
         };
         stmt.reset()?;
+        if let Some(ref e) = entry {
+            if !self.is_kv_entry_authorized(
+                namespace,
+                &e.key,
+                &e.value,
+                lilia_core::security::PolicyAction::Select,
+            ) {
+                return Ok(None);
+            }
+        }
         Ok(entry)
     }
 
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn kv_scan(
         &self,
         namespace: &str,
@@ -111,6 +176,14 @@ impl Database {
             let mut entries = Vec::with_capacity(snaps.len());
             for (_, key, snap) in snaps {
                 let value = self.codec.decode(&snap.value)?;
+                if !self.is_kv_entry_authorized(
+                    namespace,
+                    &key,
+                    &value,
+                    lilia_core::security::PolicyAction::Select,
+                ) {
+                    continue;
+                }
                 entries.push(KvEntry {
                     namespace: namespace.to_owned(),
                     key,
@@ -156,20 +229,20 @@ impl Database {
                     Some(stmt.column_int64(3))
                 };
                 let value = if lilia_core::cas::is_kv_pointer(raw_val) {
-                if let Some((_, hash, _)) = lilia_core::cas::decode_kv_pointer(raw_val) {
-                    self.cas.get(&hash)?.ok_or_else(|| {
-                        lilia_core::LiliaError::new(
-                            lilia_core::ErrorCode::Storage,
-                            format!("missing CAS blob file for hash {hash}"),
-                            false,
-                        )
-                    })?
+                    if let Some((_, hash, _)) = lilia_core::cas::decode_kv_pointer(raw_val) {
+                        self.cas.get(&hash)?.ok_or_else(|| {
+                            lilia_core::LiliaError::new(
+                                lilia_core::ErrorCode::Storage,
+                                format!("missing CAS blob file for hash {hash}"),
+                                false,
+                            )
+                        })?
+                    } else {
+                        self.codec.decode(raw_val)?
+                    }
                 } else {
                     self.codec.decode(raw_val)?
-                }
-            } else {
-                self.codec.decode(raw_val)?
-            };
+                };
                 merged.insert(
                     key.clone(),
                     Some(KvEntry {
@@ -214,15 +287,29 @@ impl Database {
             }
         }
 
-        Ok(merged
-            .into_values()
-            .flatten()
-            .take(norm_limit)
-            .collect())
+        let mut out = Vec::with_capacity(norm_limit.min(merged.len()));
+        for entry in merged.into_values().flatten() {
+            if self.is_kv_entry_authorized(
+                namespace,
+                &entry.key,
+                &entry.value,
+                lilia_core::security::PolicyAction::Select,
+            ) {
+                out.push(entry);
+                if out.len() >= norm_limit {
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Retrieve the physical filesystem path to the CAS blob for a KV entry, if stored in CAS.
-    pub fn kv_get_blob_path(&self, namespace: &str, key: &[u8]) -> Result<Option<std::path::PathBuf>> {
+    pub fn kv_get_blob_path(
+        &self,
+        namespace: &str,
+        key: &[u8],
+    ) -> Result<Option<std::path::PathBuf>> {
         validate_name("namespace", namespace)?;
         let mut connection = self.read_lock()?;
         let stmt = connection.slot(StmtSlot::KvGet)?;

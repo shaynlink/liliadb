@@ -93,8 +93,9 @@ struct RowChanges {
 }
 
 fn read_definitions(connection: &NativeConnection) -> Result<Vec<Definition>> {
-    let mut statement = connection
-        .prepare("SELECT space, index_name, json_path, filter_predicate FROM _lilia_json_indexes;")?;
+    let mut statement = connection.prepare(
+        "SELECT space, index_name, json_path, filter_predicate FROM _lilia_json_indexes;",
+    )?;
     let mut definitions = Vec::new();
     while statement.step()? {
         let filter = (!statement.column_is_null(3))
@@ -251,6 +252,7 @@ impl AutotuneEngine {
         })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn enabled(&self) -> bool {
         self.options.enabled
     }
@@ -438,7 +440,9 @@ impl AutotuneEngine {
                     .into_iter()
                     .chain(row.last_used_ms)
                     .max(),
-                lookups: observed.map_or(0, |lookups| lookups.lookups).max(row.lookups),
+                lookups: observed
+                    .map_or(0, |lookups| lookups.lookups)
+                    .max(row.lookups),
                 changed_ms: row.changed_ms,
             });
         }
@@ -500,11 +504,9 @@ impl AutotuneEngine {
             for (space, name, usage) in &lookups {
                 update_lookups(&tx, space, name, *usage)?;
             }
-            let mut purge = tx.prepare("DELETE FROM _lilia_autotune_query_stats WHERE last_seen_ms < ?1;")?;
-            purge.bind_int64(
-                1,
-                now.saturating_sub(to_i64(self.options.prune_idle_ms)),
-            )?;
+            let mut purge =
+                tx.prepare("DELETE FROM _lilia_autotune_query_stats WHERE last_seen_ms < ?1;")?;
+            purge.bind_int64(1, now.saturating_sub(to_i64(self.options.prune_idle_ms)))?;
             purge.step()?;
             drop(purge);
             tx.commit()
@@ -576,15 +578,17 @@ impl AutotuneEngine {
                 }
                 Recommendation::DropIndex {
                     space, index_name, ..
-                } if self.options.auto_prune => match self.drop_index(env, space, index_name, now) {
-                    Ok(()) => report.dropped.push(IndexRef {
-                        space: space.clone(),
-                        index_name: index_name.clone(),
-                    }),
-                    Err(error) => report
-                        .failures
-                        .push(format!("drop {space}/{index_name}: {error}")),
-                },
+                } if self.options.auto_prune => {
+                    match self.drop_index(env, space, index_name, now) {
+                        Ok(()) => report.dropped.push(IndexRef {
+                            space: space.clone(),
+                            index_name: index_name.clone(),
+                        }),
+                        Err(error) => report
+                            .failures
+                            .push(format!("drop {space}/{index_name}: {error}")),
+                    }
+                }
                 _ => report.pending.push(recommendation),
             }
         }
@@ -685,7 +689,13 @@ impl AutotuneEngine {
         Ok(removed)
     }
 
-    fn drop_index(&self, env: &IndexEnv<'_>, space: &str, index_name: &str, now: i64) -> Result<()> {
+    fn drop_index(
+        &self,
+        env: &IndexEnv<'_>,
+        space: &str,
+        index_name: &str,
+        now: i64,
+    ) -> Result<()> {
         let mut writer = env.resources.lock_writer(env.lifecycle, None)?;
         let tx = writer.transaction()?;
         remove_definition(&tx, &env.schemas(), space, index_name)?;
@@ -697,7 +707,9 @@ impl AutotuneEngine {
             &IndexRow {
                 space: space.to_owned(),
                 name: index_name.to_owned(),
-                origin: previous.as_ref().map_or(IndexOrigin::Manual, |row| row.origin),
+                origin: previous
+                    .as_ref()
+                    .map_or(IndexOrigin::Manual, |row| row.origin),
                 phase: IndexPhase::Dropped,
                 first_seen_ms: previous.as_ref().map_or(now, |row| row.first_seen_ms),
                 last_used_ms: previous.as_ref().and_then(|row| row.last_used_ms),
@@ -757,7 +769,10 @@ impl AutotuneEngine {
                     .get(&(index.space.clone(), index.index_name.clone()))
                     .copied()
                     .unwrap_or_default();
-                let reference = index.last_used_ms.unwrap_or(i64::MIN).max(index.first_seen_ms);
+                let reference = index
+                    .last_used_ms
+                    .unwrap_or(i64::MIN)
+                    .max(index.first_seen_ms);
                 IndexUsageView {
                     zombie: index.phase == IndexPhase::Ready
                         && now.saturating_sub(reference) >= idle_window,
@@ -774,9 +789,9 @@ impl AutotuneEngine {
                 }
             })
             .collect();
-        report.indexes.sort_by(|a, b| {
-            (&a.space, &a.index_name).cmp(&(&b.space, &b.index_name))
-        });
+        report
+            .indexes
+            .sort_by(|a, b| (&a.space, &a.index_name).cmp(&(&b.space, &b.index_name)));
         Ok(report)
     }
 
@@ -1009,16 +1024,26 @@ mod tests {
             })
             .collect();
         db.batch(&batch).unwrap();
-        db.create_json_index("orders", "idx_status", "$.status").unwrap();
+        db.create_json_index("orders", "idx_status", "$.status")
+            .unwrap();
         assert_eq!(find_paid(&db), 4);
 
         // Simulate a half-built index: definition present, entries missing.
-        db.sql_query("DELETE FROM _lilia_json_index_entries", &[]).unwrap();
-        assert_eq!(find_paid(&db), 0, "an empty index answers from its (empty) entries");
+        db.sql_query("DELETE FROM _lilia_json_index_entries", &[])
+            .unwrap();
+        assert_eq!(
+            find_paid(&db),
+            0,
+            "an empty index answers from its (empty) entries"
+        );
 
         lock(&db.autotune.building).insert(("orders".to_owned(), "idx_status".to_owned()));
         assert!(db.autotune.is_building("orders", "idx_status"));
-        assert_eq!(find_paid(&db), 4, "while building, find falls back to a scan");
+        assert_eq!(
+            find_paid(&db),
+            4,
+            "while building, find falls back to a scan"
+        );
 
         lock(&db.autotune.building).clear();
         assert!(!db.autotune.is_building("orders", "idx_status"));

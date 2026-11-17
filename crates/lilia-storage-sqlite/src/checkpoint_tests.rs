@@ -39,6 +39,8 @@ fn interval_flushes_small_wal_without_new_notifications() {
         },
         "FULL",
         None,
+        None,
+        None,
     )
     .unwrap();
     connection.exec("INSERT INTO data VALUES(1)").unwrap();
@@ -90,6 +92,8 @@ fn reader_starvation_does_not_block_writes_and_retries_on_interval() {
         },
         "FULL",
         None,
+        None,
+        None,
     )
     .unwrap();
     wait_stats(&service, |stats| stats.incomplete > 0);
@@ -118,6 +122,8 @@ fn disconnect_stops_worker_even_with_long_interval() {
             interval_ms: 60_000,
         },
         "FULL",
+        None,
+        None,
         None,
     )
     .unwrap();
@@ -199,4 +205,38 @@ fn invalid_policy_fails_before_creating_database() {
         );
         assert!(!path.exists());
     }
+}
+
+#[test]
+fn sustained_writes_keep_the_wal_bounded() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db.lilia");
+    let mut options = DatabaseOptions::durable(&path);
+    options.durability = lilia_core::Durability::Performance;
+    options.checkpoint_policy = CheckpointPolicy {
+        wal_bytes: 64 * 1024,
+        interval_ms: 60_000,
+    };
+    let database = Database::open(options).unwrap();
+    let payload = "x".repeat(1024);
+    let mut largest_wal = 0;
+    for batch in 0..1_000 {
+        let operations: Vec<BatchOperation> = (0..20)
+            .map(|doc| BatchOperation::JsonPut {
+                space: "load".into(),
+                id: format!("{batch}-{doc}"),
+                value: serde_json::json!({ "payload": payload }),
+                if_version: None,
+            })
+            .collect();
+        database.batch(&operations).unwrap();
+        let wal = std::fs::metadata(path.with_extension("lilia-wal")).map_or(0, |m| m.len());
+        largest_wal = largest_wal.max(wal);
+    }
+    // About 20 MiB of documents went through the WAL; it stayed near the 4 MiB writer limit.
+    assert!(
+        largest_wal < 8 * 1024 * 1024,
+        "WAL reached {largest_wal} bytes"
+    );
+    assert!(database.integrity_check().unwrap());
 }

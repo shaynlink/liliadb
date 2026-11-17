@@ -58,6 +58,9 @@ pub struct CounterStore<'a> {
 
 impl CounterStore<'_> {
     /// Returns the current aggregated integer value of the counter (`sum(P) - sum(N)`).
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn get(&self) -> Result<i64> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -89,6 +92,9 @@ impl CounterStore<'_> {
     }
 
     /// Retrieves the full distributed `PNCounter` state map across all actors.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn state(&self) -> Result<PNCounter> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -128,6 +134,9 @@ impl CounterStore<'_> {
     }
 
     /// Increments the counter by `amount` for `actor_id` and returns the new value.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn increment(&self, actor_id: &str, amount: u64) -> Result<i64> {
         self.db.batch(&[BatchOperation::CrdtPnCounterIncrement {
             space: self.space.clone(),
@@ -139,6 +148,9 @@ impl CounterStore<'_> {
     }
 
     /// Decrements the counter by `amount` for `actor_id` and returns the new value.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn decrement(&self, actor_id: &str, amount: u64) -> Result<i64> {
         self.db.batch(&[BatchOperation::CrdtPnCounterDecrement {
             space: self.space.clone(),
@@ -150,6 +162,9 @@ impl CounterStore<'_> {
     }
 
     /// Merges an incoming remote `PNCounter` state using the semilattice join rule.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn merge(&self, remote: &PNCounter) -> Result<i64> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -206,6 +221,9 @@ pub struct SetStore<'a> {
 
 impl SetStore<'_> {
     /// Returns the set of all elements currently present (not tombstoned).
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn read(&self) -> Result<BTreeSet<String>> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -235,6 +253,9 @@ impl SetStore<'_> {
     }
 
     /// Checks if a specific element is present in the set.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn contains(&self, element: &str) -> Result<bool> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -264,6 +285,9 @@ impl SetStore<'_> {
     }
 
     /// Retrieves the complete in-memory `OrSet<String>` state.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn state(&self) -> Result<OrSet<String>> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -306,6 +330,9 @@ impl SetStore<'_> {
     }
 
     /// Adds an element to the set on behalf of `actor_id`.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn add(&self, actor_id: &str, element: &str) -> Result<()> {
         self.db.batch(&[BatchOperation::CrdtOrSetAdd {
             space: self.space.clone(),
@@ -317,6 +344,9 @@ impl SetStore<'_> {
     }
 
     /// Removes an element from the set (tombstoning all currently observed tags).
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn remove(&self, element: &str) -> Result<()> {
         self.db.batch(&[BatchOperation::CrdtOrSetRemove {
             space: self.space.clone(),
@@ -328,6 +358,9 @@ impl SetStore<'_> {
     }
 
     /// Prunes tombstones that are older than `cutoff_ms`.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn prune(&self, cutoff_ms: i64) -> Result<usize> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -359,6 +392,9 @@ impl SetStore<'_> {
     }
 
     /// Merges an incoming remote `OrSet<String>` state.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn merge(&self, remote: &OrSet<String>) -> Result<()> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -414,6 +450,10 @@ pub struct DocStore<'a> {
 
 impl DocStore<'_> {
     /// Retrieves the materialized JSON document.
+    ///
+    /// # Errors
+    /// Returns `Storage` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn get(&self) -> Result<Option<Value>> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -447,6 +487,10 @@ impl DocStore<'_> {
     }
 
     /// Retrieves the internal `LwwJsonDocument` state tracking all field clocks.
+    ///
+    /// # Errors
+    /// Returns `Storage` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn state(&self) -> Result<Option<LwwJsonDocument>> {
         validate_name("space", &self.space)?;
         validate_name("id", &self.id)?;
@@ -481,6 +525,10 @@ impl DocStore<'_> {
     }
 
     /// Sets an individual field path in the document.
+    ///
+    /// # Errors
+    /// Returns `Storage` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn set_field(
         &self,
         actor_id: &str,
@@ -511,6 +559,10 @@ impl DocStore<'_> {
     }
 
     /// Marks an individual field path (and its children) as deleted.
+    ///
+    /// # Errors
+    /// Returns `Storage` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn delete_field(
         &self,
         actor_id: &str,
@@ -543,6 +595,10 @@ impl DocStore<'_> {
     }
 
     /// Merges a complete remote `LwwJsonDocument` state into this document.
+    ///
+    /// # Errors
+    /// Returns `Storage` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn merge(&self, remote: &LwwJsonDocument) -> Result<u64> {
         let raw = serde_json::to_vec(remote)
             .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;

@@ -53,12 +53,7 @@ impl PendingOverlay {
         }
     }
 
-    pub fn record_kv(
-        &self,
-        namespace: &str,
-        key: &[u8],
-        state: Option<(Vec<u8>, Option<i64>)>,
-    ) {
+    pub fn record_kv(&self, namespace: &str, key: &[u8], state: Option<(Vec<u8>, Option<i64>)>) {
         let shard_idx = ShardedMemTable::<OverlayCell<Vec<u8>>>::shard_index(namespace, key);
         let lookup = (namespace.to_owned(), key.to_vec());
         let seq = self.kv.next_seq();
@@ -71,15 +66,9 @@ impl PendingOverlay {
             now_ms(),
             |existing| {
                 let new_state = state.map(|(v, exp)| (v, 1, exp));
-                let payload_bytes = new_state
-                    .as_ref()
-                    .map_or(16, |(v, _, _)| v.len() + 16);
+                let payload_bytes = new_state.as_ref().map_or(16, |(v, _, _)| v.len() + 16);
                 if let Some(entry) = existing {
-                    let prev_ver = entry
-                        .value
-                        .state
-                        .as_ref()
-                        .map_or(1, |(_, ver, _)| ver + 1);
+                    let prev_ver = entry.value.state.as_ref().map_or(1, |(_, ver, _)| ver + 1);
                     entry.value.pending_ops = entry.value.pending_ops.saturating_add(1);
                     entry.value.state = new_state.map(|(v, _, exp)| (v, prev_ver, exp));
                     entry.payload_bytes = namespace.len() + key.len() + payload_bytes;
@@ -139,11 +128,7 @@ impl PendingOverlay {
                     .and_then(|v| serde_json::to_vec(v).ok())
                     .map_or(16, |b| b.len() + 16);
                 if let Some(entry) = existing {
-                    let prev_ver = entry
-                        .value
-                        .state
-                        .as_ref()
-                        .map_or(1, |(_, ver, _)| ver + 1);
+                    let prev_ver = entry.value.state.as_ref().map_or(1, |(_, ver, _)| ver + 1);
                     entry.value.pending_ops = entry.value.pending_ops.saturating_add(1);
                     entry.value.state = state.map(|v| (v, prev_ver, None));
                     entry.payload_bytes = space.len() + key.len() + bytes;
@@ -217,9 +202,7 @@ impl PendingOverlay {
                         expires_at_ms: None,
                         inserted_seq: seq,
                         last_access_seq: seq,
-                        payload_bytes: series_id.len()
-                            + 8
-                            + std::mem::size_of_val(pts),
+                        payload_bytes: series_id.len() + 8 + std::mem::size_of_val(pts),
                     }))
                 }
             },
@@ -307,9 +290,7 @@ impl SyncGroupWaiter {
                 }
             }
         }
-        guard
-            .take()
-            .expect("checked guard.is_some()")
+        guard.take().expect("checked guard.is_some()")
     }
 }
 
@@ -373,7 +354,7 @@ impl std::fmt::Debug for WriteRingBuffer {
         f.debug_struct("WriteRingBuffer")
             .field("capacity", &self.config.capacity)
             .field("queued_len", &self.queue.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -388,9 +369,9 @@ pub(crate) struct RingBufferEngine {
 impl RingBufferEngine {
     #[allow(clippy::too_many_arguments)]
     pub fn start(
-        config: RingBufferConfig,
-        resources: Arc<Resources>,
-        lifecycle: Arc<Lifecycle>,
+        config: &RingBufferConfig,
+        resources: &Arc<Resources>,
+        lifecycle: &Arc<Lifecycle>,
         codec: Arc<dyn ValueCodec>,
         dict_registry: Arc<DictionaryRegistry>,
         json_options: JsonOptions,
@@ -405,8 +386,8 @@ impl RingBufferEngine {
             queue,
             config,
             overlay: Arc::new(PendingOverlay::new()),
-            resources: Arc::downgrade(&resources),
-            lifecycle: Arc::downgrade(&lifecycle),
+            resources: Arc::downgrade(resources),
+            lifecycle: Arc::downgrade(lifecycle),
             codec,
             dict_registry,
             json_options,
@@ -509,8 +490,11 @@ impl WriteRingBuffer {
                 expires_at_ms,
             } => {
                 if let Ok(encoded) = self.codec.encode(value) {
-                    self.overlay
-                        .record_kv(namespace, key, Some((encoded.into_owned(), *expires_at_ms)));
+                    self.overlay.record_kv(
+                        namespace,
+                        key,
+                        Some((encoded.into_owned(), *expires_at_ms)),
+                    );
                     return Some(OverlayTag::Kv {
                         namespace: namespace.clone(),
                         key: key.clone(),
@@ -820,13 +804,15 @@ enum OverlayTag {
     Json { space: String, id: String },
 }
 
-/// Cloneable high-speed producer handle into LiliaDB's lock-free [`WriteRingBuffer`].
+/// Cloneable high-speed producer handle into `LiliaDB`'s lock-free [`WriteRingBuffer`].
 #[derive(Debug, Clone)]
 pub struct RingBufferHandle {
     pub(crate) core: Arc<WriteRingBuffer>,
 }
 
 impl RingBufferHandle {
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn push_kv(&self, namespace: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.core.push_op(BatchOperation::KvSet {
             namespace: namespace.to_owned(),
@@ -837,6 +823,8 @@ impl RingBufferHandle {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn push_kv_with_ttl(
         &self,
         namespace: &str,
@@ -853,6 +841,8 @@ impl RingBufferHandle {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn push_kv_delete(&self, namespace: &str, key: &[u8]) -> Result<()> {
         self.core.push_op(BatchOperation::KvDelete {
             namespace: namespace.to_owned(),
@@ -861,6 +851,8 @@ impl RingBufferHandle {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn push_json(&self, space: &str, id: &str, value: serde_json::Value) -> Result<()> {
         self.core.push_op(BatchOperation::JsonPut {
             space: space.to_owned(),
@@ -870,6 +862,8 @@ impl RingBufferHandle {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn push_ts_point(
         &self,
         series_id: &str,
@@ -879,6 +873,8 @@ impl RingBufferHandle {
         self.core.push_ts_point(series_id, resolution_ms, point)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn push_ts_points(
         &self,
         series_id: &str,
@@ -888,10 +884,14 @@ impl RingBufferHandle {
         self.core.push_ts_points(series_id, resolution_ms, points)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn push_op(&self, op: BatchOperation) -> Result<()> {
         self.core.push_op(op)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn commit_sync(
         &self,
         ops: Vec<BatchOperation>,
@@ -900,6 +900,8 @@ impl RingBufferHandle {
         self.core.push_group_sync(ops, timeout)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn flush(&self) -> Result<RingBufferStats> {
         self.core.flush()
     }
@@ -1003,8 +1005,7 @@ fn drain_pass(core: &WriteRingBuffer, drain_all: bool) -> Result<usize> {
         let mut unused = None;
         let batch_n = drain_one_pass(core, drain_all, &mut unused)?;
         total_drained += batch_n;
-        if batch_n == 0 || !drain_all || core.queue.is_empty() || total_drained >= snapshot_target
-        {
+        if batch_n == 0 || !drain_all || core.queue.is_empty() || total_drained >= snapshot_target {
             break;
         }
     }
@@ -1048,11 +1049,7 @@ fn drain_one_pass(
         match cmd {
             WriteCommand::Op(op) => {
                 if overlay_on {
-                    record_op_release_count(
-                        &op,
-                        &mut kv_overlay_counts,
-                        &mut json_overlay_counts,
-                    );
+                    record_op_release_count(&op, &mut kv_overlay_counts, &mut json_overlay_counts);
                 }
                 async_ops.push(op);
             }
@@ -1137,10 +1134,12 @@ fn drain_one_pass(
                     namespace,
                     key,
                     if_version: None,
-                } => last_idx_by_key
-                    .get(&(namespace.clone(), key.clone()))
-                    .copied()
-                    == Some(i),
+                } => {
+                    last_idx_by_key
+                        .get(&(namespace.clone(), key.clone()))
+                        .copied()
+                        == Some(i)
+                }
                 _ => true,
             };
             if keep {
@@ -1204,8 +1203,9 @@ fn drain_one_pass(
             Ok(res)
         };
 
+        let mut async_results = Vec::with_capacity(async_ops.len());
         for op in &async_ops {
-            apply_one(op)?;
+            async_results.push(apply_one(op)?);
         }
 
         let mut waiter_results = Vec::with_capacity(sync_waiters.len());
@@ -1217,6 +1217,13 @@ fn drain_one_pass(
             waiter_results.push(res_vec);
         }
 
+        let mut ledger_entries = crate::ledger::operation_entries(&async_ops, &async_results);
+        for ((_, ops), results) in sync_waiters.iter().zip(&waiter_results) {
+            ledger_entries.extend(crate::ledger::operation_entries(ops, results));
+        }
+        res_arc
+            .ledger
+            .record_commit(tx.conn(), ledger_entries, crate::storage::now_ms())?;
         tx.commit()?;
         Ok(waiter_results)
     })();
@@ -1326,15 +1333,17 @@ pub(crate) use vtab_buffered::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod vtab_buffered {
-    use super::*;
+    use super::{
+        now_ms, Arc, PendingOverlay, SliceVTab, VTabValue, ValueCodec, VirtualTableProvider,
+    };
 
     pub(crate) fn build_buffered_kv_vtab(
-    overlay: &Arc<PendingOverlay>,
-    codec: &Arc<dyn ValueCodec>,
-) -> Arc<dyn VirtualTableProvider> {
-    let overlay = Arc::clone(overlay);
-    let codec = Arc::clone(codec);
-    SliceVTab::new(
+        overlay: &Arc<PendingOverlay>,
+        codec: &Arc<dyn ValueCodec>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let overlay = Arc::clone(overlay);
+        let codec = Arc::clone(codec);
+        SliceVTab::new(
         "CREATE TABLE x(namespace TEXT, key BLOB, value BLOB, version INTEGER, expires_at_ms INTEGER, deleted INTEGER)",
         true,
         move |ns, key| {
@@ -1376,64 +1385,64 @@ mod vtab_buffered {
             _ => VTabValue::Null,
         },
     )
-}
+    }
 
-pub(crate) fn build_buffered_json_vtab(
-    overlay: &Arc<PendingOverlay>,
-) -> Arc<dyn VirtualTableProvider> {
-    let overlay = Arc::clone(overlay);
-    SliceVTab::new(
-        "CREATE TABLE x(space TEXT, id TEXT, value TEXT, version INTEGER, deleted INTEGER)",
-        true,
-        move |space, id| {
-            let now = now_ms();
-            if let (Some(s), Some(i)) = (space, id) {
-                return overlay
+    pub(crate) fn build_buffered_json_vtab(
+        overlay: &Arc<PendingOverlay>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let overlay = Arc::clone(overlay);
+        SliceVTab::new(
+            "CREATE TABLE x(space TEXT, id TEXT, value TEXT, version INTEGER, deleted INTEGER)",
+            true,
+            move |space, id| {
+                let now = now_ms();
+                if let (Some(s), Some(i)) = (space, id) {
+                    return overlay
+                        .json
+                        .get(s, i, now, false)
+                        .into_iter()
+                        .map(|snap| {
+                            let id_str = String::from_utf8_lossy(i).into_owned();
+                            match snap.value.state {
+                                Some((v, ver, _)) => (
+                                    s.to_owned(),
+                                    id_str,
+                                    serde_json::to_string(&v).unwrap_or_else(|_| "null".into()),
+                                    ver,
+                                    0i64,
+                                ),
+                                None => (s.to_owned(), id_str, "null".into(), 0, 1i64),
+                            }
+                        })
+                        .collect();
+                }
+                overlay
                     .json
-                    .get(s, i, now, false)
+                    .scan(space, None, usize::MAX, now)
                     .into_iter()
-                    .map(|snap| {
-                        let id_str = String::from_utf8_lossy(i).into_owned();
+                    .map(|(s, i, snap)| {
+                        let id_str = String::from_utf8_lossy(&i).into_owned();
                         match snap.value.state {
                             Some((v, ver, _)) => (
-                                s.to_owned(),
+                                s,
                                 id_str,
                                 serde_json::to_string(&v).unwrap_or_else(|_| "null".into()),
                                 ver,
                                 0i64,
                             ),
-                            None => (s.to_owned(), id_str, "null".into(), 0, 1i64),
+                            None => (s, id_str, "null".into(), 0, 1i64),
                         }
                     })
-                    .collect();
-            }
-            overlay
-                .json
-                .scan(space, None, usize::MAX, now)
-                .into_iter()
-                .map(|(s, i, snap)| {
-                    let id_str = String::from_utf8_lossy(&i).into_owned();
-                    match snap.value.state {
-                        Some((v, ver, _)) => (
-                            s,
-                            id_str,
-                            serde_json::to_string(&v).unwrap_or_else(|_| "null".into()),
-                            ver,
-                            0i64,
-                        ),
-                        None => (s, id_str, "null".into(), 0, 1i64),
-                    }
-                })
-                .collect()
-        },
-        |r, col| match col {
-            0 => VTabValue::Text(r.0.clone()),
-            1 => VTabValue::Text(r.1.clone()),
-            2 => VTabValue::Text(r.2.clone()),
-            3 => VTabValue::Int(i64::try_from(r.3).unwrap_or(i64::MAX)),
-            4 => VTabValue::Int(r.4),
-            _ => VTabValue::Null,
-        },
-    )
-}
+                    .collect()
+            },
+            |r, col| match col {
+                0 => VTabValue::Text(r.0.clone()),
+                1 => VTabValue::Text(r.1.clone()),
+                2 => VTabValue::Text(r.2.clone()),
+                3 => VTabValue::Int(i64::try_from(r.3).unwrap_or(i64::MAX)),
+                4 => VTabValue::Int(r.4),
+                _ => VTabValue::Null,
+            },
+        )
+    }
 }

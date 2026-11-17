@@ -12,12 +12,44 @@ use lilia_core::{
 };
 use lilia_sqlite_native::{ffi, NativeConnection, NativeStatement};
 
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 pub(crate) fn register_sql_functions(
     conn: &NativeConnection,
     codec: &Arc<dyn ValueCodec>,
     dict_registry: &Arc<lilia_core::DictionaryRegistry>,
     key_registry: &Arc<lilia_core::KeyRegistry>,
+    wasm_registry: &Arc<crate::wasm_udf::WasmUdfRegistry>,
 ) -> Result<()> {
+    conn.register_scalar_function("current_context", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let key = args[0].as_text();
+        if let Some(sec_ctx) = crate::security::get_active_context() {
+            if let Some(val) = sec_ctx.get(key) {
+                ctx.set_result_text(val);
+                return Ok(());
+            }
+        }
+        ctx.set_result_null();
+        Ok(())
+    })?;
+
+    conn.register_scalar_function("has_role", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_int64(0);
+            return Ok(());
+        }
+        let role = args[0].as_text();
+        if let Some(sec_ctx) = crate::security::get_active_context() {
+            ctx.set_result_int64(i64::from(sec_ctx.has_role(role)));
+        } else {
+            ctx.set_result_int64(0);
+        }
+        Ok(())
+    })?;
+
     let codec_kv = Arc::clone(codec);
     conn.register_scalar_function("lilia_decode_kv", 1, move |ctx, args| {
         if args.is_empty() || args[0].is_null() {
@@ -53,22 +85,29 @@ pub(crate) fn register_sql_functions(
                         &key_reg_decode,
                         lilia_core::DecryptionMode::Tolerant,
                     );
-                    let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                    let json_str =
+                        serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
                     ctx.set_result_text(&json_str);
                     return Ok(());
                 }
             } else if blob.starts_with(b"LBZ\x01") && blob.len() >= 8 {
                 let dict_id = u32::from_le_bytes(blob[4..8].try_into().unwrap());
                 if let Some(dict) = dict_reg_decode.get_by_id(dict_id) {
-                    if let Ok(decompressed) = lilia_core::compression::dict::decompress_with_dict(&blob[8..], &dict.raw_bytes) {
-                        if let Ok(root) = lilia_core::json::BinaryDoc::read_root_from_slice(&decompressed) {
+                    if let Ok(decompressed) = lilia_core::compression::dict::decompress_with_dict(
+                        &blob[8..],
+                        &dict.raw_bytes,
+                    ) {
+                        if let Ok(root) =
+                            lilia_core::json::BinaryDoc::read_root_from_slice(&decompressed)
+                        {
                             let mut val = root.to_json_value();
                             let _ = lilia_core::decrypt_json_fields(
                                 &mut val,
                                 &key_reg_decode,
                                 lilia_core::DecryptionMode::Tolerant,
                             );
-                            let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                            let json_str =
+                                serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
                             ctx.set_result_text(&json_str);
                             return Ok(());
                         }
@@ -85,7 +124,8 @@ pub(crate) fn register_sql_functions(
                             &key_reg_decode,
                             lilia_core::DecryptionMode::Tolerant,
                         );
-                        let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                        let json_str =
+                            serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
                         ctx.set_result_text(&json_str);
                         return Ok(());
                     }
@@ -140,17 +180,32 @@ pub(crate) fn register_sql_functions(
         let plaintext = args[0].as_text();
         let key_id = args[1].as_text();
         let path = if args.len() >= 3 && !args[2].is_null() {
-            Some(args[2].as_text().trim_start_matches("$.").trim_start_matches('/'))
+            Some(
+                args[2]
+                    .as_text()
+                    .trim_start_matches("$.")
+                    .trim_start_matches('/'),
+            )
         } else {
             None
         };
         let Some(key) = key_reg_siv_enc.get_key(key_id) else {
-            return Err(LiliaError::new(ErrorCode::Unauthorized, format!("compartment key '{key_id}' not found or locked"), false));
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!("compartment key '{key_id}' not found or locked"),
+                false,
+            ));
         };
-        let plain_bytes = serde_json::to_vec(plaintext).map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
+        let plain_bytes = serde_json::to_vec(plaintext)
+            .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
         let ad = path.map(str::as_bytes);
         let ct = lilia_core::encrypt_siv(&plain_bytes, key.siv_key(), ad)?;
-        let env_str = lilia_core::EncryptedEnvelope::new(lilia_core::FieldCipherAlgorithm::DeterministicSiv, key_id, ct).encode();
+        let env_str = lilia_core::EncryptedEnvelope::new(
+            lilia_core::FieldCipherAlgorithm::DeterministicSiv,
+            key_id,
+            ct,
+        )
+        .encode();
         ctx.set_result_text(&env_str);
         Ok(())
     })?;
@@ -164,7 +219,12 @@ pub(crate) fn register_sql_functions(
         let ct_str = args[0].as_text();
         let key_id = args[1].as_text();
         let path = if args.len() >= 3 && !args[2].is_null() {
-            Some(args[2].as_text().trim_start_matches("$.").trim_start_matches('/'))
+            Some(
+                args[2]
+                    .as_text()
+                    .trim_start_matches("$.")
+                    .trim_start_matches('/'),
+            )
         } else {
             None
         };
@@ -173,7 +233,11 @@ pub(crate) fn register_sql_functions(
             return Ok(());
         };
         let Some(key) = key_reg_siv_dec.get_key(key_id) else {
-            return Err(LiliaError::new(ErrorCode::Unauthorized, format!("compartment key '{key_id}' not found or locked"), false));
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!("compartment key '{key_id}' not found or locked"),
+                false,
+            ));
         };
         let ad = path.map(str::as_bytes);
         let plain_bytes = lilia_core::decrypt_siv(&env.ciphertext, key.siv_key(), ad)?;
@@ -200,17 +264,32 @@ pub(crate) fn register_sql_functions(
         let plaintext = args[0].as_text();
         let key_id = args[1].as_text();
         let path = if args.len() >= 3 && !args[2].is_null() {
-            Some(args[2].as_text().trim_start_matches("$.").trim_start_matches('/'))
+            Some(
+                args[2]
+                    .as_text()
+                    .trim_start_matches("$.")
+                    .trim_start_matches('/'),
+            )
         } else {
             None
         };
         let Some(key) = key_reg_gcm_enc.get_key(key_id) else {
-            return Err(LiliaError::new(ErrorCode::Unauthorized, format!("compartment key '{key_id}' not found or locked"), false));
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!("compartment key '{key_id}' not found or locked"),
+                false,
+            ));
         };
-        let plain_bytes = serde_json::to_vec(plaintext).map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
+        let plain_bytes = serde_json::to_vec(plaintext)
+            .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
         let ad = path.map(str::as_bytes);
         let ct = lilia_core::encrypt_gcm(&plain_bytes, key.gcm_key(), ad)?;
-        let env_str = lilia_core::EncryptedEnvelope::new(lilia_core::FieldCipherAlgorithm::RandomizedGcm, key_id, ct).encode();
+        let env_str = lilia_core::EncryptedEnvelope::new(
+            lilia_core::FieldCipherAlgorithm::RandomizedGcm,
+            key_id,
+            ct,
+        )
+        .encode();
         ctx.set_result_text(&env_str);
         Ok(())
     })?;
@@ -224,7 +303,12 @@ pub(crate) fn register_sql_functions(
         let ct_str = args[0].as_text();
         let key_id = args[1].as_text();
         let path = if args.len() >= 3 && !args[2].is_null() {
-            Some(args[2].as_text().trim_start_matches("$.").trim_start_matches('/'))
+            Some(
+                args[2]
+                    .as_text()
+                    .trim_start_matches("$.")
+                    .trim_start_matches('/'),
+            )
         } else {
             None
         };
@@ -233,7 +317,11 @@ pub(crate) fn register_sql_functions(
             return Ok(());
         };
         let Some(key) = key_reg_gcm_dec.get_key(key_id) else {
-            return Err(LiliaError::new(ErrorCode::Unauthorized, format!("compartment key '{key_id}' not found or locked"), false));
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!("compartment key '{key_id}' not found or locked"),
+                false,
+            ));
         };
         let ad = path.map(str::as_bytes);
         let plain_bytes = lilia_core::decrypt_gcm(&env.ciphertext, key.gcm_key(), ad)?;
@@ -312,13 +400,18 @@ pub(crate) fn register_sql_functions(
                     if let Some(target) = root.extract(path) {
                         match target {
                             lilia_core::json::BinaryValueRef::Null => ctx.set_result_null(),
-                            lilia_core::json::BinaryValueRef::Bool(b) => ctx.set_result_int64(if b { 1 } else { 0 }),
+                            lilia_core::json::BinaryValueRef::Bool(b) => {
+                                ctx.set_result_int64(i64::from(b))
+                            }
                             lilia_core::json::BinaryValueRef::Int64(i) => ctx.set_result_int64(i),
-                            lilia_core::json::BinaryValueRef::Float64(f) => ctx.set_result_double(f),
+                            lilia_core::json::BinaryValueRef::Float64(f) => {
+                                ctx.set_result_double(f)
+                            }
                             lilia_core::json::BinaryValueRef::String(s) => ctx.set_result_text(s),
                             _ => {
                                 let val = target.to_json_value();
-                                let s = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                                let s = serde_json::to_string(&val)
+                                    .unwrap_or_else(|_| "null".to_string());
                                 ctx.set_result_text(&s);
                             }
                         }
@@ -328,18 +421,32 @@ pub(crate) fn register_sql_functions(
             } else if blob.starts_with(b"LBZ\x01") && blob.len() >= 8 {
                 let dict_id = u32::from_le_bytes(blob[4..8].try_into().unwrap());
                 if let Some(dict) = dict_reg_extract.get_by_id(dict_id) {
-                    if let Ok(decompressed) = lilia_core::compression::dict::decompress_with_dict(&blob[8..], &dict.raw_bytes) {
-                        if let Ok(root) = lilia_core::json::BinaryDoc::read_root_from_slice(&decompressed) {
+                    if let Ok(decompressed) = lilia_core::compression::dict::decompress_with_dict(
+                        &blob[8..],
+                        &dict.raw_bytes,
+                    ) {
+                        if let Ok(root) =
+                            lilia_core::json::BinaryDoc::read_root_from_slice(&decompressed)
+                        {
                             if let Some(target) = root.extract(path) {
                                 match target {
                                     lilia_core::json::BinaryValueRef::Null => ctx.set_result_null(),
-                                    lilia_core::json::BinaryValueRef::Bool(b) => ctx.set_result_int64(if b { 1 } else { 0 }),
-                                    lilia_core::json::BinaryValueRef::Int64(i) => ctx.set_result_int64(i),
-                                    lilia_core::json::BinaryValueRef::Float64(f) => ctx.set_result_double(f),
-                                    lilia_core::json::BinaryValueRef::String(s) => ctx.set_result_text(s),
+                                    lilia_core::json::BinaryValueRef::Bool(b) => {
+                                        ctx.set_result_int64(i64::from(b))
+                                    }
+                                    lilia_core::json::BinaryValueRef::Int64(i) => {
+                                        ctx.set_result_int64(i)
+                                    }
+                                    lilia_core::json::BinaryValueRef::Float64(f) => {
+                                        ctx.set_result_double(f)
+                                    }
+                                    lilia_core::json::BinaryValueRef::String(s) => {
+                                        ctx.set_result_text(s)
+                                    }
                                     _ => {
                                         let val = target.to_json_value();
-                                        let s = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                                        let s = serde_json::to_string(&val)
+                                            .unwrap_or_else(|_| "null".to_string());
                                         ctx.set_result_text(&s);
                                     }
                                 }
@@ -364,7 +471,7 @@ pub(crate) fn register_sql_functions(
                 if let Some(target) = val.pointer(&ptr) {
                     match target {
                         serde_json::Value::Null => ctx.set_result_null(),
-                        serde_json::Value::Bool(b) => ctx.set_result_int64(if *b { 1 } else { 0 }),
+                        serde_json::Value::Bool(b) => ctx.set_result_int64(i64::from(*b)),
                         serde_json::Value::Number(n) => {
                             if let Some(i) = n.as_i64() {
                                 ctx.set_result_int64(i);
@@ -479,7 +586,7 @@ pub(crate) fn register_sql_functions(
         let b = args[0].as_blob();
         let f = bytes_to_f32_vec(b);
         let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&f);
-        let bytes: Vec<u8> = q.into_iter().map(|x| x as u8).collect();
+        let bytes: Vec<u8> = q.into_iter().map(i8::cast_unsigned).collect();
         ctx.set_result_blob(&bytes);
         Ok(())
     })?;
@@ -614,7 +721,206 @@ pub(crate) fn register_sql_functions(
         Ok(())
     })?;
 
+    conn.register_scalar_function("lilia_compressed_match", 2, |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_int64(0);
+            return Ok(());
+        }
+        let blob = args[0].as_blob();
+        let target_word = args[1].as_text();
+
+        if let Some(doc_mask) = lilia_core::compression::dict::extract_symbol_signature(blob) {
+            let target_mask = lilia_core::compression::dict::hash_token_to_mask(target_word);
+            let matches = (doc_mask & target_mask) == target_mask;
+            ctx.set_result_int64(i64::from(matches));
+            return Ok(());
+        }
+
+        if blob.starts_with(lilia_core::MAGIC) {
+            let tokens = lilia_core::compression::dict::extract_tokens_from_bytes(blob);
+            let matches = tokens.iter().any(|t| t.as_str() == target_word);
+            ctx.set_result_int64(i64::from(matches));
+            return Ok(());
+        }
+
+        // If uncompressed or legacy format without symbol mask, return 1 to avoid false negatives
+        ctx.set_result_int64(1);
+        Ok(())
+    })?;
+
+    conn.register_scalar_function("lilia_symbol_mask", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let blob = args[0].as_blob();
+        if let Some(mask) = lilia_core::compression::dict::extract_symbol_signature(blob) {
+            ctx.set_result_int64(mask as i64);
+        } else {
+            ctx.set_result_null();
+        }
+        Ok(())
+    })?;
+
+    // Wasm In-Query User-Defined Functions (wasm_call, wasm_register, wasm_unregister, wasm_list)
+    let wasm_reg_call = Arc::clone(wasm_registry);
+    conn.register_scalar_function("wasm_call", -1, move |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_error("wasm_call requires function name as first argument");
+            return Ok(());
+        }
+        let func_name = args[0].as_text();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(call_ctx) = ctx.get_auxdata::<crate::wasm_udf::WasmUdfCallContext>(0) {
+                let user_args = if args.len() > 1 { &args[1..] } else { &[] };
+                return call_ctx.invoke(ctx, user_args);
+            }
+
+            let Some(registered) = wasm_reg_call.get(func_name) else {
+                ctx.set_result_error(&format!("wasm udf '{func_name}' is not registered"));
+                return Ok(());
+            };
+
+            let engine = wasm_reg_call.engine();
+            match crate::wasm_udf::WasmUdfCallContext::new(engine, &registered) {
+                Ok(mut new_ctx) => {
+                    let user_args = if args.len() > 1 { &args[1..] } else { &[] };
+                    let res = new_ctx.invoke(ctx, user_args);
+                    ctx.set_auxdata(0, Box::new(new_ctx));
+                    res
+                }
+                Err(e) => {
+                    ctx.set_result_error(&format!(
+                        "failed to instantiate wasm udf '{func_name}': {e}"
+                    ));
+                    Ok(())
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            ctx.set_result_error("wasm udfs are not supported on wasm32");
+            Ok(())
+        }
+    })?;
+
+    let wasm_reg_register = Arc::clone(wasm_registry);
+    conn.register_scalar_function("wasm_register", -1, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_error("wasm_register requires at least 2 arguments: (name, bytecode_or_wat, [is_persistent, memory_limit, fuel_limit])");
+            return Ok(());
+        }
+
+        let name = args[0].as_text();
+        let bytecode = if args[1].is_blob() {
+            args[1].as_blob()
+        } else {
+            args[1].as_text().as_bytes()
+        };
+
+        let mut config = crate::wasm_udf::WasmUdfConfig::default();
+        if args.len() >= 4 && !args[3].is_null() {
+            let mem = args[3].as_int64();
+            if mem > 0 {
+                config.memory_limit_bytes = mem as usize;
+            }
+        }
+        if args.len() >= 5 && !args[4].is_null() {
+            let fuel = args[4].as_int64();
+            if fuel > 0 {
+                config.fuel_limit = fuel as u64;
+            }
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        match wasm_reg_register.register(name, bytecode, config, now) {
+            Ok(_) => {
+                ctx.set_result_int64(1);
+            }
+            Err(e) => {
+                ctx.set_result_error(&e.to_string());
+            }
+        }
+        Ok(())
+    })?;
+
+    let wasm_reg_unregister = Arc::clone(wasm_registry);
+    conn.register_scalar_function("wasm_unregister", 1, move |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_int64(0);
+            return Ok(());
+        }
+        let name = args[0].as_text();
+        let removed = wasm_reg_unregister.unregister(name).is_some();
+        ctx.set_result_int64(if removed { 1 } else { 0 });
+        Ok(())
+    })?;
+
+    let wasm_reg_list = Arc::clone(wasm_registry);
+    conn.register_scalar_function("wasm_list", 0, move |ctx, _args| {
+        let list = wasm_reg_list.list();
+        let json_str = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+        ctx.set_result_text(&json_str);
+        Ok(())
+    })?;
+
+    for udf in wasm_registry.list() {
+        register_direct_wasm_function(conn, wasm_registry, &udf.name)?;
+    }
+
     Ok(())
+}
+
+pub(crate) fn register_direct_wasm_function(
+    conn: &NativeConnection,
+    wasm_registry: &Arc<crate::wasm_udf::WasmUdfRegistry>,
+    name: &str,
+) -> Result<()> {
+    let wasm_reg = Arc::clone(wasm_registry);
+    let name_str = name.to_string();
+    conn.register_scalar_function(name, -1, move |ctx, args| {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(call_ctx) = ctx.get_auxdata::<crate::wasm_udf::WasmUdfCallContext>(0) {
+                return call_ctx.invoke(ctx, args);
+            }
+
+            let Some(registered) = wasm_reg.get(&name_str) else {
+                ctx.set_result_error(&format!("wasm udf '{name_str}' is not registered"));
+                return Ok(());
+            };
+
+            let engine = wasm_reg.engine();
+            match crate::wasm_udf::WasmUdfCallContext::new(engine, &registered) {
+                Ok(mut new_ctx) => {
+                    let res = new_ctx.invoke(ctx, args);
+                    if !args.is_empty() {
+                        ctx.set_auxdata(0, Box::new(new_ctx));
+                    }
+                    res
+                }
+                Err(e) => {
+                    ctx.set_result_error(&format!(
+                        "failed to instantiate wasm udf '{name_str}': {e}"
+                    ));
+                    Ok(())
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            ctx.set_result_error("wasm udfs are not supported on wasm32");
+            Ok(())
+        }
+    })
 }
 
 fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
@@ -622,7 +928,9 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
         return Vec::new();
     }
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }
@@ -839,10 +1147,125 @@ impl crate::Database {
         let final_sql = if trimmed_replaced.to_ascii_lowercase().starts_with("with ") {
             format!("WITH {}, {}", cte_body, &trimmed_replaced[5..])
         } else {
-            format!("WITH {} {}", cte_body, trimmed_replaced)
+            format!("WITH {cte_body} {trimmed_replaced}")
         };
 
         Ok(final_sql)
+    }
+
+    pub(crate) fn preprocess_rls_sql(&self, sql: &str) -> Result<String> {
+        let all_policies = self.security_registry.list_policies();
+        if all_policies.is_empty() {
+            return Ok(sql.to_string());
+        }
+
+        let lower = sql.to_ascii_lowercase();
+        // Skip DDL statements
+        if lower.starts_with("create ") || lower.starts_with("drop ") || lower.starts_with("alter ")
+        {
+            return Ok(sql.to_string());
+        }
+
+        let mut ctes = Vec::new();
+        let mut lilia_json_conditions = Vec::new();
+
+        for np in &all_policies {
+            let table = &np.policy.table;
+            let cond = &np.policy.condition;
+            if table == "lilia_json" {
+                lilia_json_conditions.push(cond.clone());
+            } else {
+                let table_lower = table.to_ascii_lowercase();
+                let from_table = format!("from {table_lower}");
+                let join_table = format!("join {table_lower}");
+                let from_table_quote = format!("from \"{table_lower}\"");
+                let join_table_quote = format!("join \"{table_lower}\"");
+                if lower.contains(&from_table)
+                    || lower.contains(&join_table)
+                    || lower.contains(&from_table_quote)
+                    || lower.contains(&join_table_quote)
+                {
+                    ctes.push(format!(
+                        "{table} AS (SELECT * FROM main.{table} WHERE {cond})"
+                    ));
+                }
+
+                lilia_json_conditions.push(format!("(space != '{table}' OR ({cond}))"));
+            }
+        }
+
+        let references_lilia_json =
+            lower.contains("from lilia_json") || lower.contains("join lilia_json");
+        if references_lilia_json && !lilia_json_conditions.is_empty() {
+            let combined = lilia_json_conditions.join(" AND ");
+            ctes.push(format!(
+                "lilia_json AS (SELECT * FROM temp.lilia_json WHERE {combined})"
+            ));
+        }
+
+        if ctes.is_empty() {
+            return Ok(sql.to_string());
+        }
+
+        let ctes_str = ctes.join(", ");
+        let trimmed = sql.trim();
+        let final_sql = if trimmed.to_ascii_lowercase().starts_with("with ") {
+            format!("WITH {ctes_str}, {}", &trimmed[5..])
+        } else {
+            format!("WITH {ctes_str} {trimmed}")
+        };
+
+        Ok(final_sql)
+    }
+
+    fn apply_sql_masking(&self, columns: &[String], rows: &mut [Vec<serde_json::Value>]) {
+        let all_masking_rules = self.security_registry.list_masking_rules();
+        if all_masking_rules.is_empty() {
+            return;
+        }
+        let sec_ctx = crate::security::get_active_context();
+        let space_idx = columns.iter().position(|c| c == "space");
+        let value_idx = columns.iter().position(|c| c == "value" || c == "data");
+
+        for row in rows.iter_mut() {
+            // Case 1: row contains (space, value/data)
+            if let (Some(s_idx), Some(v_idx)) = (space_idx, value_idx) {
+                if let serde_json::Value::String(ref space_str) = row[s_idx] {
+                    let rules = self.security_registry.masking_rules_for_table(space_str);
+                    if !rules.is_empty() {
+                        if let serde_json::Value::String(ref json_str) = row[v_idx] {
+                            if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(json_str)
+                            {
+                                lilia_core::security::mask_document(
+                                    &mut val,
+                                    &rules,
+                                    sec_ctx.as_ref(),
+                                    |exempt, c| {
+                                        lilia_core::security::eval_exemption_condition(exempt, c)
+                                    },
+                                );
+                                row[v_idx] = serde_json::Value::String(val.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Case 2: column name itself matches a masked field path (e.g. "credit_card", "$.credit_card")
+            for (col_idx, col_name) in columns.iter().enumerate() {
+                for rule in &all_masking_rules {
+                    if rule.matches_path(col_name) {
+                        let is_exempt = rule.exempt_condition.as_deref().is_some_and(|ex| {
+                            lilia_core::security::eval_exemption_condition(ex, sec_ctx.as_ref())
+                        });
+                        if !is_exempt {
+                            row[col_idx] =
+                                lilia_core::security::mask_value(&row[col_idx], &rule.mask);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Execute a SQL query or mutation.
@@ -851,7 +1274,8 @@ impl crate::Database {
     #[allow(clippy::too_many_lines)]
     pub fn sql_query(&self, sql: &str, params: &[serde_json::Value]) -> Result<SqlQueryResult> {
         let effective_sql = self.preprocess_time_travel_sql(sql)?;
-        let trimmed = effective_sql.trim();
+        let rls_sql = self.preprocess_rls_sql(&effective_sql)?;
+        let trimmed = rls_sql.trim();
         if trimmed.is_empty() {
             return Ok(SqlQueryResult {
                 columns: Vec::new(),
@@ -905,15 +1329,18 @@ impl crate::Database {
             });
         }
 
-        let is_readonly = {
-            let conn = self.read_lock()?;
-            let stmt = conn.prepare(trimmed)?;
-            stmt.readonly()
-        };
+        let conn = self.read_lock()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let effective_query = crate::polyglot::preprocess_polyglot_sql(&conn, trimmed)?;
+        #[cfg(target_arch = "wasm32")]
+        let effective_query = trimmed.to_string();
+
+        let stmt = conn.prepare(&effective_query)?;
+        let is_readonly = stmt.readonly();
+        drop(stmt);
 
         if is_readonly {
-            let conn = self.read_lock()?;
-            let mut stmt = conn.prepare(trimmed)?;
+            let mut stmt = conn.prepare(&effective_query)?;
             let col_count = stmt.column_count();
             let mut columns = Vec::with_capacity(col_count);
             for i in 0..col_count {
@@ -938,15 +1365,19 @@ impl crate::Database {
                 stmt.status(lilia_sqlite_native::StmtStatus::FullscanStep, false),
             );
 
+            self.apply_sql_masking(&columns, &mut rows);
+
             Ok(SqlQueryResult {
                 columns,
                 rows,
                 rows_affected: 0,
             })
         } else {
+            drop(conn);
             let mut writer = self.lock_writer()?;
             let session = if self.has_live_subscribers() || self.undo_log_capacity > 0 {
-                if let Ok(sess) = lilia_sqlite_native::NativeSession::create(&writer, "main") {
+                if let Ok(mut sess) = lilia_sqlite_native::NativeSession::create(&writer, "main") {
+                    sess.set_table_filter(crate::engine::undo_records_table);
                     let _ = sess.attach_all();
                     Some(sess)
                 } else {
@@ -957,10 +1388,23 @@ impl crate::Database {
             };
 
             let tx = writer.transaction()?;
-            let mut stmt = if self.integrity.is_empty() {
-                tx.prepare(trimmed)?
+            #[cfg(not(target_arch = "wasm32"))]
+            let effective_write_query =
+                crate::polyglot::preprocess_polyglot_sql(tx.conn(), trimmed)?;
+            #[cfg(target_arch = "wasm32")]
+            let effective_write_query = trimmed.to_string();
+
+            let mut protected: Vec<&str> = Vec::new();
+            if !self.integrity.is_empty() {
+                protected.extend(crate::integrity::CONTRACT_TABLES);
+            }
+            if self.ledger.enabled() {
+                protected.extend(crate::ledger::LEDGER_TABLES);
+            }
+            let mut stmt = if protected.is_empty() {
+                tx.prepare(&effective_write_query)?
             } else {
-                tx.prepare_denying_writes(trimmed, crate::integrity::CONTRACT_TABLES)?
+                tx.prepare_denying_writes(&effective_write_query, &protected)?
             };
             let col_count = stmt.column_count();
             let mut columns = Vec::with_capacity(col_count);
@@ -992,6 +1436,8 @@ impl crate::Database {
                 stmt.status(lilia_sqlite_native::StmtStatus::FullscanStep, false),
             );
             drop(stmt);
+            self.ledger
+                .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
             tx.commit()?;
 
             if let Some(sess) = session {
@@ -1004,6 +1450,8 @@ impl crate::Database {
                     }
                 }
             }
+
+            self.apply_sql_masking(&columns, &mut rows);
 
             Ok(SqlQueryResult {
                 columns,
@@ -1052,10 +1500,18 @@ impl crate::Database {
         rest = next_rest;
         if name_tok.eq_ignore_ascii_case("IF") {
             let (kw_not, r_not) = take_ddl_token(rest).ok_or_else(|| {
-                LiliaError::new(ErrorCode::InvalidInput, "incomplete IF NOT EXISTS clause", false)
+                LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    "incomplete IF NOT EXISTS clause",
+                    false,
+                )
             })?;
             let (kw_exists, r_ex) = take_ddl_token(r_not).ok_or_else(|| {
-                LiliaError::new(ErrorCode::InvalidInput, "incomplete IF NOT EXISTS clause", false)
+                LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    "incomplete IF NOT EXISTS clause",
+                    false,
+                )
             })?;
             if !kw_not.eq_ignore_ascii_case("NOT") || !kw_exists.eq_ignore_ascii_case("EXISTS") {
                 return Err(LiliaError::new(
@@ -1259,30 +1715,50 @@ fn parse_ddl_ttl_ms(raw: &str) -> Result<Option<u64>> {
     }
     if let Some(num) = lower.strip_suffix("ms") {
         let val = num.trim().parse::<u64>().map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid TTL '{raw}': {e}"),
+                false,
+            )
         })?;
         return Ok(Some(val));
     }
     if let Some(num) = lower.strip_suffix('s') {
         let val = num.trim().parse::<u64>().map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid TTL '{raw}': {e}"),
+                false,
+            )
         })?;
         return Ok(Some(val.saturating_mul(1_000)));
     }
     if let Some(num) = lower.strip_suffix('m') {
         let val = num.trim().parse::<u64>().map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid TTL '{raw}': {e}"),
+                false,
+            )
         })?;
         return Ok(Some(val.saturating_mul(60_000)));
     }
     if let Some(num) = lower.strip_suffix('h') {
         let val = num.trim().parse::<u64>().map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid TTL '{raw}': {e}"),
+                false,
+            )
         })?;
         return Ok(Some(val.saturating_mul(3_600_000)));
     }
     let val = lower.parse::<u64>().map_err(|e| {
-        LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid TTL '{raw}': {e}"),
+            false,
+        )
     })?;
     Ok(Some(val))
 }
@@ -1294,7 +1770,11 @@ fn parse_ddl_eviction(raw: &str) -> Result<EvictionPolicy> {
     }
     if let Some(arg) = lower.strip_prefix("lru(").and_then(|s| s.strip_suffix(')')) {
         let max_entries = arg.trim().parse::<usize>().map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid LRU cap '{raw}': {e}"), false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid LRU cap '{raw}': {e}"),
+                false,
+            )
         })?;
         return Ok(EvictionPolicy::Lru { max_entries });
     }
@@ -1332,5 +1812,3 @@ fn parse_ddl_durability(raw: &str) -> Result<Option<Durability>> {
         )),
     }
 }
-
-

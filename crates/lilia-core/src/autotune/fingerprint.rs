@@ -93,7 +93,13 @@ pub fn index_fields(expression: &str) -> Option<Vec<String>> {
 
 fn sanitize(part: &str) -> String {
     part.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -162,7 +168,10 @@ mod tests {
     #[test]
     fn hashed_name_differs_from_readable_name() {
         let fields = vec!["status".to_owned()];
-        assert_ne!(index_name("orders", &fields), index_name_hashed("orders", &fields));
+        assert_ne!(
+            index_name("orders", &fields),
+            index_name_hashed("orders", &fields)
+        );
     }
 
     #[test]
@@ -187,7 +196,10 @@ mod tests {
             index_fields(&composite_expression(&["email".to_owned()])),
             Some(vec!["email".to_owned()])
         );
-        assert_eq!(index_fields("composite($.b, $.a)"), Some(vec!["a".to_owned(), "b".to_owned()]));
+        assert_eq!(
+            index_fields("composite($.b, $.a)"),
+            Some(vec!["a".to_owned(), "b".to_owned()])
+        );
         assert_eq!(index_fields("lower($.email)"), None);
     }
 
@@ -195,9 +207,15 @@ mod tests {
     fn composite_keys_are_unambiguous() {
         let expr = parse_expr("composite($.a, $.b)").unwrap();
         let key = |doc: serde_json::Value| {
-            eval_expr(&expr, &BinaryDoc::from_json_value(&doc)).unwrap()
+            eval_expr(&expr, &BinaryDoc::from_json_value(&doc).unwrap()).unwrap()
         };
-        assert_ne!(key(json!({"a": "x", "b": "yz"})), key(json!({"a": "xy", "b": "z"})));
-        assert_eq!(key(json!({"a": "paid", "b": 4})), key(json!({"b": 4, "a": "paid"})));
+        assert_ne!(
+            key(json!({"a": "x", "b": "yz"})),
+            key(json!({"a": "xy", "b": "z"}))
+        );
+        assert_eq!(
+            key(json!({"a": "paid", "b": 4})),
+            key(json!({"b": 4, "a": "paid"}))
+        );
     }
 }

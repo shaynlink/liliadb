@@ -25,17 +25,23 @@ impl Database {
     /// Creates or updates an HNSW vector index for a collection.
     ///
     /// If vectors already exist in the collection, they are automatically indexed into the HNSW graph.
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn vector_create_index(&self, collection: &str, mut config: HnswConfig) -> Result<()> {
+        struct ExistingVector {
+            id: String,
+            dim: u32,
+            element_type: VectorElementType,
+            bytes: Vec<u8>,
+        }
+
         validate_name("collection", collection)?;
         let tier = self.catalog.tier_for(CollectionKind::Vector, collection);
 
         if tier == StorageTier::Memory {
-            let scanned = self.mem_engine.vectors.scan(
-                Some(collection),
-                None,
-                usize::MAX,
-                now_ms(),
-            );
+            let scanned =
+                self.mem_engine
+                    .vectors
+                    .scan(Some(collection), None, usize::MAX, now_ms());
             if config.dim == 0 {
                 if let Some((_, _, first)) = scanned.first() {
                     config.dim = first.value.0;
@@ -45,8 +51,7 @@ impl Database {
             for (_, key_bytes, snap) in &scanned {
                 if let Ok(id) = String::from_utf8(key_bytes.clone()) {
                     let (_dim, elem_type, bytes) = &snap.value;
-                    let vec_data =
-                        prepare_vector_for_index(bytes, *elem_type, config.element_type);
+                    let vec_data = prepare_vector_for_index(bytes, *elem_type, config.element_type);
                     index.insert(&id, &vec_data)?;
                 }
             }
@@ -74,17 +79,10 @@ impl Database {
         )?;
         stmt.bind_text_static(1, collection)?;
 
-        struct ExistingVector {
-            id: String,
-            dim: u32,
-            element_type: VectorElementType,
-            bytes: Vec<u8>,
-        }
-
         let mut existing = Vec::new();
         while stmt.step()? {
             let id = stmt.column_text(0).to_string();
-            let dim = stmt.column_int64(1) as u32;
+            let dim = u32::try_from(stmt.column_int64(1)).unwrap_or_default();
             let elem_code = stmt.column_int64(2);
             let element_type = VectorElementType::try_from(elem_code)?;
             let blob = stmt.column_blob(3);
@@ -124,12 +122,12 @@ impl Database {
         } else {
             meta_stmt.bind_null(2)?;
         }
-        meta_stmt.bind_int64(3, index.max_level() as i64)?;
-        meta_stmt.bind_int64(4, config.m as i64)?;
-        meta_stmt.bind_int64(5, config.ef_construction as i64)?;
-        meta_stmt.bind_int64(6, config.ef_search as i64)?;
+        meta_stmt.bind_int64(3, crate::storage::sql_int(index.max_level()))?;
+        meta_stmt.bind_int64(4, crate::storage::sql_int(config.m))?;
+        meta_stmt.bind_int64(5, crate::storage::sql_int(config.ef_construction))?;
+        meta_stmt.bind_int64(6, crate::storage::sql_int(config.ef_search))?;
         meta_stmt.bind_text_static(7, config.metric.as_str())?;
-        meta_stmt.bind_int64(8, config.element_type as u8 as i64)?;
+        meta_stmt.bind_int64(8, i64::from(config.element_type as u8))?;
         meta_stmt.bind_int64(9, i64::from(config.dim))?;
         meta_stmt.step()?;
         meta_stmt.reset()?;
@@ -485,7 +483,7 @@ impl Database {
         Ok(hits)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn vector_search_filtered(
         &self,
         collection: &str,
@@ -711,8 +709,7 @@ pub(crate) fn sync_hnsw_insert_with_cache(
         let mut index = index_arc
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let index_vec =
-            prepare_vector_for_index(vector, element_type, index.config().element_type);
+        let index_vec = prepare_vector_for_index(vector, element_type, index.config().element_type);
         let (_, modified_edges) = index.insert(id, &index_vec)?;
 
         let edge_stmt = tx.slot(StmtSlot::HnswEdgesUpsert)?;
@@ -722,7 +719,7 @@ pub(crate) fn sync_hnsw_insert_with_cache(
             edge_stmt.reset()?;
             edge_stmt.bind_text_static(1, collection)?;
             edge_stmt.bind_text_static(2, &node_id)?;
-            edge_stmt.bind_int64(3, level as i64)?;
+            edge_stmt.bind_int64(3, crate::storage::sql_int(level))?;
             edge_stmt.bind_blob_static(4, &neighbors_blob)?;
             edge_stmt.step()?;
             edge_stmt.reset()?;
@@ -736,12 +733,12 @@ pub(crate) fn sync_hnsw_insert_with_cache(
         } else {
             meta_stmt.bind_null(2)?;
         }
-        meta_stmt.bind_int64(3, index.max_level() as i64)?;
-        meta_stmt.bind_int64(4, index.config().m as i64)?;
-        meta_stmt.bind_int64(5, index.config().ef_construction as i64)?;
-        meta_stmt.bind_int64(6, index.config().ef_search as i64)?;
+        meta_stmt.bind_int64(3, crate::storage::sql_int(index.max_level()))?;
+        meta_stmt.bind_int64(4, crate::storage::sql_int(index.config().m))?;
+        meta_stmt.bind_int64(5, crate::storage::sql_int(index.config().ef_construction))?;
+        meta_stmt.bind_int64(6, crate::storage::sql_int(index.config().ef_search))?;
         meta_stmt.bind_text_static(7, index.config().metric.as_str())?;
-        meta_stmt.bind_int64(8, index.config().element_type as u8 as i64)?;
+        meta_stmt.bind_int64(8, i64::from(index.config().element_type as u8))?;
         meta_stmt.bind_int64(9, i64::from(dim))?;
         meta_stmt.step()?;
         meta_stmt.reset()?;
@@ -779,12 +776,12 @@ pub(crate) fn sync_hnsw_delete_with_cache(
         } else {
             meta_stmt.bind_null(2)?;
         }
-        meta_stmt.bind_int64(3, index.max_level() as i64)?;
-        meta_stmt.bind_int64(4, index.config().m as i64)?;
-        meta_stmt.bind_int64(5, index.config().ef_construction as i64)?;
-        meta_stmt.bind_int64(6, index.config().ef_search as i64)?;
+        meta_stmt.bind_int64(3, crate::storage::sql_int(index.max_level()))?;
+        meta_stmt.bind_int64(4, crate::storage::sql_int(index.config().m))?;
+        meta_stmt.bind_int64(5, crate::storage::sql_int(index.config().ef_construction))?;
+        meta_stmt.bind_int64(6, crate::storage::sql_int(index.config().ef_search))?;
         meta_stmt.bind_text_static(7, index.config().metric.as_str())?;
-        meta_stmt.bind_int64(8, index.config().element_type as u8 as i64)?;
+        meta_stmt.bind_int64(8, i64::from(index.config().element_type as u8))?;
         meta_stmt.bind_int64(9, i64::from(index.config().dim))?;
         meta_stmt.step()?;
         meta_stmt.reset()?;
@@ -847,13 +844,15 @@ pub(crate) fn bytes_to_f32_slice(bytes: &[u8]) -> Vec<f32> {
         return Vec::new();
     }
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
 
 pub(crate) fn bytes_to_i8_slice(bytes: &[u8]) -> Vec<i8> {
-    bytes.iter().map(|&b| b as i8).collect()
+    bytes.iter().map(|&b| b.cast_signed()).collect()
 }
 
 fn compute_distance(

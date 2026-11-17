@@ -3,6 +3,7 @@ use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
 #[test]
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn test_zero_copy_json_nested_extractions() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("zero_copy_extract.lilia");
@@ -48,7 +49,8 @@ fn test_zero_copy_json_nested_extractions() {
         Some("Paris")
     );
     assert_eq!(
-        db.json_extract_i64("accounts", "acc_1", "user.age").unwrap(),
+        db.json_extract_i64("accounts", "acc_1", "user.age")
+            .unwrap(),
         Some(30)
     );
     assert_eq!(
@@ -134,11 +136,11 @@ fn test_zstd_collection_dictionary_compression_and_savings() {
     let db_path = temp_dir.path().join("zstd_dict.lilia");
 
     // Configure automatic training with threshold = 50 documents
-    let mut opts = DatabaseOptions::durable(&db_path);
-    opts.json_options.dict_sample_threshold = 50;
-    opts.json_options.dict_target_size_bytes = 8 * 1024; // 8 KB dictionary
+    let mut options = DatabaseOptions::durable(&db_path);
+    options.json_options.dict_sample_threshold = 50;
+    options.json_options.dict_target_size_bytes = 8 * 1024; // 8 KB dictionary
 
-    let db = Database::open(opts).unwrap();
+    let db = Database::open(options).unwrap();
 
     // Generate 60 typical user event documents with repetitive schema keys
     let mut batch_ops = Vec::new();
@@ -177,7 +179,7 @@ fn test_zstd_collection_dictionary_compression_and_savings() {
     let dict_info = dict.unwrap();
     assert_eq!(dict_info.space, "events");
     assert!(dict_info.dict_id >= 1);
-    assert!(!dict_info.raw_bytes.is_empty());
+    assert_ne!(dict_info.raw_bytes, [] as [u8; 0]);
 
     // Insert 10 more documents to leverage the trained dictionary
     let mut new_ops = Vec::new();
@@ -231,7 +233,10 @@ fn test_zstd_collection_dictionary_compression_and_savings() {
 
     // Read back and verify transparency
     let entry = db.json_get("events", "evt_0105").unwrap().unwrap();
-    assert_eq!(entry.extract_str("event_type"), Some("user_session_heartbeat"));
+    assert_eq!(
+        entry.extract_str("event_type"),
+        Some("user_session_heartbeat")
+    );
     assert_eq!(entry.extract_str("payload.action"), Some("page_view"));
     assert_eq!(entry.extract_i64("payload.duration_ms"), Some(405));
 
@@ -241,7 +246,10 @@ fn test_zstd_collection_dictionary_compression_and_savings() {
     assert!(db2.dict_registry().get("events").is_some());
 
     let entry2 = db2.json_get("events", "evt_0105").unwrap().unwrap();
-    assert_eq!(entry2.extract_str("event_type"), Some("user_session_heartbeat"));
+    assert_eq!(
+        entry2.extract_str("event_type"),
+        Some("user_session_heartbeat")
+    );
     assert_eq!(entry2.extract_i64("payload.duration_ms"), Some(405));
 }
 
@@ -250,12 +258,12 @@ fn test_disabled_auto_train_per_space() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("disable_auto_train.lilia");
 
-    let mut opts = DatabaseOptions::durable(&db_path);
-    opts.json_options.dict_sample_threshold = 20;
+    let mut options = DatabaseOptions::durable(&db_path);
+    options.json_options.dict_sample_threshold = 20;
     // Disable auto-training specifically for the 'raw_logs' space
-    opts.json_options.disabled_auto_train_spaces = vec!["raw_logs".to_string()];
+    options.json_options.disabled_auto_train_spaces = vec!["raw_logs".to_string()];
 
-    let db = Database::open(opts).unwrap();
+    let db = Database::open(options).unwrap();
 
     let mut ops = Vec::new();
     for i in 0..30 {

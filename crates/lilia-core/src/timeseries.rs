@@ -51,7 +51,7 @@ pub enum DownsampleAggregation {
 /// A declarative rule within a time-series lifecycle policy.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TimeSeriesRetentionRule {
-    /// Target bucket resolution in milliseconds (e.g. 0 for raw, 60_000 for 1 minute, 3_600_000 for 1 hour).
+    /// Target bucket resolution in milliseconds (e.g. 0 for raw, `60_000` for 1 minute, `3_600_000` for 1 hour).
     pub resolution_ms: i64,
     /// Duration in milliseconds to retain data at this resolution tier.
     /// `None` indicates indefinite retention.
@@ -78,7 +78,7 @@ impl TimeSeriesRetentionRule {
 /// Declarative lifecycle policy for time-series streams.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimeSeriesLifecyclePolicy {
-    /// Series ID or pattern (e.g. "heart_rate", "sensor:*", or "*" for global default).
+    /// Series ID or pattern (e.g. "`heart_rate`", "sensor:*", or "*" for global default).
     pub series_pattern: String,
     /// Ordered retention and downsampling tiers.
     pub rules: Vec<TimeSeriesRetentionRule>,
@@ -368,7 +368,7 @@ pub fn compress_timeseries(points: &[TimeSeriesPoint]) -> Result<Vec<u8>> {
             writer.write_bits((dod + 2047) as u64, 12);
         } else if let Ok(dod_i32) = i32::try_from(dod) {
             writer.write_bits(0b11110, 5);
-            writer.write_bits(dod_i32 as u32 as u64, 32);
+            writer.write_bits(u64::from(dod_i32 as u32), 32);
         } else {
             writer.write_bits(0b11111, 5);
             writer.write_bits(dod as u64, 64);
@@ -454,175 +454,72 @@ pub fn decompress_timeseries(bytes: &[u8]) -> Result<Vec<TimeSeriesPoint>> {
     }
 
     let mut reader = BitReader::new(bytes);
-
-    let point_count = reader.read_bits(32).ok_or_else(|| {
-        LiliaError::new(
-            ErrorCode::InvalidInput,
-            "corrupted timeseries payload: missing point count",
-            false,
-        )
-    })?;
-
-    let count = point_count as usize;
+    let count = usize::try_from(read_bits(&mut reader, 32, "missing point count")?)
+        .map_err(|_| corrupt_payload("point count exceeds the address space"))?;
     if count == 0 {
         return Ok(Vec::new());
     }
 
     let mut points = Vec::with_capacity(count);
-
-    // Read first point
-    let t0_raw = reader.read_bits(64).ok_or_else(|| {
-        LiliaError::new(
-            ErrorCode::InvalidInput,
-            "corrupted timeseries payload: truncated t0",
-            false,
-        )
-    })?;
-    let mut curr_t = t0_raw as i64;
-
-    let v0_raw = reader.read_bits(64).ok_or_else(|| {
-        LiliaError::new(
-            ErrorCode::InvalidInput,
-            "corrupted timeseries payload: truncated v0",
-            false,
-        )
-    })?;
-    let mut curr_v_bits = v0_raw;
+    let mut curr_t = read_bits(&mut reader, 64, "truncated t0")?.cast_signed();
+    let mut curr_v_bits = read_bits(&mut reader, 64, "truncated v0")?;
     points.push(TimeSeriesPoint::new(curr_t, f64::from_bits(curr_v_bits)));
-
     if count == 1 {
         return Ok(points);
     }
 
-    // Read initial delta D0
-    let d0_raw = reader.read_bits(64).ok_or_else(|| {
-        LiliaError::new(
-            ErrorCode::InvalidInput,
-            "corrupted timeseries payload: truncated delta0",
-            false,
-        )
-    })?;
-    let mut prev_delta = d0_raw as i64;
-    curr_t += prev_delta;
-
+    // The second point carries the initial delta; later ones a delta of delta. Corrupted
+    // payloads may overflow: the arithmetic wraps instead of panicking.
+    let mut prev_delta = read_bits(&mut reader, 64, "truncated delta0")?.cast_signed();
     let mut prev_lz = 0u8;
     let mut prev_tz = 0u8;
-
-    // Decode value for second point
-    curr_v_bits = decode_float_xor(&mut reader, curr_v_bits, &mut prev_lz, &mut prev_tz)?;
-    points.push(TimeSeriesPoint::new(curr_t, f64::from_bits(curr_v_bits)));
-
-    // Decode remaining points
-    for _ in 2..count {
-        // 1. Decode Timestamp Delta-of-Delta
-        let first_bit = reader.read_bit().ok_or_else(|| {
-            LiliaError::new(
-                ErrorCode::InvalidInput,
-                "corrupted timeseries payload: truncated dod bit",
-                false,
-            )
-        })?;
-
-        let dod: i64 = if !first_bit {
-            0
-        } else {
-            let second_bit = reader.read_bit().ok_or_else(|| {
-                LiliaError::new(
-                    ErrorCode::InvalidInput,
-                    "corrupted timeseries payload: truncated dod tag",
-                    false,
-                )
-            })?;
-            if !second_bit {
-                // '10' -> 7 bits
-                let bits = reader.read_bits(7).ok_or_else(|| {
-                    LiliaError::new(
-                        ErrorCode::InvalidInput,
-                        "corrupted timeseries payload: truncated 7-bit dod",
-                        false,
-                    )
-                })?;
-                (bits as i64) - 63
-            } else {
-                let third_bit = reader.read_bit().ok_or_else(|| {
-                    LiliaError::new(
-                        ErrorCode::InvalidInput,
-                        "corrupted timeseries payload: truncated dod tag",
-                        false,
-                    )
-                })?;
-                if !third_bit {
-                    // '110' -> 9 bits
-                    let bits = reader.read_bits(9).ok_or_else(|| {
-                        LiliaError::new(
-                            ErrorCode::InvalidInput,
-                            "corrupted timeseries payload: truncated 9-bit dod",
-                            false,
-                        )
-                    })?;
-                    (bits as i64) - 255
-                } else {
-                    let fourth_bit = reader.read_bit().ok_or_else(|| {
-                        LiliaError::new(
-                            ErrorCode::InvalidInput,
-                            "corrupted timeseries payload: truncated dod tag",
-                            false,
-                        )
-                    })?;
-                    if !fourth_bit {
-                        // '1110' -> 12 bits
-                        let bits = reader.read_bits(12).ok_or_else(|| {
-                            LiliaError::new(
-                                ErrorCode::InvalidInput,
-                                "corrupted timeseries payload: truncated 12-bit dod",
-                                false,
-                            )
-                        })?;
-                        (bits as i64) - 2047
-                    } else {
-                        let fifth_bit = reader.read_bit().ok_or_else(|| {
-                            LiliaError::new(
-                                ErrorCode::InvalidInput,
-                                "corrupted timeseries payload: truncated dod tag",
-                                false,
-                            )
-                        })?;
-                        if !fifth_bit {
-                            // '11110' -> 32 bits
-                            let bits = reader.read_bits(32).ok_or_else(|| {
-                                LiliaError::new(
-                                    ErrorCode::InvalidInput,
-                                    "corrupted timeseries payload: truncated 32-bit dod",
-                                    false,
-                                )
-                            })?;
-                            i64::from(bits as u32 as i32)
-                        } else {
-                            // '11111' -> 64 bits
-                            let bits = reader.read_bits(64).ok_or_else(|| {
-                                LiliaError::new(
-                                    ErrorCode::InvalidInput,
-                                    "corrupted timeseries payload: truncated 64-bit dod",
-                                    false,
-                                )
-                            })?;
-                            bits as i64
-                        }
-                    }
-                }
-            }
-        };
-
-        let delta = prev_delta + dod;
-        curr_t += delta;
-        prev_delta = delta;
-
-        // 2. Decode Floating-point XOR
+    for index in 1..count {
+        if index > 1 {
+            prev_delta = prev_delta.wrapping_add(read_delta_of_delta(&mut reader)?);
+        }
+        curr_t = curr_t.wrapping_add(prev_delta);
         curr_v_bits = decode_float_xor(&mut reader, curr_v_bits, &mut prev_lz, &mut prev_tz)?;
         points.push(TimeSeriesPoint::new(curr_t, f64::from_bits(curr_v_bits)));
     }
-
     Ok(points)
+}
+
+fn corrupt_payload(what: &str) -> LiliaError {
+    LiliaError::new(
+        ErrorCode::InvalidInput,
+        format!("corrupted timeseries payload: {what}"),
+        false,
+    )
+}
+
+fn read_bits(reader: &mut BitReader<'_>, width: u8, what: &str) -> Result<u64> {
+    reader.read_bits(width).ok_or_else(|| corrupt_payload(what))
+}
+
+fn read_flag(reader: &mut BitReader<'_>, what: &str) -> Result<bool> {
+    reader.read_bit().ok_or_else(|| corrupt_payload(what))
+}
+
+/// Reads a timestamp delta of delta: `0` for zero, then the prefixes `10`, `110` and `1110`
+/// followed by 7, 9 and 12 biased bits, `11110` by a 32-bit and `11111` by a 64-bit value.
+fn read_delta_of_delta(reader: &mut BitReader<'_>) -> Result<i64> {
+    const BIASED: [(u8, i64); 3] = [(7, 63), (9, 255), (12, 2047)];
+    if !read_flag(reader, "truncated dod bit")? {
+        return Ok(0);
+    }
+    for (width, bias) in BIASED {
+        if !read_flag(reader, "truncated dod tag")? {
+            let bits = read_bits(reader, width, &format!("truncated {width}-bit dod"))?;
+            return Ok(bits.cast_signed() - bias);
+        }
+    }
+    if read_flag(reader, "truncated dod tag")? {
+        Ok(read_bits(reader, 64, "truncated 64-bit dod")?.cast_signed())
+    } else {
+        let bits = read_bits(reader, 32, "truncated 32-bit dod")?;
+        let low = u32::try_from(bits).map_err(|_| corrupt_payload("oversized 32-bit dod"))?;
+        Ok(i64::from(low.cast_signed()))
+    }
 }
 
 #[inline]
@@ -722,9 +619,9 @@ mod tests {
     fn test_empty_and_single_point() {
         let empty: [TimeSeriesPoint; 0] = [];
         let comp = compress_timeseries(&empty).unwrap();
-        assert!(comp.is_empty());
+        assert_eq!(comp, b"");
         let decomp = decompress_timeseries(&comp).unwrap();
-        assert!(decomp.is_empty());
+        assert_eq!(decomp, empty);
 
         let single = [TimeSeriesPoint::new(1_700_000_000_000, 72.5)];
         let comp = compress_timeseries(&single).unwrap();

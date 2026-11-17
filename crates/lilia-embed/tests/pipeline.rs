@@ -138,7 +138,7 @@ fn vectors_have_the_model_dimension_and_unit_length() {
         assert!((cosine(vector, vector) - 1.0).abs() < 1e-4);
     }
     assert!(cosine(&vectors[0], &vectors[1]) < 0.999);
-    assert!(embedder.embed_texts(&[]).unwrap().is_empty());
+    assert_eq!(embedder.embed_texts(&[]).unwrap(), Vec::<Vec<f32>>::new());
 }
 
 #[test]

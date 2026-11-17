@@ -373,8 +373,7 @@ where
 fn current_epoch_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -566,7 +565,11 @@ where
                 }
             }
             handle.unsubscribe();
-            info!(request_id, subscription_id = handle.id, "live query subscription closed");
+            info!(
+                request_id,
+                subscription_id = handle.id,
+                "live query subscription closed"
+            );
             return Ok(());
         }
 
@@ -747,6 +750,7 @@ fn operation_name(operation: &Operation) -> &'static str {
         Operation::RefreshMaterializedView { .. } => "refresh_materialized_view",
         Operation::ListMaterializedViews => "list_materialized_views",
         Operation::LiveQuerySubscribe { .. } => "live_query_subscribe",
+        Operation::P2pSync { .. } => "p2p_sync",
     }
 }
 
@@ -938,7 +942,12 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             ResponseValue::CrdtCounter(database.crdt().counter(&space, &id).get()?)
         }
         Operation::CrdtSetGet { space, id } => {
-            let elements = database.crdt().set(&space, &id).read()?.into_iter().collect();
+            let elements = database
+                .crdt()
+                .set(&space, &id)
+                .read()?
+                .into_iter()
+                .collect();
             ResponseValue::CrdtSet(elements)
         }
         Operation::CrdtJsonGet { space, id } => {
@@ -1247,12 +1256,8 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             resolution_ms,
         } => {
             let points = match resolution_ms {
-                Some(res_ms) => database.ts_query_range_with_resolution(
-                    &series_id,
-                    res_ms,
-                    start_time,
-                    end_time,
-                )?,
+                Some(res_ms) => database
+                    .ts_query_range_with_resolution(&series_id, res_ms, start_time, end_time)?,
                 None => database.ts_query_range(&series_id, start_time, end_time)?,
             };
             ResponseValue::TsPoints(points)
@@ -1262,12 +1267,9 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             start_time,
             end_time,
             max_points,
-        } => ResponseValue::TsPoints(database.ts_query_auto(
-            &series_id,
-            start_time,
-            end_time,
-            max_points,
-        )?),
+        } => ResponseValue::TsPoints(
+            database.ts_query_auto(&series_id, start_time, end_time, max_points)?,
+        ),
         Operation::TsQueryStats {
             series_id,
             start_time,
@@ -1275,12 +1277,8 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             resolution_ms,
         } => {
             let stats = match resolution_ms {
-                Some(res_ms) => database.ts_query_stats_with_resolution(
-                    &series_id,
-                    res_ms,
-                    start_time,
-                    end_time,
-                )?,
+                Some(res_ms) => database
+                    .ts_query_stats_with_resolution(&series_id, res_ms, start_time, end_time)?,
                 None => database.ts_query_stats(&series_id, start_time, end_time)?,
             };
             ResponseValue::TsStats(stats)
@@ -1347,11 +1345,9 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             track_id,
             start_time,
             end_time,
-        } => ResponseValue::GpsPoints(database.geo_get_track_points(
-            &track_id,
-            start_time,
-            end_time,
-        )?),
+        } => ResponseValue::GpsPoints(
+            database.geo_get_track_points(&track_id, start_time, end_time)?,
+        ),
         Operation::GeoTrackDistance { track_id } => {
             ResponseValue::F64(database.geo_track_distance_meters(&track_id)?)
         }
@@ -1412,5 +1408,130 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
         Operation::ListMaterializedViews => {
             ResponseValue::MaterializedViews(database.list_materialized_views()?)
         }
+        Operation::P2pSync { message } => match message {
+            lilia_protocol::P2pSyncMessage::EstimateRequest { space, strata } => {
+                let local_strata = database.p2p_strata(space.as_deref())?;
+                let estimate = strata.estimate_difference(&local_strata).map_err(|e| {
+                    lilia_core::LiliaError::new(
+                        lilia_core::ErrorCode::Storage,
+                        e.to_string(),
+                        false,
+                    )
+                })?;
+
+                if estimate.fully_decoded {
+                    let diff = estimate.direct_diff.unwrap_or_default();
+                    let (_, id_map) = database.p2p_collect_items(space.as_deref())?;
+                    let changesets = database.p2p_export_payloads(&diff.b_minus_a, &id_map)?;
+                    let requested_id_hashes =
+                        diff.a_minus_b.iter().map(|&x| (x >> 64) as u64).collect();
+                    ResponseValue::P2pSync(lilia_protocol::P2pSyncMessage::FastReconcileResponse {
+                        space,
+                        changesets,
+                        requested_id_hashes,
+                    })
+                } else {
+                    let ibf = database.p2p_ibf(
+                        space.as_deref(),
+                        lilia_core::InvertibleBloomFilter::with_expected_diff(
+                            estimate.estimated_diff,
+                        )
+                        .map_err(|e| {
+                            lilia_core::LiliaError::new(
+                                lilia_core::ErrorCode::Storage,
+                                e.to_string(),
+                                false,
+                            )
+                        })?
+                        .len(),
+                    )?;
+                    ResponseValue::P2pSync(lilia_protocol::P2pSyncMessage::IbfNegotiation {
+                        space,
+                        estimated_diff: estimate.estimated_diff,
+                        ibf,
+                    })
+                }
+            }
+            lilia_protocol::P2pSyncMessage::FastReconcileResponse {
+                space,
+                changesets,
+                requested_id_hashes,
+            } => {
+                database.p2p_apply_changesets(
+                    &changesets,
+                    lilia_core::ConflictResolutionStrategy::ThreeWayMerge,
+                )?;
+                let (_, id_map) = database.p2p_collect_items(space.as_deref())?;
+                let req_elements: Vec<u128> = requested_id_hashes
+                    .into_iter()
+                    .map(|h| u128::from(h) << 64)
+                    .collect();
+                let outgoing = database.p2p_export_payloads(&req_elements, &id_map)?;
+                ResponseValue::P2pSync(lilia_protocol::P2pSyncMessage::ChangesetDelivery {
+                    space,
+                    changesets: outgoing,
+                })
+            }
+            lilia_protocol::P2pSyncMessage::IbfNegotiation {
+                space,
+                estimated_diff: _,
+                ibf,
+            } => {
+                let mut local_ibf = database.p2p_ibf(space.as_deref(), ibf.len())?;
+                local_ibf.subtract(&ibf).map_err(|e| {
+                    lilia_core::LiliaError::new(
+                        lilia_core::ErrorCode::Storage,
+                        e.to_string(),
+                        false,
+                    )
+                })?;
+                let diff = local_ibf.decode().map_err(|e| {
+                    lilia_core::LiliaError::new(
+                        lilia_core::ErrorCode::Storage,
+                        e.to_string(),
+                        false,
+                    )
+                })?;
+                let (_, id_map) = database.p2p_collect_items(space.as_deref())?;
+                let changesets = database.p2p_export_payloads(&diff.a_minus_b, &id_map)?;
+                let requested_id_hashes =
+                    diff.b_minus_a.iter().map(|&x| (x >> 64) as u64).collect();
+                ResponseValue::P2pSync(lilia_protocol::P2pSyncMessage::IbfReconcileResponse {
+                    space,
+                    changesets,
+                    requested_id_hashes,
+                })
+            }
+            lilia_protocol::P2pSyncMessage::IbfReconcileResponse {
+                space,
+                changesets,
+                requested_id_hashes,
+            } => {
+                database.p2p_apply_changesets(
+                    &changesets,
+                    lilia_core::ConflictResolutionStrategy::ThreeWayMerge,
+                )?;
+                let (_, id_map) = database.p2p_collect_items(space.as_deref())?;
+                let req_elements: Vec<u128> = requested_id_hashes
+                    .into_iter()
+                    .map(|h| u128::from(h) << 64)
+                    .collect();
+                let outgoing = database.p2p_export_payloads(&req_elements, &id_map)?;
+                ResponseValue::P2pSync(lilia_protocol::P2pSyncMessage::ChangesetDelivery {
+                    space,
+                    changesets: outgoing,
+                })
+            }
+            lilia_protocol::P2pSyncMessage::ChangesetDelivery {
+                space: _,
+                changesets,
+            } => {
+                let stats = database.p2p_apply_changesets(
+                    &changesets,
+                    lilia_core::ConflictResolutionStrategy::ThreeWayMerge,
+                )?;
+                ResponseValue::Usize(stats.applied_count)
+            }
+        },
     })
 }

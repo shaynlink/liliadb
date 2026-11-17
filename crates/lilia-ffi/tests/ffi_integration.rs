@@ -114,6 +114,7 @@ fn test_ffi_sync_api_lifecycle_and_multimodel() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 async fn test_ffi_async_api_and_constrained_profile() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir
@@ -207,7 +208,7 @@ async fn test_ffi_async_api_and_constrained_profile() {
 
     // Standalone compression functions
     let comp_bytes = lilia_ffi::ts_compress_points(queried_ts).unwrap();
-    assert!(!comp_bytes.is_empty());
+    assert_ne!(comp_bytes, [] as [u8; 0]);
     let decomp_pts = lilia_ffi::ts_decompress_points(comp_bytes).unwrap();
     assert_eq!(decomp_pts.len(), 3);
 

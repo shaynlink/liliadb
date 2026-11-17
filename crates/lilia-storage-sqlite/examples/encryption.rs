@@ -75,14 +75,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n[4] Inspecting RAW SQLite file on disk directly (without codec):");
     let raw_conn = lilia_sqlite_native::NativeConnection::open_file(&db_path)?;
 
-    let mut stmt = raw_conn.prepare("SELECT value FROM _lilia_kv WHERE namespace = 'secrets' AND key = ?1")?;
+    let mut stmt =
+        raw_conn.prepare("SELECT value FROM _lilia_kv WHERE namespace = 'secrets' AND key = ?1")?;
     stmt.bind_blob_static(1, b"aws:access_key")?;
     assert!(stmt.step()?);
     let raw_kv = stmt.column_blob(0).to_vec();
     println!("  Raw KV bytes on disk: {:02x?}", &raw_kv[..8]);
     assert_ne!(raw_kv, b"AKIAIOSFODNN7EXAMPLE");
 
-    let mut stmt = raw_conn.prepare("SELECT value FROM _lilia_json WHERE space = 'vault' AND id = 'customer_42'")?;
+    let mut stmt = raw_conn
+        .prepare("SELECT value FROM _lilia_json WHERE space = 'vault' AND id = 'customer_42'")?;
     assert!(stmt.step()?);
     let raw_json = stmt.column_text(0).to_string();
     println!("  Raw JSON envelope on disk:\n    {raw_json}");

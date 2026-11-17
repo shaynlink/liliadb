@@ -13,7 +13,9 @@ fn open(directory: &tempfile::TempDir) -> Database {
 fn add_historical_shard(directory: &tempfile::TempDir, database: &Database, shard_id: &str) {
     let seed = directory.path().join(format!("seed-{shard_id}.lilia"));
     std::fs::write(&seed, []).expect("create empty shard file");
-    database.attach_shard(shard_id, &seed).expect("attach historical shard");
+    database
+        .attach_shard(shard_id, &seed)
+        .expect("attach historical shard");
 }
 
 fn insert_event(database: &Database, alias: &str, id: &str, padding: usize) {
@@ -29,7 +31,10 @@ fn insert_event(database: &Database, alias: &str, id: &str, padding: usize) {
 
 fn event_ids(database: &Database) -> Vec<String> {
     let result = database
-        .sql_query("SELECT id FROM lilia_json WHERE space = 'events' ORDER BY id;", &[])
+        .sql_query(
+            "SELECT id FROM lilia_json WHERE space = 'events' ORDER BY id;",
+            &[],
+        )
         .expect("query unified view");
     result
         .rows
@@ -49,13 +54,20 @@ fn opening_creates_active_shard_and_layout() {
     assert_eq!(active.status, ShardStatus::Active);
     assert_eq!(shards[0].shard_id, active.shard_id);
     assert!(directory.path().join("app.lilia.shards").is_dir());
-    assert!(directory.path().join("app.lilia.shards").join(format!("{}.lilia", active.shard_id)).exists());
+    assert!(directory
+        .path()
+        .join("app.lilia.shards")
+        .join(format!("{}.lilia", active.shard_id))
+        .exists());
 }
 
 #[test]
 fn sharding_calls_fail_when_disabled() {
     let directory = tempfile::tempdir().unwrap();
-    let database = Database::open(DatabaseOptions::durable(directory.path().join("plain.lilia"))).unwrap();
+    let database = Database::open(DatabaseOptions::durable(
+        directory.path().join("plain.lilia"),
+    ))
+    .unwrap();
     assert!(database.list_shards().is_err());
     assert!(database.rollover_shard().is_err());
 }
@@ -70,7 +82,12 @@ fn unified_view_spans_attached_shards() {
 
     insert_event(&database, "shard_2020_01", "a", 0);
     insert_event(&database, "shard_2020_02", "b", 0);
-    insert_event(&database, &format!("shard_{}", active.shard_id.replace('-', "_")), "c", 0);
+    insert_event(
+        &database,
+        &format!("shard_{}", active.shard_id.replace('-', "_")),
+        "c",
+        0,
+    );
 
     assert_eq!(event_ids(&database), vec!["a", "b", "c"]);
 }
@@ -87,8 +104,14 @@ fn archive_and_restore_cold_shard() {
     insert_event(&database, "shard_2020_02", "kept", 0);
 
     let shards_dir = directory.path().join("app.lilia.shards");
-    let archive = database.detach_and_compress("2020-01").expect("archive shard");
-    assert!(archive.compression_ratio < 0.3, "ratio {}", archive.compression_ratio);
+    let archive = database
+        .detach_and_compress("2020-01")
+        .expect("archive shard");
+    assert!(
+        archive.compression_ratio < 0.3,
+        "ratio {}",
+        archive.compression_ratio
+    );
     assert!(archive.original_size_bytes > archive.compressed_size_bytes);
     assert!(shards_dir.join("2020-01.lilia.zst").exists());
     assert!(!shards_dir.join("2020-01.lilia").exists());
@@ -109,7 +132,9 @@ fn archive_and_restore_cold_shard() {
     insert_event(&database, "shard_2020_02", "after-archive", 0);
     assert_eq!(event_ids(&database), vec!["after-archive", "kept"]);
 
-    let restored = database.decompress_and_attach("2020-01").expect("restore shard");
+    let restored = database
+        .decompress_and_attach("2020-01")
+        .expect("restore shard");
     assert_eq!(restored.status, ShardStatus::Warm);
     assert!(shards_dir.join("2020-01.lilia").exists());
     let ids = event_ids(&database);
@@ -136,11 +161,18 @@ fn detach_and_reattach_warm_shard() {
     assert_eq!(event_ids(&database), vec!["x"]);
 
     database.detach_shard("2020-03").expect("detach");
-    assert!(event_ids(&database).is_empty());
-    let detached = database.list_shards().unwrap().into_iter().find(|s| s.shard_id == "2020-03").unwrap();
+    assert_eq!(event_ids(&database), [] as [std::string::String; 0]);
+    let detached = database
+        .list_shards()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.shard_id == "2020-03")
+        .unwrap();
     assert_eq!(detached.status, ShardStatus::Detached);
 
-    database.attach_shard("2020-03", &detached.file_path).expect("reattach");
+    database
+        .attach_shard("2020-03", &detached.file_path)
+        .expect("reattach");
     assert_eq!(event_ids(&database), vec!["x"]);
 }
 
@@ -177,7 +209,9 @@ fn auto_archive_oldest_enforces_attached_limit() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(
         DatabaseOptions::durable(directory.path().join("app.lilia")).with_sharding(
-            ShardingConfig::new().with_max_attached_shards(2).with_auto_archive_oldest(true),
+            ShardingConfig::new()
+                .with_max_attached_shards(2)
+                .with_auto_archive_oldest(true),
         ),
     )
     .unwrap();

@@ -1,8 +1,8 @@
-use lilia_core::doc;
 use lilia_core::aggregation::{
     AnomalyAccumulator, CountAccumulator, HyperLogLog, MaxAccumulator, MinAccumulator,
     SumAccumulator, TDigest, WelfordAccumulator,
 };
+use lilia_core::doc;
 use serde_json::json;
 
 #[test]
@@ -29,7 +29,7 @@ fn test_welford_statistical_accuracy() {
 fn test_tdigest_quantiles_and_iqr() {
     let mut td = TDigest::new(100.0);
     for i in 1..=1000 {
-        td.add(i as f64);
+        td.add(f64::from(i));
     }
 
     // Median should be close to 500.5
@@ -60,8 +60,10 @@ fn test_hyperloglog_distinct_count() {
 
     let estimated = hll.count();
     // Expected ~500 within ~5% error
-    let diff = (estimated as f64 - 500.0).abs();
-    assert!(diff < 35.0, "estimated {estimated} vs expected 500");
+    assert!(
+        estimated.abs_diff(500) < 35,
+        "estimated {estimated} vs expected 500"
+    );
 }
 
 #[test]

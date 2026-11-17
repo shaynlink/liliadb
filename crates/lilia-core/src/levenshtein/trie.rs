@@ -78,7 +78,11 @@ impl TermTrie {
         if term.is_empty() {
             return;
         }
-        let delta = if doc_count_delta == 0 { 1 } else { doc_count_delta };
+        let delta = if doc_count_delta == 0 {
+            1
+        } else {
+            doc_count_delta
+        };
         if insert_rec(&mut self.root, term, delta) {
             self.total_terms += 1;
         }
@@ -228,11 +232,8 @@ fn insert_rec(node: &mut RadixNode, rem: &str, doc_count_delta: u32) -> bool {
                 let child_rem_edge = child.edge[c_len..].to_string();
                 let new_rem = &rem[c_len..];
 
-                let mut split_node = RadixNode::new(
-                    &child_rem_edge,
-                    child.is_terminal,
-                    child.doc_count,
-                );
+                let mut split_node =
+                    RadixNode::new(&child_rem_edge, child.is_terminal, child.doc_count);
                 std::mem::swap(&mut split_node.children, &mut child.children);
 
                 child.edge = common_edge.into();

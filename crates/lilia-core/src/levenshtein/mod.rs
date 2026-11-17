@@ -88,7 +88,7 @@ mod tests {
         // Fuzzy search for "croisant" with D=1
         let auto = LevenshteinAutomaton::for_exact("croisant", 1);
         let matches = trie.search_automaton(&auto, 10);
-        assert!(!matches.is_empty());
+        assert_ne!(matches, []);
         assert_eq!(matches[0].term, "croissant");
         assert_eq!(matches[0].distance, 1);
         assert_eq!(matches[0].doc_count, 42);
@@ -117,7 +117,7 @@ mod tests {
         let elapsed = start.elapsed();
 
         println!("Autocomplete latency for 10,000 terms: {elapsed:?}");
-        assert!(!suggestions.is_empty());
+        assert_ne!(suggestions, []);
         assert_eq!(suggestions[0].term, "croissant");
         assert_eq!(suggestions[0].distance, 1);
 

@@ -1186,7 +1186,7 @@ async fn batch_handler(
                     }
                     VectorElementType::Int8 => {
                         let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&vector);
-                        q.into_iter().map(|x| x as u8).collect()
+                        q.into_iter().map(i8::cast_unsigned).collect()
                     }
                     VectorElementType::Bit => {
                         lilia_core::quantization::quantize_f32_to_bits(&vector)
@@ -1559,7 +1559,7 @@ async fn vector_set_handler(
         }
         VectorElementType::Int8 => {
             let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&payload.vector);
-            q.into_iter().map(|x| x as u8).collect()
+            q.into_iter().map(i8::cast_unsigned).collect()
         }
         VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(&payload.vector),
     };
@@ -1605,11 +1605,15 @@ async fn vector_get_handler(
         Some((dim, elem_type, bytes)) => {
             let floats: Vec<f32> = match elem_type {
                 VectorElementType::Float32 => bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect(),
-                VectorElementType::Int8 => bytes.iter().map(|&x| (x as i8) as f32).collect(),
-                VectorElementType::Bit => bytes.iter().map(|&x| x as f32).collect(),
+                VectorElementType::Int8 => {
+                    bytes.iter().map(|&x| f32::from(x.cast_signed())).collect()
+                }
+                VectorElementType::Bit => bytes.iter().map(|&x| f32::from(x)).collect(),
             };
             Ok(Json(json!({
                 "ok": true,
@@ -1631,7 +1635,9 @@ async fn vector_search_handler(
     let limit = payload.limit.unwrap_or(10);
     let elem_type = payload.element_type.unwrap_or(VectorElementType::Float32);
     let metric = payload.metric.unwrap_or(VectorMetric::Cosine);
-    let dim = payload.dim.unwrap_or(payload.vector.len() as u32);
+    let dim = payload
+        .dim
+        .unwrap_or(u32::try_from(payload.vector.len()).unwrap_or(u32::MAX));
     let bytes = match elem_type {
         VectorElementType::Float32 => {
             let mut b = Vec::with_capacity(payload.vector.len() * 4);
@@ -1642,7 +1648,7 @@ async fn vector_search_handler(
         }
         VectorElementType::Int8 => {
             let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&payload.vector);
-            q.into_iter().map(|x| x as u8).collect()
+            q.into_iter().map(i8::cast_unsigned).collect()
         }
         VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(&payload.vector),
     };
@@ -1677,7 +1683,9 @@ async fn hybrid_search_handler(
         let vec_data = if let Some(ref v) = payload.vector {
             let elem_type = payload.element_type.unwrap_or(VectorElementType::Float32);
             let metric = payload.metric.unwrap_or(VectorMetric::Cosine);
-            let dim = payload.dim.unwrap_or(v.len() as u32);
+            let dim = payload
+                .dim
+                .unwrap_or(u32::try_from(v.len()).unwrap_or(u32::MAX));
             let bytes = match elem_type {
                 VectorElementType::Float32 => {
                     let mut b = Vec::with_capacity(v.len() * 4);
@@ -1688,7 +1696,7 @@ async fn hybrid_search_handler(
                 }
                 VectorElementType::Int8 => {
                     let (q, _) = lilia_core::quantization::quantize_f32_to_i8(v);
-                    q.into_iter().map(|x| x as u8).collect()
+                    q.into_iter().map(i8::cast_unsigned).collect()
                 }
                 VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(v),
             };

@@ -7,9 +7,7 @@ pub use eval::{
     infer_target_collection,
 };
 pub use template::{interpolate_string, interpolate_value, RuleContext};
-pub use types::{
-    Action, Rule, RuleBuilder, SlidingWindow, TriggerMode, WindowCondition,
-};
+pub use types::{Action, Rule, RuleBuilder, SlidingWindow, TriggerMode, WindowCondition};
 
 /// Convenient macro for constructing an in-transaction [`Rule`].
 ///

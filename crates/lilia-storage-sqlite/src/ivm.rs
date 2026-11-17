@@ -25,6 +25,8 @@ pub struct ParsedIvmQuery {
     pub where_clause: Option<String>,
 }
 
+/// # Errors
+/// Propagates errors from the operations it performs.
 pub fn ensure_ivm_catalog(conn: &NativeConnection) -> Result<()> {
     conn.exec(
         "CREATE TABLE IF NOT EXISTS _lilia_ivm_views (
@@ -38,6 +40,10 @@ pub fn ensure_ivm_catalog(conn: &NativeConnection) -> Result<()> {
     )
 }
 
+/// # Errors
+/// Returns `InvalidInput` errors detected here, and propagates errors from the
+/// operations it performs.
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 pub fn create_materialized_view(conn: &NativeConnection, name: &str, query: &str) -> Result<()> {
     ensure_ivm_catalog(conn)?;
 
@@ -153,7 +159,7 @@ pub fn create_materialized_view(conn: &NativeConnection, name: &str, query: &str
     };
 
     // 3. Triggers for $O(1)$ IVM maintenance
-    let (trg_ai_sql, trg_ad_sql, trg_au_sql) =
+    let (insert_trigger, delete_trigger, update_trigger) =
         generate_triggers(clean_name, &storage_table, &parsed);
 
     // Initial populate query
@@ -179,9 +185,9 @@ pub fn create_materialized_view(conn: &NativeConnection, name: &str, query: &str
         conn.exec(&initial_populate_sql)?;
         conn.exec(&create_view_sql)?;
 
-        conn.exec(&trg_ai_sql)?;
-        conn.exec(&trg_ad_sql)?;
-        conn.exec(&trg_au_sql)?;
+        conn.exec(&insert_trigger)?;
+        conn.exec(&delete_trigger)?;
+        conn.exec(&update_trigger)?;
 
         let now_ms = crate::storage::now_ms();
         let group_by_str = if is_grouped {
@@ -218,6 +224,8 @@ pub fn create_materialized_view(conn: &NativeConnection, name: &str, query: &str
     }
 }
 
+/// # Errors
+/// Propagates errors from the operations it performs.
 pub fn drop_materialized_view(conn: &NativeConnection, name: &str) -> Result<()> {
     ensure_ivm_catalog(conn)?;
     let clean_name = name.trim().trim_matches('"').trim_matches('`');
@@ -243,6 +251,9 @@ pub fn drop_materialized_view(conn: &NativeConnection, name: &str) -> Result<()>
     Ok(())
 }
 
+/// # Errors
+/// Returns `NotFound` errors detected here, and propagates errors from the
+/// operations it performs.
 pub fn refresh_materialized_view(conn: &NativeConnection, name: &str) -> Result<()> {
     ensure_ivm_catalog(conn)?;
     let clean_name = name.trim().trim_matches('"').trim_matches('`');
@@ -262,13 +273,14 @@ pub fn refresh_materialized_view(conn: &NativeConnection, name: &str) -> Result<
     create_materialized_view(conn, clean_name, &query)
 }
 
+/// # Errors
+/// Propagates errors from the operations it performs.
 pub fn list_materialized_views(conn: &NativeConnection) -> Result<Vec<MaterializedViewInfo>> {
-    let mut stmt = match conn.prepare(
+    let Ok(mut stmt) = conn.prepare(
         "SELECT name, source_table, query, storage_table, group_by, created_at_ms \
          FROM _lilia_ivm_views ORDER BY name ASC;",
-    ) {
-        Ok(stmt) => stmt,
-        Err(_) => return Ok(Vec::new()),
+    ) else {
+        return Ok(Vec::new());
     };
 
     let mut list = Vec::new();
@@ -303,14 +315,14 @@ fn generate_initial_populate_sql(storage_table: &str, parsed: &ParsedIvmQuery) -
     let mut target_cols = Vec::new();
     let mut select_exprs = Vec::new();
 
-    if !is_grouped {
-        target_cols.push("\"_singleton\"".to_string());
-        select_exprs.push("1".to_string());
-    } else {
+    if is_grouped {
         for g in &parsed.group_by {
             target_cols.push(format!("\"{g}\""));
             select_exprs.push(format!("\"{g}\""));
         }
+    } else {
+        target_cols.push("\"_singleton\"".to_string());
+        select_exprs.push("1".to_string());
     }
 
     for agg in &parsed.aggregates {
@@ -347,8 +359,7 @@ fn generate_initial_populate_sql(storage_table: &str, parsed: &ParsedIvmQuery) -
     let where_part = parsed
         .where_clause
         .as_ref()
-        .map(|w| format!("WHERE {w}"))
-        .unwrap_or_default();
+        .map_or_default(|w| format!("WHERE {w}"));
 
     let group_part = if is_grouped {
         format!(
@@ -372,6 +383,7 @@ fn generate_initial_populate_sql(storage_table: &str, parsed: &ParsedIvmQuery) -
     )
 }
 
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn generate_triggers(
     view_name: &str,
     storage_table: &str,
@@ -458,7 +470,7 @@ fn generate_triggers(
             }
         }
 
-        let ai_sql = format!(
+        let insert_trigger = format!(
             "CREATE TRIGGER IF NOT EXISTS \"_lilia_ivm_trg_{view_name}_ai\" AFTER INSERT ON \"{source}\" \
              FOR EACH ROW BEGIN \
                  INSERT INTO \"{storage_table}\" ({}) VALUES ({}) \
@@ -495,8 +507,7 @@ fn generate_triggers(
                 parsed
                     .aggregates
                     .first()
-                    .map(|a| a.alias.clone())
-                    .unwrap_or_else(|| "count".into())
+                    .map_or_else(|| "count".into(), |a| a.alias.clone())
             });
 
         for agg in &parsed.aggregates {
@@ -530,7 +541,7 @@ fn generate_triggers(
             }
         }
 
-        let ad_sql = format!(
+        let delete_trigger = format!(
             "CREATE TRIGGER IF NOT EXISTS \"_lilia_ivm_trg_{view_name}_ad\" AFTER DELETE ON \"{source}\" \
              FOR EACH ROW BEGIN \
                  UPDATE \"{storage_table}\" SET {} WHERE {where_old_match}; \
@@ -583,7 +594,9 @@ fn generate_triggers(
             }
         }
 
-        let intra_update_stmt = if !intra_updates.is_empty() {
+        let intra_update_stmt = if intra_updates.is_empty() {
+            String::new()
+        } else {
             let where_new_match = parsed
                 .group_by
                 .iter()
@@ -591,11 +604,9 @@ fn generate_triggers(
                 .collect::<Vec<_>>()
                 .join(" AND ");
             format!("UPDATE \"{storage_table}\" SET {} WHERE {where_new_match} AND ({same_group_cond});", intra_updates.join(", "))
-        } else {
-            String::new()
         };
 
-        let au_sql = format!(
+        let update_trigger = format!(
             "CREATE TRIGGER IF NOT EXISTS \"_lilia_ivm_trg_{view_name}_au\" AFTER UPDATE ON \"{source}\" \
              FOR EACH ROW BEGIN \
                  {intra_update_stmt} \
@@ -610,7 +621,7 @@ fn generate_triggers(
             upsert_sets.join(", ")
         );
 
-        (ai_sql, ad_sql, au_sql)
+        (insert_trigger, delete_trigger, update_trigger)
     } else {
         // Global singleton triggers
         let mut insert_updates = Vec::new();
@@ -683,7 +694,7 @@ fn generate_triggers(
             }
         }
 
-        let ai_sql = format!(
+        let insert_trigger = format!(
             "CREATE TRIGGER IF NOT EXISTS \"_lilia_ivm_trg_{view_name}_ai\" AFTER INSERT ON \"{source}\" \
              FOR EACH ROW BEGIN \
                  UPDATE \"{storage_table}\" SET {} WHERE \"_singleton\" = 1; \
@@ -691,7 +702,7 @@ fn generate_triggers(
             insert_updates.join(", ")
         );
 
-        let ad_sql = format!(
+        let delete_trigger = format!(
             "CREATE TRIGGER IF NOT EXISTS \"_lilia_ivm_trg_{view_name}_ad\" AFTER DELETE ON \"{source}\" \
              FOR EACH ROW BEGIN \
                  UPDATE \"{storage_table}\" SET {} WHERE \"_singleton\" = 1; \
@@ -699,7 +710,9 @@ fn generate_triggers(
             delete_updates.join(", ")
         );
 
-        let au_sql = if !update_updates.is_empty() {
+        let update_trigger = if update_updates.is_empty() {
+            String::new()
+        } else {
             format!(
                 "CREATE TRIGGER IF NOT EXISTS \"_lilia_ivm_trg_{view_name}_au\" AFTER UPDATE ON \"{source}\" \
                  FOR EACH ROW BEGIN \
@@ -707,14 +720,16 @@ fn generate_triggers(
                  END;",
                 update_updates.join(", ")
             )
-        } else {
-            String::new()
         };
 
-        (ai_sql, ad_sql, au_sql)
+        (insert_trigger, delete_trigger, update_trigger)
     }
 }
 
+/// # Errors
+/// Returns `InvalidInput` errors detected here, and propagates errors from the
+/// operations it performs.
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 pub fn parse_ivm_query(query: &str) -> Result<ParsedIvmQuery> {
     let trimmed = query.trim().trim_end_matches(';').trim();
     let lower = trimmed.to_ascii_lowercase();

@@ -22,13 +22,11 @@ fn test_aggregation_pipeline_full_user_scenario() -> Result<(), Box<dyn std::err
         // Item 2: "books" with amount 25.0
         let items = if is_target {
             vec![
-                json!({ "category": "electronics", "amount": 100.0 + (i as f64) }),
+                json!({ "category": "electronics", "amount": 100.0 + f64::from(i) }),
                 json!({ "category": "books", "amount": 25.0 }),
             ]
         } else {
-            vec![
-                json!({ "category": "furniture", "amount": 500.0 }),
-            ]
+            vec![json!({ "category": "furniture", "amount": 500.0 })]
         };
 
         batch.push(BatchOperation::JsonPut {
@@ -68,7 +66,11 @@ fn test_aggregation_pipeline_full_user_scenario() -> Result<(), Box<dyn std::err
         .limit(10)
         .execute()?;
 
-    assert_eq!(stats.len(), 2, "Should return 2 categories: electronics and books");
+    assert_eq!(
+        stats.len(),
+        2,
+        "Should return 2 categories: electronics and books"
+    );
 
     // Top 1 must be electronics due to higher revenue
     let top_category = &stats[0];
@@ -101,7 +103,7 @@ fn test_aggregation_streaming_pull_iterator() -> Result<(), Box<dyn std::error::
             id: format!("ev_{i:03}"),
             value: json!({
                 "severity": if i % 2 == 0 { "high" } else { "low" },
-                "score": i as f64,
+                "score": f64::from(i),
             }),
             if_version: None,
         });
@@ -138,12 +140,13 @@ fn test_aggregation_streaming_pull_iterator() -> Result<(), Box<dyn std::error::
 
 #[test]
 fn test_aggregation_large_scale_streaming() -> Result<(), Box<dyn std::error::Error>> {
+    const TOTAL: usize = 10_000;
+
     let temp_dir = tempfile::tempdir()?;
     let db_path = temp_dir.path().join("aggregation_large.lilia");
     let db = Database::open(DatabaseOptions::durable(&db_path))?;
 
     // Seed 10,000 documents to verify fast bounded streaming
-    const TOTAL: usize = 10_000;
     let mut batch = Vec::with_capacity(1000);
     for i in 0..TOTAL {
         batch.push(BatchOperation::JsonPut {
@@ -151,7 +154,7 @@ fn test_aggregation_large_scale_streaming() -> Result<(), Box<dyn std::error::Er
             id: format!("m_{i:05}"),
             value: json!({
                 "device_id": format!("dev_{}", i % 10),
-                "reading": (i % 100) as f64,
+                "reading": f64::from(u8::try_from(i % 100)?),
                 "valid": true,
             }),
             if_version: None,
@@ -181,7 +184,7 @@ fn test_aggregation_large_scale_streaming() -> Result<(), Box<dyn std::error::Er
 
     assert_eq!(results.len(), 10);
     for group in &results {
-        let dev_id: usize = group["device_id"]
+        let dev_id: u8 = group["device_id"]
             .as_str()
             .unwrap()
             .strip_prefix("dev_")
@@ -189,8 +192,8 @@ fn test_aggregation_large_scale_streaming() -> Result<(), Box<dyn std::error::Er
             .parse()
             .unwrap();
         assert_eq!(group["total_readings"], 1000);
-        assert_eq!(group["min_reading"], dev_id as f64);
-        assert_eq!(group["max_reading"], (90 + dev_id) as f64);
+        assert_eq!(group["min_reading"], f64::from(dev_id));
+        assert_eq!(group["max_reading"], f64::from(90 + dev_id));
     }
 
     Ok(())

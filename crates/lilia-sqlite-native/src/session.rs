@@ -34,9 +34,12 @@ impl ConflictAction {
 
 /// Safe RAII wrapper around SQLite's `sqlite3_session`.
 /// Tracks database changes at the VDBE layer and serializes them into compact changesets.
+/// Table filter of a session. Boxed twice: SQLite keeps a thin pointer to the inner box.
+type TableFilter = Box<Box<dyn Fn(&str) -> bool + Send>>;
+
 pub struct NativeSession {
     raw: *mut ffi::sqlite3_session,
-    filter: Option<Box<Box<dyn Fn(&str) -> bool + Send>>>,
+    filter: Option<TableFilter>,
 }
 
 impl std::fmt::Debug for NativeSession {

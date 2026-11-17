@@ -251,6 +251,9 @@ impl Database {
     ///
     /// Enabling creates the HNSW index when it is missing and queues every existing document.
     /// Disabling stops the embedding and empties the queue; the vectors already stored are kept.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn apply_json_auto_embed(
         &self,
         space: &str,
@@ -311,6 +314,10 @@ impl Database {
     }
 
     /// Queues every document of the auto-embedded collection `space` again.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn requeue_auto_embed(&self, space: &str) -> Result<()> {
         validate_name("collection", space)?;
         let Some(config) = self.integrity.auto_embed_for(space) else {
@@ -332,6 +339,8 @@ impl Database {
         Ok(())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn auto_embed_status(&self, space: &str) -> Result<EmbedStatus> {
         validate_name("collection", space)?;
         let max_attempts = self.embed_options.max_attempts;

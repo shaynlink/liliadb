@@ -18,9 +18,9 @@ use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 
 use helpers::{
-    build_database_options, from_json_str, fts_hits_to_native,
-    napi_error, opt_json_string, parse_aggregation, parse_direction, parse_element_type,
-    parse_hlc, parse_metric, parse_params, run_async, to_json_string, vector_hits_to_native,
+    build_database_options, from_json_str, fts_hits_to_native, napi_error, opt_json_string,
+    parse_aggregation, parse_direction, parse_element_type, parse_hlc, parse_metric, parse_params,
+    run_async, to_json_string, vector_hits_to_native,
 };
 
 #[napi]
@@ -660,7 +660,10 @@ impl NativeDatabase {
 
     #[napi]
     pub async fn json_is_auto_train_enabled(&self, space: String) -> Result<bool> {
-        run_async(&self.inner, move |db| Ok(db.is_space_auto_train_enabled(&space))).await
+        run_async(&self.inner, move |db| {
+            Ok(db.is_space_auto_train_enabled(&space))
+        })
+        .await
     }
 
     #[napi]
@@ -735,7 +738,10 @@ impl NativeDatabase {
 
     #[napi]
     pub async fn batch(&self, operations_json: String) -> Result<String> {
-        run_async(&self.inner, move |db| helpers::batch_json(db, &operations_json)).await
+        run_async(&self.inner, move |db| {
+            helpers::batch_json(db, &operations_json)
+        })
+        .await
     }
 
     #[napi]
@@ -766,6 +772,42 @@ impl NativeDatabase {
         helpers::sql_query(&self.inner, &sql, params_json.as_deref())
     }
 
+    #[napi]
+    pub fn register_wasm_udf_sync(
+        &self,
+        name: String,
+        bytecode: napi::bindgen_prelude::Buffer,
+        memory_limit_bytes: Option<i64>,
+        fuel_limit: Option<i64>,
+        persistent: Option<bool>,
+    ) -> Result<()> {
+        let mut config = lilia_storage_sqlite::WasmUdfConfig::default();
+        if let Some(mem) = memory_limit_bytes {
+            if mem > 0 {
+                config.memory_limit_bytes = mem as usize;
+            }
+        }
+        if let Some(fuel) = fuel_limit {
+            if fuel > 0 {
+                config.fuel_limit = fuel as u64;
+            }
+        }
+        self.inner
+            .register_wasm_udf_with_config(&name, &bytecode, config, persistent.unwrap_or(true))
+            .map_err(napi_error)
+    }
+
+    #[napi]
+    pub fn unregister_wasm_udf_sync(&self, name: String) -> Result<bool> {
+        self.inner.unregister_wasm_udf(&name).map_err(napi_error)
+    }
+
+    #[napi]
+    pub fn list_wasm_udfs_sync(&self) -> Result<String> {
+        let list = self.inner.list_wasm_udfs();
+        serde_json::to_string(&list).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
     // -----------------------------------------------------------------------
     // Graph CRUD, Traversal, Algorithms & Cypher
     // -----------------------------------------------------------------------
@@ -779,8 +821,13 @@ impl NativeDatabase {
         kind: Option<String>,
     ) -> Result<Vec<String>> {
         run_async(&self.inner, move |db| {
-            db.graph_neighbors(&graph, &node, parse_direction(direction.as_deref()), kind.as_deref())
-                .map_err(napi_error)
+            db.graph_neighbors(
+                &graph,
+                &node,
+                parse_direction(direction.as_deref()),
+                kind.as_deref(),
+            )
+            .map_err(napi_error)
         })
         .await
     }
@@ -851,7 +898,9 @@ impl NativeDatabase {
         id: String,
     ) -> Result<Option<String>> {
         run_async(&self.inner, move |db| {
-            let doc = db.graph_get_node_document(&graph, &id).map_err(napi_error)?;
+            let doc = db
+                .graph_get_node_document(&graph, &id)
+                .map_err(napi_error)?;
             opt_json_string(doc.as_ref())
         })
         .await
@@ -1272,7 +1321,10 @@ impl NativeDatabase {
     ) -> Result<bool> {
         run_async(&self.inner, move |db| {
             db.graph(&graph)
-                .has_cycle(parse_direction(direction.as_deref()), kind_filter.as_deref())
+                .has_cycle(
+                    parse_direction(direction.as_deref()),
+                    kind_filter.as_deref(),
+                )
                 .map_err(napi_error)
         })
         .await
@@ -1287,7 +1339,10 @@ impl NativeDatabase {
     ) -> Result<bool> {
         self.inner
             .graph(&graph)
-            .has_cycle(parse_direction(direction.as_deref()), kind_filter.as_deref())
+            .has_cycle(
+                parse_direction(direction.as_deref()),
+                kind_filter.as_deref(),
+            )
             .map_err(napi_error)
     }
 
@@ -1362,7 +1417,11 @@ impl NativeDatabase {
 
     #[napi]
     pub fn graph_cypher_sync(&self, graph: String, query: String) -> Result<String> {
-        let res = self.inner.graph(&graph).cypher(&query).map_err(napi_error)?;
+        let res = self
+            .inner
+            .graph(&graph)
+            .cypher(&query)
+            .map_err(napi_error)?;
         to_json_string(&res)
     }
 
@@ -1428,7 +1487,7 @@ impl NativeDatabase {
                 .fts_suggest(
                     &collection,
                     &prefix,
-                    max_distance.unwrap_or(1) as u8,
+                    u8::try_from(max_distance.unwrap_or(1)).unwrap_or(u8::MAX),
                     limit.unwrap_or(10),
                 )
                 .map_err(napi_error)?;
@@ -1458,7 +1517,7 @@ impl NativeDatabase {
             .fts_suggest(
                 &collection,
                 &prefix,
-                max_distance.unwrap_or(1) as u8,
+                u8::try_from(max_distance.unwrap_or(1)).unwrap_or(u8::MAX),
                 limit.unwrap_or(10),
             )
             .map_err(napi_error)?;
@@ -1486,7 +1545,7 @@ impl NativeDatabase {
                 .fts_fuzzy_search(
                     &collection,
                     &query,
-                    max_distance.unwrap_or(1) as u8,
+                    u8::try_from(max_distance.unwrap_or(1)).unwrap_or(u8::MAX),
                     limit.unwrap_or(10),
                 )
                 .map_err(napi_error)?;
@@ -1518,7 +1577,7 @@ impl NativeDatabase {
             .fts_fuzzy_search(
                 &collection,
                 &query,
-                max_distance.unwrap_or(1) as u8,
+                u8::try_from(max_distance.unwrap_or(1)).unwrap_or(u8::MAX),
                 limit.unwrap_or(10),
             )
             .map_err(napi_error)?;
@@ -1536,11 +1595,7 @@ impl NativeDatabase {
     }
 
     #[napi]
-    pub fn fts_load_dictionary_sync(
-        &self,
-        collection: String,
-        words: Vec<String>,
-    ) -> Result<()> {
+    pub fn fts_load_dictionary_sync(&self, collection: String, words: Vec<String>) -> Result<()> {
         let refs: Vec<&str> = words.iter().map(String::as_str).collect();
         self.inner
             .fts_load_dictionary(&collection, &refs)
@@ -1559,7 +1614,10 @@ impl NativeDatabase {
 
     #[napi]
     pub fn vector_get_sync(&self, collection: String, id: String) -> Result<Option<Buffer>> {
-        let res = self.inner.vector_get(&collection, &id).map_err(napi_error)?;
+        let res = self
+            .inner
+            .vector_get(&collection, &id)
+            .map_err(napi_error)?;
         Ok(res.map(|(_, _, bytes)| Buffer::from(bytes)))
     }
 
@@ -1677,16 +1735,15 @@ impl NativeDatabase {
 
     #[napi]
     pub fn json_embed_status_sync(&self, collection: String) -> Result<String> {
-        let status = self.inner.auto_embed_status(&collection).map_err(napi_error)?;
+        let status = self
+            .inner
+            .auto_embed_status(&collection)
+            .map_err(napi_error)?;
         serde_json::to_string(&status).map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     #[napi]
-    pub async fn vector_create_index(
-        &self,
-        collection: String,
-        config_json: String,
-    ) -> Result<()> {
+    pub async fn vector_create_index(&self, collection: String, config_json: String) -> Result<()> {
         run_async(&self.inner, move |db| {
             helpers::vector_create_index(db, &collection, &config_json)
         })
@@ -1694,11 +1751,7 @@ impl NativeDatabase {
     }
 
     #[napi]
-    pub fn vector_create_index_sync(
-        &self,
-        collection: String,
-        config_json: String,
-    ) -> Result<()> {
+    pub fn vector_create_index_sync(&self, collection: String, config_json: String) -> Result<()> {
         helpers::vector_create_index(&self.inner, &collection, &config_json)
     }
 
@@ -2033,10 +2086,9 @@ impl NativeDatabase {
         resolution_ms: Option<i64>,
     ) -> Result<String> {
         let pts = match resolution_ms {
-            Some(res) => {
-                self.inner
-                    .ts_query_range_with_resolution(&series_id, res, start_time, end_time)
-            }
+            Some(res) => self
+                .inner
+                .ts_query_range_with_resolution(&series_id, res, start_time, end_time),
             None => self.inner.ts_query_range(&series_id, start_time, end_time),
         }
         .map_err(napi_error)?;
@@ -2106,10 +2158,9 @@ impl NativeDatabase {
         resolution_ms: Option<i64>,
     ) -> Result<Option<String>> {
         let stats = match resolution_ms {
-            Some(res) => {
-                self.inner
-                    .ts_query_stats_with_resolution(&series_id, res, start_time, end_time)
-            }
+            Some(res) => self
+                .inner
+                .ts_query_stats_with_resolution(&series_id, res, start_time, end_time),
             None => self.inner.ts_query_stats(&series_id, start_time, end_time),
         }
         .map_err(napi_error)?;
@@ -2267,7 +2318,12 @@ impl NativeDatabase {
     }
 
     #[napi]
-    pub fn geo_contains_point_sync(&self, polygon_json: String, lon: f64, lat: f64) -> Result<bool> {
+    pub fn geo_contains_point_sync(
+        &self,
+        polygon_json: String,
+        lon: f64,
+        lat: f64,
+    ) -> Result<bool> {
         self.inner
             .geo_contains_point(&polygon_json, lon, lat)
             .map_err(napi_error)
@@ -2530,7 +2586,12 @@ impl NativeDatabase {
     }
 
     #[napi]
-    pub fn crdt_set_merge_sync(&self, space: String, id: String, remote_json: String) -> Result<()> {
+    pub fn crdt_set_merge_sync(
+        &self,
+        space: String,
+        id: String,
+        remote_json: String,
+    ) -> Result<()> {
         helpers::crdt_set_merge(&self.inner, &space, &id, &remote_json)
     }
 
@@ -2722,6 +2783,7 @@ impl NativeDatabase {
     // -----------------------------------------------------------------------
 
     #[napi(ts_args_type = "callback: (event: string) => void, namespace?: string")]
+    #[allow(clippy::unused_async_trait_impl)] // part of the JavaScript API as a Promise-returning method
     pub async fn watch(
         &self,
         callback: ThreadsafeFunction<String>,
@@ -2806,9 +2868,7 @@ impl NativeDatabase {
 
     #[napi]
     pub fn drop_materialized_view_sync(&self, name: String) -> Result<()> {
-        self.inner
-            .drop_materialized_view(&name)
-            .map_err(napi_error)
+        self.inner.drop_materialized_view(&name).map_err(napi_error)
     }
 
     #[napi]
@@ -2960,11 +3020,13 @@ impl NativeDatabase {
     }
 
     #[napi]
+    #[must_use]
     pub fn blob_path(&self, hash: String) -> String {
         self.inner.blob_path(&hash).to_string_lossy().to_string()
     }
 
     #[napi]
+    #[must_use]
     pub fn blob_exists(&self, hash: String) -> bool {
         self.inner.blob_exists(&hash)
     }
@@ -3037,7 +3099,12 @@ impl NativeDatabase {
 
     #[napi]
     pub fn sharding_detach_and_compress_sync(&self, shard_id: String) -> Result<String> {
-        to_json_string(&self.inner.detach_and_compress(&shard_id).map_err(napi_error)?)
+        to_json_string(
+            &self
+                .inner
+                .detach_and_compress(&shard_id)
+                .map_err(napi_error)?,
+        )
     }
 
     #[napi]
@@ -3050,12 +3117,20 @@ impl NativeDatabase {
 
     #[napi]
     pub fn sharding_decompress_and_attach_sync(&self, shard_id: String) -> Result<String> {
-        to_json_string(&self.inner.decompress_and_attach(&shard_id).map_err(napi_error)?)
+        to_json_string(
+            &self
+                .inner
+                .decompress_and_attach(&shard_id)
+                .map_err(napi_error)?,
+        )
     }
 
     #[napi]
     pub async fn sharding_detach(&self, shard_id: String) -> Result<()> {
-        run_async(&self.inner, move |db| db.detach_shard(&shard_id).map_err(napi_error)).await
+        run_async(&self.inner, move |db| {
+            db.detach_shard(&shard_id).map_err(napi_error)
+        })
+        .await
     }
 
     #[napi]
@@ -3065,12 +3140,17 @@ impl NativeDatabase {
 
     #[napi]
     pub async fn sharding_attach(&self, shard_id: String, path: String) -> Result<()> {
-        run_async(&self.inner, move |db| db.attach_shard(&shard_id, &path).map_err(napi_error)).await
+        run_async(&self.inner, move |db| {
+            db.attach_shard(&shard_id, &path).map_err(napi_error)
+        })
+        .await
     }
 
     #[napi]
     pub fn sharding_attach_sync(&self, shard_id: String, path: String) -> Result<()> {
-        self.inner.attach_shard(&shard_id, &path).map_err(napi_error)
+        self.inner
+            .attach_shard(&shard_id, &path)
+            .map_err(napi_error)
     }
 
     #[napi]

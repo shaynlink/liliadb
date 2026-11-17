@@ -55,7 +55,11 @@ fn test_fle_selective_encryption_and_cleartext_metadata() {
 
     // Configure FLE policy on "patients"
     let policy = FlePolicy::new()
-        .field("medical_record", FieldCipherAlgorithm::RandomizedGcm, comp_id)
+        .field(
+            "medical_record",
+            FieldCipherAlgorithm::RandomizedGcm,
+            comp_id,
+        )
         .field("ssn", FieldCipherAlgorithm::RandomizedGcm, comp_id)
         .field("email", FieldCipherAlgorithm::DeterministicSiv, comp_id);
 
@@ -198,7 +202,7 @@ fn test_fle_deterministic_siv_equality_search_and_btree_indexing() {
                 "name": "Alice",
                 "email": "alice@company.com",
                 "role": "engineer",
-                "salary": 120000
+                "salary": 120_000
             }),
             if_version: None,
         },
@@ -209,7 +213,7 @@ fn test_fle_deterministic_siv_equality_search_and_btree_indexing() {
                 "name": "Bob",
                 "email": "bob@company.com",
                 "role": "manager",
-                "salary": 150000
+                "salary": 150_000
             }),
             if_version: None,
         },
@@ -238,7 +242,7 @@ fn test_fle_deterministic_siv_equality_search_and_btree_indexing() {
     assert_eq!(results[0].id, "e1");
     assert_eq!(results[0].value()["name"], "Alice");
     assert_eq!(results[0].value()["email"], "alice@company.com");
-    assert_eq!(results[0].value()["salary"], 120000);
+    assert_eq!(results[0].value()["salary"], 120_000);
 
     // Multi-criteria query combining SIV encrypted field + cleartext field
     let mut query2 = serde_json::Map::new();
@@ -271,8 +275,16 @@ fn test_fle_multi_tenant_compartments_and_partial_decryption() {
 
     // Define a collection where different fields belong to different compartments
     let policy = FlePolicy::new()
-        .field("private_notes", FieldCipherAlgorithm::RandomizedGcm, "vault:private")
-        .field("team_discussion", FieldCipherAlgorithm::RandomizedGcm, "vault:team");
+        .field(
+            "private_notes",
+            FieldCipherAlgorithm::RandomizedGcm,
+            "vault:private",
+        )
+        .field(
+            "team_discussion",
+            FieldCipherAlgorithm::RandomizedGcm,
+            "vault:team",
+        );
 
     db.collection("workspaces")
         .fle_policy(policy)
@@ -292,7 +304,7 @@ fn test_fle_multi_tenant_compartments_and_partial_decryption() {
     .unwrap();
 
     // Lock "vault:private" (e.g. biometric locked / session timed out)
-    db.lock_compartment("vault:private");
+    assert!(db.lock_compartment("vault:private"));
     assert!(!db.is_compartment_unlocked("vault:private"));
     assert!(db.is_compartment_unlocked("vault:team"));
 
@@ -312,8 +324,14 @@ fn test_fle_multi_tenant_compartments_and_partial_decryption() {
     db.unlock_compartment_with_passphrase("vault:private", "biometric_local_seed")
         .unwrap();
     let doc_unlocked = db.json_get("workspaces", "w1").unwrap().unwrap();
-    assert_eq!(doc_unlocked.value()["private_notes"], "My personal evaluation");
-    assert_eq!(doc_unlocked.value()["team_discussion"], "Sprint goals agreed");
+    assert_eq!(
+        doc_unlocked.value()["private_notes"],
+        "My personal evaluation"
+    );
+    assert_eq!(
+        doc_unlocked.value()["team_discussion"],
+        "Sprint goals agreed"
+    );
 }
 
 #[test]
@@ -401,10 +419,7 @@ fn test_fle_sqlite_functions_and_unified_sql() {
         )
         .unwrap();
     assert_eq!(view_rows.rows.len(), 1);
-    assert_eq!(
-        view_rows.rows[0][1].as_str().unwrap(),
-        "PIN 9999"
-    );
+    assert_eq!(view_rows.rows[0][1].as_str().unwrap(), "PIN 9999");
 }
 
 #[test]

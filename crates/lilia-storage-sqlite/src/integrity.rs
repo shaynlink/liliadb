@@ -203,11 +203,15 @@ impl IntegrityRegistry {
     }
 
     fn refs_for_graph(&self, graph: &str) -> Vec<Arc<Reference>> {
-        self.references_where(|r| matches!(&r.source, ReferenceSource::GraphNodes { graph: g } if g == graph))
+        self.references_where(
+            |r| matches!(&r.source, ReferenceSource::GraphNodes { graph: g } if g == graph),
+        )
     }
 
     fn refs_for_kv(&self, namespace: &str) -> Vec<Arc<Reference>> {
-        self.references_where(|r| matches!(&r.source, ReferenceSource::Kv { namespace: n } if n == namespace))
+        self.references_where(
+            |r| matches!(&r.source, ReferenceSource::Kv { namespace: n } if n == namespace),
+        )
     }
 
     fn refs_to_space(&self, space: &str) -> Vec<Arc<Reference>> {
@@ -375,9 +379,8 @@ fn kv_children(
     parent: &str,
 ) -> Result<Vec<Vec<u8>>> {
     let (lower, upper) = mapping.child_range(parent);
-    let mut stmt = tx.prepare(
-        "SELECT key FROM _lilia_kv WHERE namespace = ?1 AND key >= ?2 AND key < ?3;",
-    )?;
+    let mut stmt =
+        tx.prepare("SELECT key FROM _lilia_kv WHERE namespace = ?1 AND key >= ?2 AND key < ?3;")?;
     stmt.bind_text_static(1, namespace)?;
     stmt.bind_blob_static(2, &lower)?;
     stmt.bind_blob_static(3, &upper)?;
@@ -440,16 +443,20 @@ pub(crate) fn guard(
                 if let Some(required) = references.iter().find(|r| r.required) {
                     return Err(reference_violation(
                         required,
-                        format!("node '{id}' of graph '{graph}' must link to a '{}' document", required.target_space),
+                        format!(
+                            "node '{id}' of graph '{graph}' must link to a '{}' document",
+                            required.target_space
+                        ),
                         id,
                         &json!({}),
-                ));
+                    ));
                 }
                 return Ok(Vec::new());
             };
             let parent = doc_id.as_deref().unwrap_or(id);
             let Some(reference) = references.iter().find(|r| r.target_space == space) else {
-                let declared: Vec<&str> = references.iter().map(|r| r.target_space.as_str()).collect();
+                let declared: Vec<&str> =
+                    references.iter().map(|r| r.target_space.as_str()).collect();
                 return Err(reference_violation(
                     &references[0],
                     format!("node '{id}' of graph '{graph}' links to undeclared space '{space}'"),
@@ -495,7 +502,9 @@ fn resolve_children(
                 return Ok(Vec::new());
             }
             match reference.on_delete {
-                RefAction::Restrict => Err(restrict_violation(reference, parent_id, children.len())),
+                RefAction::Restrict => {
+                    Err(restrict_violation(reference, parent_id, children.len()))
+                }
                 RefAction::Cascade => Ok(children
                     .into_iter()
                     .map(|id| BatchOperation::GraphDeleteNode {
@@ -560,7 +569,11 @@ fn load_references(conn: &NativeConnection) -> Result<Vec<Reference>> {
             }
         };
         let key: KeyMapping = serde_json::from_str(stmt.column_text(4)).map_err(|error| {
-            LiliaError::new(ErrorCode::Corrupt, format!("invalid key mapping: {error}"), false)
+            LiliaError::new(
+                ErrorCode::Corrupt,
+                format!("invalid key mapping: {error}"),
+                false,
+            )
         })?;
         let on_delete = RefAction::parse(stmt.column_text(5)).ok_or_else(|| {
             LiliaError::new(ErrorCode::Corrupt, "invalid reference action", false)
@@ -775,8 +788,9 @@ impl Database {
     fn json_exists_anywhere(&self, conn: &NativeConnection, space: &str, id: &str) -> Result<bool> {
         for schema in self.data_schemas() {
             let table = crate::sharding::qualified(schema.as_deref(), "_lilia_json");
-            let mut stmt =
-                conn.prepare(&format!("SELECT 1 FROM {table} WHERE space = ?1 AND id = ?2;"))?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT 1 FROM {table} WHERE space = ?1 AND id = ?2;"
+            ))?;
             stmt.bind_text_static(1, space)?;
             stmt.bind_text_static(2, id)?;
             if stmt.step()? {
@@ -818,7 +832,11 @@ impl Database {
                         None => !reference.required,
                         Some(space) => {
                             sibling_spaces.contains(&space)
-                                && self.json_exists_anywhere(conn, &space, doc_id.as_deref().unwrap_or(&id))?
+                                && self.json_exists_anywhere(
+                                    conn,
+                                    &space,
+                                    doc_id.as_deref().unwrap_or(&id),
+                                )?
                         }
                     };
                     if !valid {
@@ -890,7 +908,12 @@ impl Integrity<'_> {
         require_disk(db, CollectionKind::Json, &reference.target_space)?;
 
         let writer = db.lock_writer()?;
-        if db.integrity.references().iter().any(|r| r.name == reference.name) {
+        if db
+            .integrity
+            .references()
+            .iter()
+            .any(|r| r.name == reference.name)
+        {
             return Err(LiliaError::new(
                 ErrorCode::Conflict,
                 format!("reference '{}' already exists", reference.name),

@@ -127,10 +127,7 @@ pub enum WindowCondition {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
     /// Insert a JSON document into the specified collection.
-    Insert {
-        collection: String,
-        document: Value,
-    },
+    Insert { collection: String, document: Value },
     /// Update/replace a JSON document in the specified collection.
     Update {
         collection: String,
@@ -138,10 +135,7 @@ pub enum Action {
         document: Value,
     },
     /// Delete a JSON document from the specified collection.
-    Delete {
-        collection: String,
-        id: String,
-    },
+    Delete { collection: String, id: String },
     /// Set a key-value pair in the specified namespace.
     KvSet {
         namespace: String,
@@ -150,20 +144,11 @@ pub enum Action {
         value: Vec<u8>,
     },
     /// Delete a key from the specified namespace.
-    KvDelete {
-        namespace: String,
-        key: String,
-    },
+    KvDelete { namespace: String, key: String },
     /// Execute an arbitrary parameterized SQL statement.
-    ExecuteSql {
-        sql: String,
-        params: Vec<Value>,
-    },
-    /// Broadcast a notification on LiliaDB's asynchronous event channel.
-    EmitEvent {
-        topic: String,
-        payload: Value,
-    },
+    ExecuteSql { sql: String, params: Vec<Value> },
+    /// Broadcast a notification on `LiliaDB`'s asynchronous event channel.
+    EmitEvent { topic: String, payload: Value },
 }
 
 impl Action {
@@ -250,11 +235,7 @@ impl RuleBuilder {
     }
 
     #[must_use]
-    pub fn sliding_window(
-        mut self,
-        duration: Duration,
-        partition_by: impl Into<String>,
-    ) -> Self {
+    pub fn sliding_window(mut self, duration: Duration, partition_by: impl Into<String>) -> Self {
         let duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
         self.window = Some(SlidingWindow {
             duration_ms,
@@ -344,7 +325,9 @@ impl RuleBuilder {
         Rule {
             when: self.when,
             window: self.window,
-            then: self.then.expect("rule must have an action configured via .then(...)"),
+            then: self
+                .then
+                .expect("rule must have an action configured via .then(...)"),
             target: self.target,
         }
     }

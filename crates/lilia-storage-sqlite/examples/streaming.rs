@@ -71,7 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for entry in &partial_entries {
         println!(
             "    - ID: {}, reading: {}",
-            entry.id, entry.value()["reading"]
+            entry.id,
+            entry.value()["reading"]
         );
     }
     println!("  Fetched {} items.", partial_entries.len());

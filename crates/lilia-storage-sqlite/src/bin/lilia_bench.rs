@@ -43,7 +43,7 @@ struct Arguments {
     #[arg(long)]
     raw_sqlite: bool,
 
-    /// Run comparative tiered storage suite (Disk vs Memory vs RingBuffer vs GroupSync vs IoT Coalescing)
+    /// Run comparative tiered storage suite (disk, memory, ring buffer, group sync and `IoT` coalescing)
     #[arg(long)]
     tier_suite: bool,
 
@@ -165,7 +165,7 @@ fn run_single_benchmark(
 
     // Check disk file size
     drop(db);
-    let disk_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+    let disk_bytes = std::fs::metadata(&db_path).map_or(0, |m| m.len());
 
     Ok(BenchMetrics {
         surface: "Rust Native Embedded".into(),
@@ -288,7 +288,7 @@ fn run_raw_sqlite_benchmark(
     let stddev_us = variance.sqrt();
 
     drop(conn);
-    let disk_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+    let disk_bytes = std::fs::metadata(&db_path).map_or(0, |m| m.len());
 
     Ok(BenchMetrics {
         surface: "SQLite Native (C / Rusqlite)".into(),
@@ -446,7 +446,7 @@ fn from_bench_metrics(
     scenario: &str,
     tier: &str,
     threads: usize,
-    m: BenchMetrics,
+    m: &BenchMetrics,
     notes: impl Into<String>,
 ) -> TierBenchMetrics {
     TierBenchMetrics {
@@ -694,8 +694,8 @@ fn bench_iot_ts_coalescing(count: usize) -> Result<TierBenchMetrics, Box<dyn std
     let t0 = Instant::now();
     let (_, latencies) = run_parallel_workload(1, count, &|id| {
         let point = TimeSeriesPoint::new(
-            1_700_000_000_000 + id as i64 * 100,
-            20.0 + (id % 100) as f64 * 0.1,
+            1_700_000_000_000 + i64::try_from(id).expect("point index fits i64") * 100,
+            20.0 + f64::from(u8::try_from(id % 100).expect("below 100")) * 0.1,
         );
         db.ts_append_buffered("iot_sensor", &[point])?;
         Ok(())
@@ -748,8 +748,20 @@ fn run_tier_suite(count: usize, json: bool) -> Result<(), Box<dyn std::error::Er
     )?;
 
     let results = vec![
-        from_bench_metrics("Disk Durable KV (batch=1)", "disk", 1, disk_durable, "WAL FULL"),
-        from_bench_metrics("Disk Balanced KV (batch=1)", "disk", 1, disk_balanced, "WAL NORMAL"),
+        from_bench_metrics(
+            "Disk Durable KV (batch=1)",
+            "disk",
+            1,
+            &disk_durable,
+            "WAL FULL",
+        ),
+        from_bench_metrics(
+            "Disk Balanced KV (batch=1)",
+            "disk",
+            1,
+            &disk_balanced,
+            "WAL NORMAL",
+        ),
         bench_memory_tier(1, count)?,
         bench_memory_tier(8, count)?,
         bench_buffered_ring_kv(count)?,
@@ -763,7 +775,14 @@ fn run_tier_suite(count: usize, json: bool) -> Result<(), Box<dyn std::error::Er
         println!("\n=== LiliaDB Tiered Storage Benchmark Suite (count={count}) ===");
         println!(
             "{:<50} | {:<14} | {:>3} | {:>14} | {:>9} | {:>9} | {:>9} | {:>10} | Notes",
-            "Scenario", "Tier", "Thr", "Throughput", "p50 (µs)", "p95 (µs)", "p99 (µs)", "Disk (KB)"
+            "Scenario",
+            "Tier",
+            "Thr",
+            "Throughput",
+            "p50 (µs)",
+            "p95 (µs)",
+            "p99 (µs)",
+            "Disk (KB)"
         );
         println!(
             "{:-<50}-|-{:-<14}-|-{:-<3}-|-{:-<14}-|-{:-<9}-|-{:-<9}-|-{:-<9}-|-{:-<10}-|-{:-<28}",

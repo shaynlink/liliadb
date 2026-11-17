@@ -23,12 +23,15 @@ use crate::storage::{migrate, prepare_parent, secure_database_file};
 use crate::timeseries_worker::{TimeSeriesOptions, TimeSeriesWorker};
 use crate::transaction::apply;
 use crate::writer_queue::{Permit, WriterQueue};
-pub use lilia_core::{ResourceProfile, TableStorageStat};
+#[cfg(not(target_arch = "wasm32"))]
+use lilia_core::sharding::ShardArchiveResult;
+use lilia_core::sharding::{ShardInfo, ShardingConfig};
 use lilia_core::{
-    AutotuneOptions, BatchOperation, CollectionKind, CollectionSpec, DatabaseEvent, Durability, ErrorCode,
-    IdentityCodec, LiliaError, MutationResult, Result, RingBufferConfig, StorageTier, ValueCodec,
+    AutotuneOptions, BatchOperation, CollectionKind, CollectionSpec, DatabaseEvent, Durability,
+    ErrorCode, IdentityCodec, LiliaError, MutationResult, Result, RingBufferConfig, StorageTier,
+    ValueCodec,
 };
-use lilia_core::sharding::{ShardArchiveResult, ShardInfo, ShardingConfig};
+pub use lilia_core::{ResourceProfile, TableStorageStat};
 
 #[derive(Debug, Clone)]
 pub struct JsonOptions {
@@ -87,6 +90,10 @@ pub struct DatabaseOptions {
     /// Tuning of the vectorized analytics engine and of its columnar store.
     #[cfg(all(feature = "analytics", not(target_arch = "wasm32")))]
     pub analytics_options: crate::columnar::AnalyticsOptions,
+    /// Optional Reed-Solomon parity configuration for physical flash fault tolerance and auto-repair.
+    pub parity_config: Option<lilia_core::ParityConfig>,
+    /// Dynamic flash wear leveling and adaptive WAL fsync policy.
+    pub wear_policy: lilia_core::WearLevelingPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,10 +138,13 @@ impl DatabaseOptions {
             ledger_verify_on_open: lilia_core::ledger::LedgerVerifyMode::Strict,
             #[cfg(all(feature = "analytics", not(target_arch = "wasm32")))]
             analytics_options: crate::columnar::AnalyticsOptions::default(),
+            parity_config: None,
+            wear_policy: lilia_core::WearLevelingPolicy::default(),
         }
     }
 
-    pub fn mobile(path: impl Into<PathBuf>) -> Self {        Self {
+    pub fn mobile(path: impl Into<PathBuf>) -> Self {
+        Self {
             path: path.into(),
             durability: Durability::Balanced,
             busy_timeout_ms: 5_000,
@@ -168,6 +178,8 @@ impl DatabaseOptions {
             ledger_verify_on_open: lilia_core::ledger::LedgerVerifyMode::Strict,
             #[cfg(all(feature = "analytics", not(target_arch = "wasm32")))]
             analytics_options: crate::columnar::AnalyticsOptions::default(),
+            parity_config: Some(lilia_core::ParityConfig::default()),
+            wear_policy: lilia_core::WearLevelingPolicy::default(),
         }
     }
 
@@ -206,6 +218,8 @@ impl DatabaseOptions {
             ledger_verify_on_open: lilia_core::ledger::LedgerVerifyMode::Strict,
             #[cfg(all(feature = "analytics", not(target_arch = "wasm32")))]
             analytics_options: crate::columnar::AnalyticsOptions::default(),
+            parity_config: Some(lilia_core::ParityConfig::default()),
+            wear_policy: lilia_core::WearLevelingPolicy::default(),
         }
     }
 
@@ -250,7 +264,24 @@ impl DatabaseOptions {
             ledger_verify_on_open: lilia_core::ledger::LedgerVerifyMode::None,
             #[cfg(all(feature = "analytics", not(target_arch = "wasm32")))]
             analytics_options: crate::columnar::AnalyticsOptions::default(),
+            parity_config: None,
+            wear_policy: lilia_core::WearLevelingPolicy {
+                enabled: false,
+                ..Default::default()
+            },
         }
+    }
+
+    #[must_use]
+    pub fn with_parity(mut self, config: Option<lilia_core::ParityConfig>) -> Self {
+        self.parity_config = config;
+        self
+    }
+
+    #[must_use]
+    pub fn with_wear_leveling(mut self, policy: lilia_core::WearLevelingPolicy) -> Self {
+        self.wear_policy = policy;
+        self
     }
 
     #[must_use]
@@ -529,7 +560,11 @@ pub struct Database {
     pub(crate) embedders: Arc<Embedders>,
     pub(crate) embed_options: lilia_core::EmbedOptions,
     pub(crate) ledger: Arc<crate::ledger::LedgerManager>,
-    pub(crate) ledger_enabled: bool,
+    pub(crate) security_registry: Arc<crate::security::SecurityRegistry>,
+    pub(crate) parity_manager: Option<Arc<crate::parity::ParityManager>>,
+    pub(crate) wear_manager: Arc<crate::wear::FlashWearManager>,
+    pub(crate) wasm_registry: Arc<crate::wasm_udf::WasmUdfRegistry>,
+    pub(crate) jit_cache: Arc<lilia_core::json::JitPredicateCache>,
 }
 
 #[derive(Debug)]
@@ -546,6 +581,59 @@ pub(crate) struct Resources {
     /// Set once at open when temporal sharding is enabled; background writers
     /// (ring-buffer flush, time-series maintenance) route through it.
     shards: std::sync::OnceLock<Arc<crate::sharding::ShardManager>>,
+    /// Shared with [`Database`] so that background writers record their commits too.
+    pub(crate) ledger: Arc<crate::ledger::LedgerManager>,
+    wal_backpressure: WalBackpressure,
+    #[allow(dead_code)]
+    pub(crate) parity_manager: Option<Arc<crate::parity::ParityManager>>,
+    #[allow(dead_code)]
+    pub(crate) wear_manager: Arc<crate::wear::FlashWearManager>,
+}
+
+/// Writer-side bound on the WAL size.
+///
+/// SQLite only rewinds the WAL to its beginning when a write transaction starts after every
+/// frame was copied back into the database file. A writer committing without pause always starts
+/// its next transaction before the background checkpoint of the previous one ends, so the WAL is
+/// never rewound and grows without limit (gigabytes during a bulk load). Past the limit, the
+/// writer runs the passive checkpoint itself between two transactions, as SQLite's own
+/// autocheckpoint does, so that its next transaction rewinds the WAL; `journal_size_limit` then
+/// shrinks the file. A passive checkpoint never waits, so readers still never block writes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WalBackpressure {
+    limit_frames: i64,
+}
+
+impl WalBackpressure {
+    /// Sizes the limit for the writer `connection` and caps the WAL file to it once restarted.
+    fn new(connection: &NativeConnection, policy: CheckpointPolicy) -> Result<Self> {
+        let page_size =
+            u64::try_from(connection.pragma_query_int("PRAGMA page_size")?).unwrap_or(4096);
+        let limit_bytes = crate::checkpoint::writer_wal_limit(policy.wal_bytes);
+        // A WAL frame holds one page and a 24-byte header.
+        let limit_frames = i64::try_from(limit_bytes / (page_size + 24)).unwrap_or(i64::MAX);
+        connection.pragma_update(
+            "journal_size_limit",
+            i64::try_from(limit_bytes).unwrap_or(-1),
+        )?;
+        Ok(Self { limit_frames })
+    }
+
+    /// Checkpoints from the writer when the WAL exceeds the limit. Best effort: on failure the
+    /// background checkpointer still retries on its next pass.
+    fn relieve(self, connection: &NativeConnection) {
+        let Ok(mut stmt) = connection.prepare("PRAGMA wal_checkpoint(NOOP)") else {
+            return;
+        };
+        let wal_frames = match stmt.step() {
+            Ok(true) => stmt.column_int64(1),
+            _ => return,
+        };
+        drop(stmt);
+        if wal_frames > self.limit_frames {
+            let _ = connection.exec("PRAGMA wal_checkpoint(PASSIVE);");
+        }
+    }
 }
 
 #[doc(hidden)]
@@ -554,6 +642,23 @@ pub struct WriterGuard<'a> {
     connection: MutexGuard<'a, Option<NativeConnection>>,
     _permit: Option<Permit<'a>>,
     _operation: Option<Operation<'a>>,
+    /// Set on writer guards: the WAL limit and the change count when the guard was taken.
+    backpressure: Option<(WalBackpressure, i64)>,
+}
+
+impl Drop for WriterGuard<'_> {
+    fn drop(&mut self) {
+        let Some(connection) = self.connection.as_mut() else {
+            return;
+        };
+        // Release the snapshot cached statements hold before the next caller takes the connection.
+        connection.reset_statements();
+        if let Some((backpressure, changes_at_start)) = self.backpressure {
+            if connection.is_autocommit() && connection.total_changes() != changes_at_start {
+                backpressure.relieve(connection);
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for WriterGuard<'_> {
@@ -579,6 +684,20 @@ impl DerefMut for WriterGuard<'_> {
     }
 }
 
+/// Whether undo/redo changesets record `table`.
+///
+/// - The embedding queue is drained by its worker outside any recorded write: replaying it would
+///   conflict with rows already consumed.
+/// - The columnar store is derived data maintained by triggers and compaction: undoing a write
+///   must re-fire those triggers, not rewind their bookkeeping.
+/// - The ledger is append-only: an undo or redo is recorded as a new commit of the rows it
+///   restores, never by rewinding earlier commits.
+pub(crate) fn undo_records_table(table: &str) -> bool {
+    table != "_lilia_embed_queue"
+        && !table.starts_with("_lilia_col_")
+        && !table.starts_with("_lilia_ledger")
+}
+
 pub(crate) fn op_collection(op: &BatchOperation) -> (lilia_core::CollectionKind, &str) {
     use lilia_core::CollectionKind;
     match op {
@@ -594,7 +713,9 @@ pub(crate) fn op_collection(op: &BatchOperation) -> (lilia_core::CollectionKind,
         | BatchOperation::GraphAddEdge { graph, .. }
         | BatchOperation::GraphRemoveEdge { graph, .. } => (CollectionKind::Graph, graph.as_str()),
         BatchOperation::FtsIndex { collection, .. }
-        | BatchOperation::FtsDelete { collection, .. } => (CollectionKind::Fts, collection.as_str()),
+        | BatchOperation::FtsDelete { collection, .. } => {
+            (CollectionKind::Fts, collection.as_str())
+        }
         BatchOperation::VectorSet { collection, .. }
         | BatchOperation::VectorDelete { collection, .. } => {
             (CollectionKind::Vector, collection.as_str())
@@ -692,6 +813,7 @@ fn register_connection_tier_views(
             "_vtab_catalog",
             crate::mem_engine::build_catalog_vtab(catalog),
         )?;
+        crate::polyglot::register_polyglot_factories(conn)?;
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -700,6 +822,7 @@ fn register_connection_tier_views(
     crate::storage::init_unified_temp_views(conn, !cfg!(target_arch = "wasm32"), true)
 }
 
+#[allow(clippy::too_many_arguments)] // each argument is a distinct connection setting
 fn open_connection(
     path: &Path,
     synchronous: &str,
@@ -709,6 +832,7 @@ fn open_connection(
     codec: &Arc<dyn ValueCodec>,
     dict_registry: &Arc<lilia_core::DictionaryRegistry>,
     key_registry: &Arc<lilia_core::KeyRegistry>,
+    wasm_registry: &Arc<crate::wasm_udf::WasmUdfRegistry>,
 ) -> Result<NativeConnection> {
     let conn = NativeConnection::open_with_config(
         path,
@@ -717,7 +841,7 @@ fn open_connection(
         busy_timeout_ms,
         cache_size_kib,
     )?;
-    crate::sql::register_sql_functions(&conn, codec, dict_registry, key_registry)?;
+    crate::sql::register_sql_functions(&conn, codec, dict_registry, key_registry, wasm_registry)?;
     Ok(conn)
 }
 
@@ -773,6 +897,7 @@ impl Watchdog {
 }
 
 impl Database {
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn open(options: DatabaseOptions) -> Result<Self> {
         if options.checkpoint_policy.wal_bytes == 0
             || !(1..=u64::from(u32::MAX)).contains(&options.checkpoint_policy.interval_ms)
@@ -791,6 +916,7 @@ impl Database {
         };
         let busy_ms = i32::try_from(options.busy_timeout_ms).unwrap_or(5000);
         let dict_registry = Arc::new(lilia_core::DictionaryRegistry::new());
+        let wasm_registry = Arc::new(crate::wasm_udf::WasmUdfRegistry::new());
         let connection = open_connection(
             &options.path,
             synchronous,
@@ -800,11 +926,15 @@ impl Database {
             &options.codec,
             &dict_registry,
             &options.key_registry,
+            &wasm_registry,
         )?;
         secure_database_file(&options.path)?;
-        // Disable SQLite's commit-path checkpoint in favor of background work.
+        // Disable SQLite's commit-path checkpoint in favor of background work; writers only take
+        // over past the WAL size limit (`WalBackpressure`).
         connection.pragma_update("wal_autocheckpoint", 0)?;
+        let wal_backpressure = WalBackpressure::new(&connection, options.checkpoint_policy)?;
         migrate(&connection)?;
+        let _ = wasm_registry.load_catalog(&connection);
 
         let ledger = Arc::new(crate::ledger::LedgerManager::open(
             &connection,
@@ -813,12 +943,12 @@ impl Database {
         )?);
 
         // Preload active collection dictionaries from _lilia_json_dictionaries
-        if let Ok(mut stmt_dict) = connection.prepare(
-            "SELECT space, dict_id, dict_data FROM _lilia_json_dictionaries;"
-        ) {
+        if let Ok(mut stmt_dict) =
+            connection.prepare("SELECT space, dict_id, dict_data FROM _lilia_json_dictionaries;")
+        {
             while let Ok(true) = stmt_dict.step() {
                 let space = stmt_dict.column_text(0);
-                let dict_id = stmt_dict.column_int64(1) as u32;
+                let dict_id = u32::try_from(stmt_dict.column_int64(1)).unwrap_or_default();
                 let dict_data = stmt_dict.column_blob(2).to_vec();
                 dict_registry.register(space, dict_id, dict_data);
             }
@@ -828,7 +958,12 @@ impl Database {
             options.tier_rules.clone(),
         ));
         catalog.load_from_connection(&connection)?;
-        let integrity = Arc::new(crate::integrity::IntegrityRegistry::load(&connection, &catalog)?);
+        let security_registry = Arc::new(crate::security::SecurityRegistry::new());
+        security_registry.load_from_connection(&connection)?;
+        let integrity = Arc::new(crate::integrity::IntegrityRegistry::load(
+            &connection,
+            &catalog,
+        )?);
         let mem_engine = Arc::new(crate::mem_engine::MemEngine::new(Arc::clone(&catalog)));
         let mem_db_uri = format!(
             "file:lilia_ephemeral_{}?mode=memory&cache=shared",
@@ -853,27 +988,29 @@ impl Database {
                 &options.codec,
                 &dict_registry,
                 &options.key_registry,
+                &wasm_registry,
             )?;
             reader.attach_database("_lilia_mem", &mem_db_uri)?;
             readers.push(Mutex::new(Some(reader)));
         }
-        let node_id = match &options.node_id {
-            Some(id) => id.clone(),
-            None => {
-                let mut node_id = String::new();
-                if let Ok(mut stmt) = connection.prepare("SELECT value FROM _lilia_metadata WHERE key = 'node_id';") {
-                    if let Ok(true) = stmt.step() {
-                        node_id = stmt.column_text(0).to_string();
-                    }
+        let node_id = if let Some(id) = &options.node_id {
+            id.clone()
+        } else {
+            let mut node_id = String::new();
+            if let Ok(mut stmt) =
+                connection.prepare("SELECT value FROM _lilia_metadata WHERE key = 'node_id';")
+            {
+                if let Ok(true) = stmt.step() {
+                    node_id = stmt.column_text(0).to_string();
                 }
-                if node_id.is_empty() {
-                    node_id = uuid::Uuid::new_v4().to_string();
-                    let _ = connection.exec(&format!(
-                        "INSERT INTO _lilia_metadata(key, value) VALUES('node_id', '{node_id}') ON CONFLICT(key) DO UPDATE SET value = '{node_id}';"
-                    ));
-                }
-                node_id
             }
+            if node_id.is_empty() {
+                node_id = uuid::Uuid::new_v4().to_string();
+                let _ = connection.exec(&format!(
+                    "INSERT INTO _lilia_metadata(key, value) VALUES('node_id', '{node_id}') ON CONFLICT(key) DO UPDATE SET value = '{node_id}';"
+                ));
+            }
+            node_id
         };
         let hlc = Arc::new(match options.max_drift_ms {
             Some(drift) => lilia_core::HybridClock::with_max_drift(node_id, drift),
@@ -882,14 +1019,43 @@ impl Database {
 
         let blobs_dir = options.cas_options.blobs_dir.clone().unwrap_or_else(|| {
             let mut dir = options.path.clone();
-            let file_name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let file_name = dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             dir.set_file_name(format!("{file_name}.blobs"));
             dir
         });
-        let cas = Arc::new(crate::cas::CasEngine::new(blobs_dir, options.cas_options.clone()));
+        let cas = Arc::new(crate::cas::CasEngine::new(
+            blobs_dir,
+            options.cas_options.clone(),
+        ));
         if options.cas_options.enabled && !crate::storage::is_uri_or_memory(&options.path) {
             cas.ensure_dirs()?;
         }
+
+        let wear_manager = Arc::new(crate::wear::FlashWearManager::new(options.wear_policy));
+        if !crate::storage::is_uri_or_memory(&options.path) {
+            wear_manager.load_from_metadata(&connection);
+        }
+
+        let parity_manager = if let Some(parity_cfg) = options.parity_config {
+            if !crate::storage::is_uri_or_memory(&options.path) {
+                let mgr = Arc::new(crate::parity::ParityManager::new(
+                    &options.path,
+                    parity_cfg,
+                )?);
+                if parity_cfg.auto_repair_on_open {
+                    let _ = mgr.auto_repair_database();
+                }
+                Some(mgr)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let lifecycle = Arc::new(Lifecycle::default());
         let resources = Arc::new(Resources {
@@ -898,6 +1064,8 @@ impl Database {
                 options.checkpoint_policy,
                 synchronous,
                 Some(Arc::clone(&cas)),
+                Some(Arc::clone(&wear_manager)),
+                parity_manager.as_ref().map(Arc::clone),
             )?)),
             ts_worker: Mutex::new(None),
             autotune_worker: Mutex::new(None),
@@ -907,6 +1075,10 @@ impl Database {
             next_reader: AtomicUsize::new(0),
             writer_queue: WriterQueue::new(options.writer_queue_capacity),
             shards: std::sync::OnceLock::new(),
+            ledger: Arc::clone(&ledger),
+            wal_backpressure,
+            parity_manager: parity_manager.as_ref().map(Arc::clone),
+            wear_manager: Arc::clone(&wear_manager),
         });
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -926,9 +1098,9 @@ impl Database {
         let hnsw_cache = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
         let fts_trie_cache = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
         let ring_buffer = Arc::new(crate::ring_buffer::RingBufferEngine::start(
-            options.ring_buffer.clone(),
-            Arc::clone(&resources),
-            Arc::clone(&lifecycle),
+            &options.ring_buffer,
+            &resources,
+            &lifecycle,
             Arc::clone(&options.codec),
             Arc::clone(&dict_registry),
             options.json_options.clone(),
@@ -940,10 +1112,9 @@ impl Database {
         let ring_core = Arc::clone(&ring_buffer.core);
 
         {
-            let writer_guard = resources
-                .writer
-                .lock()
-                .map_err(|_| LiliaError::new(ErrorCode::Storage, "database lock poisoned", false))?;
+            let writer_guard = resources.writer.lock().map_err(|_| {
+                LiliaError::new(ErrorCode::Storage, "database lock poisoned", false)
+            })?;
             if let Some(writer_conn) = writer_guard.as_ref() {
                 register_connection_tier_views(
                     writer_conn,
@@ -972,10 +1143,9 @@ impl Database {
 
         let rule_engine = Arc::new(crate::rules::RuleEngine::new());
         {
-            let writer_guard = resources
-                .writer
-                .lock()
-                .map_err(|_| LiliaError::new(ErrorCode::Storage, "database lock poisoned", false))?;
+            let writer_guard = resources.writer.lock().map_err(|_| {
+                LiliaError::new(ErrorCode::Storage, "database lock poisoned", false)
+            })?;
             if let Some(writer_conn) = writer_guard.as_ref() {
                 rule_engine.load_from_connection(writer_conn)?;
             }
@@ -1010,19 +1180,13 @@ impl Database {
                             w.attach_database(alias, &path.to_string_lossy())?;
                             crate::storage::migrate_shard_database(w, alias)?;
                         }
-                        crate::sharding::views::refresh_temp_views(
-                            w, &aliases, true, true,
-                        )?;
+                        crate::sharding::views::refresh_temp_views(w, &aliases, true, true)?;
                     }
                 }
                 // Attach to each reader connection (views only, no schema migration needed).
                 for reader_mutex in &resources.readers {
                     let reader_guard = reader_mutex.lock().map_err(|_| {
-                        LiliaError::new(
-                            ErrorCode::Storage,
-                            "read database lock poisoned",
-                            false,
-                        )
+                        LiliaError::new(ErrorCode::Storage, "read database lock poisoned", false)
                     })?;
                     if let Some(r) = reader_guard.as_ref() {
                         for (alias, path) in &pairs {
@@ -1118,8 +1282,116 @@ impl Database {
             embedders,
             embed_options: options.embed_options,
             ledger,
-            ledger_enabled: options.ledger_enabled,
+            security_registry,
+            parity_manager,
+            wear_manager,
+            wasm_registry,
+            jit_cache: Arc::new(lilia_core::json::JitPredicateCache::default()),
         })
+    }
+
+    /// Access the JIT predicate cache used for native query compilation and execution.
+    #[must_use]
+    pub fn jit_cache(&self) -> &Arc<lilia_core::json::JitPredicateCache> {
+        &self.jit_cache
+    }
+
+    /// Access the Row-Level Security (RLS) and Data Masking manager.
+    #[must_use]
+    pub fn security(&self) -> crate::security::SecurityManager<'_> {
+        crate::security::SecurityManager::new(self)
+    }
+
+    /// Registers a sandboxed WebAssembly User-Defined Function (UDF).
+    pub fn register_wasm_udf(&self, name: &str, bytecode_or_wat: &[u8]) -> Result<()> {
+        self.register_wasm_udf_with_config(
+            name,
+            bytecode_or_wat,
+            crate::wasm_udf::WasmUdfConfig::default(),
+            true,
+        )
+    }
+
+    /// Registers a sandboxed WebAssembly User-Defined Function (UDF) with custom configuration and persistence.
+    pub fn register_wasm_udf_with_config(
+        &self,
+        name: &str,
+        bytecode_or_wat: &[u8],
+        config: crate::wasm_udf::WasmUdfConfig,
+        persistent: bool,
+    ) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        let registered = self
+            .wasm_registry
+            .register(name, bytecode_or_wat, config, now)?;
+
+        if persistent {
+            let writer = self.lock_writer()?;
+            crate::wasm_udf::WasmUdfRegistry::save_to_catalog(&writer, &registered)?;
+        }
+
+        // Register direct alias function on writer connection and reader pool
+        {
+            let writer = self.lock_writer()?;
+            let _ = crate::sql::register_direct_wasm_function(&writer, &self.wasm_registry, name);
+        }
+        for reader_mutex in &self.resources.readers {
+            if let Ok(guard) = reader_mutex.lock() {
+                if let Some(ref reader) = *guard {
+                    let _ = crate::sql::register_direct_wasm_function(
+                        reader,
+                        &self.wasm_registry,
+                        name,
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Unregisters a WebAssembly User-Defined Function (UDF).
+    pub fn unregister_wasm_udf(&self, name: &str) -> Result<bool> {
+        let removed = self.wasm_registry.unregister(name).is_some();
+        if removed {
+            let writer = self.lock_writer()?;
+            let _ = crate::wasm_udf::WasmUdfRegistry::delete_from_catalog(&writer, name);
+        }
+        Ok(removed)
+    }
+
+    /// Lists all registered WebAssembly User-Defined Functions.
+    #[must_use]
+    pub fn list_wasm_udfs(&self) -> Vec<crate::wasm_udf::WasmUdfInfo> {
+        self.wasm_registry.list()
+    }
+
+    /// Returns the shared Wasm UDF registry.
+    #[must_use]
+    pub fn wasm_registry(&self) -> &Arc<crate::wasm_udf::WasmUdfRegistry> {
+        &self.wasm_registry
+    }
+
+    /// Creates a secured database view with the specified caller security context.
+    #[must_use]
+    pub fn with_context(
+        &self,
+        context: lilia_core::security::SecurityContext,
+    ) -> crate::security::SecuredDatabase<'_> {
+        crate::security::SecuredDatabase::new(self, context)
+    }
+
+    /// Wraps an `Arc<Database>` in an owned secured database session.
+    #[must_use]
+    pub fn into_secured(
+        self: Arc<Self>,
+        context: lilia_core::security::SecurityContext,
+    ) -> crate::security::SecuredDatabaseArc {
+        crate::security::SecuredDatabaseArc::new(self, context)
     }
 
     #[must_use]
@@ -1287,12 +1559,14 @@ impl Database {
         if new_info.shard_id != previous.shard_id {
             self.attach_shard_everywhere(manager, &new_info.shard_id, &new_info.file_path)?;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         self.enforce_attached_shard_limit(manager)?;
         Ok(new_info)
     }
 
     /// Archives the oldest warm shards while the attached count exceeds the
     /// configured maximum and `auto_archive_oldest` is enabled.
+    #[cfg(not(target_arch = "wasm32"))]
     fn enforce_attached_shard_limit(&self, manager: &crate::sharding::ShardManager) -> Result<()> {
         if !manager.config.auto_archive_oldest {
             return Ok(());
@@ -1383,9 +1657,10 @@ impl Database {
         info.compressed_bytes = result.compressed_size_bytes;
         info.checksum = Some(result.checksum.clone());
         info.archived_at_ms = Some(result.archived_at_ms);
-        let writer_guard = self.resources.writer.lock().map_err(|_| {
-            LiliaError::new(ErrorCode::Storage, "database lock poisoned", false)
-        })?;
+        let writer_guard =
+            self.resources.writer.lock().map_err(|_| {
+                LiliaError::new(ErrorCode::Storage, "database lock poisoned", false)
+            })?;
         let writer = writer_guard.as_ref().ok_or_else(|| {
             LiliaError::new(ErrorCode::Storage, "writer connection is closed", false)
         })?;
@@ -1409,10 +1684,13 @@ impl Database {
             ));
         }
         let db_path = manager.layout.shard_db_path(shard_id);
-        crate::sharding::archive::decompress_shard(&manager.layout.archive_path(shard_id), &db_path)?;
+        crate::sharding::archive::decompress_shard(
+            &manager.layout.archive_path(shard_id),
+            &db_path,
+        )?;
 
         info.status = ShardStatus::Warm;
-        info.file_path = db_path.clone();
+        info.file_path.clone_from(&db_path);
         info.is_compressed = false;
         {
             let writer_guard = self.resources.writer.lock().map_err(|_| {
@@ -1472,51 +1750,48 @@ impl Database {
                 false,
             ));
         }
-        let info = match manager.get_shard_info(shard_id) {
-            Ok(mut existing) => {
-                if existing.status != ShardStatus::Detached {
+        let info = if let Ok(mut existing) = manager.get_shard_info(shard_id) {
+            if existing.status != ShardStatus::Detached {
+                return Err(LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    format!("shard '{shard_id}' is not detached"),
+                    false,
+                ));
+            }
+            existing.status = ShardStatus::Warm;
+            existing
+        } else {
+            let (start, end) = manager.config.granularity.parse_period_range(shard_id)?;
+            let destination = manager.layout.shard_db_path(shard_id);
+            if destination != source {
+                if destination.exists() {
                     return Err(LiliaError::new(
                         ErrorCode::InvalidInput,
-                        format!("shard '{shard_id}' is not detached"),
+                        format!("shard file already exists at {}", destination.display()),
                         false,
                     ));
                 }
-                existing.status = ShardStatus::Warm;
-                existing
+                std::fs::copy(source, &destination).map_err(|e| {
+                    LiliaError::new(
+                        ErrorCode::Storage,
+                        format!("failed to copy shard into shards directory: {e}"),
+                        false,
+                    )
+                })?;
             }
-            Err(_) => {
-                let (start, end) = manager.config.granularity.parse_period_range(shard_id)?;
-                let destination = manager.layout.shard_db_path(shard_id);
-                if destination != source {
-                    if destination.exists() {
-                        return Err(LiliaError::new(
-                            ErrorCode::InvalidInput,
-                            format!("shard file already exists at {}", destination.display()),
-                            false,
-                        ));
-                    }
-                    std::fs::copy(source, &destination).map_err(|e| {
-                        LiliaError::new(
-                            ErrorCode::Storage,
-                            format!("failed to copy shard into shards directory: {e}"),
-                            false,
-                        )
-                    })?;
-                }
-                let size = std::fs::metadata(&destination).map_or(0, |m| m.len());
-                ShardInfo {
-                    shard_id: shard_id.to_string(),
-                    status: ShardStatus::Warm,
-                    period_start_ms: start,
-                    period_end_ms: end,
-                    file_path: destination,
-                    is_compressed: false,
-                    uncompressed_bytes: size,
-                    compressed_bytes: 0,
-                    checksum: None,
-                    created_at_ms: self.hlc.now().millis,
-                    archived_at_ms: None,
-                }
+            let size = std::fs::metadata(&destination).map_or(0, |m| m.len());
+            ShardInfo {
+                shard_id: shard_id.to_string(),
+                status: ShardStatus::Warm,
+                period_start_ms: start,
+                period_end_ms: end,
+                file_path: destination,
+                is_compressed: false,
+                uncompressed_bytes: size,
+                compressed_bytes: 0,
+                checksum: None,
+                created_at_ms: self.hlc.now().millis,
+                archived_at_ms: None,
             }
         };
         let file_path = info.file_path.clone();
@@ -1531,7 +1806,6 @@ impl Database {
         }
         self.attach_shard_everywhere(manager, shard_id, &file_path)
     }
-
 
     /// Put a JSON document with HLC and causal concurrency detection.
     pub fn json_put_hlc(
@@ -1650,16 +1924,18 @@ impl Database {
             } else {
                 stmt.column_text(4).parse::<lilia_core::Hlc>().ok()
             };
-            let ours_hlc = stmt.column_text(5)
+            let ours_hlc = stmt
+                .column_text(5)
                 .parse::<lilia_core::Hlc>()
                 .unwrap_or_else(|_| lilia_core::Hlc::new(0, 0, ""));
-            let theirs_hlc = stmt.column_text(6)
+            let theirs_hlc = stmt
+                .column_text(6)
                 .parse::<lilia_core::Hlc>()
                 .unwrap_or_else(|_| lilia_core::Hlc::new(0, 0, ""));
-            let ours_val: serde_json::Value = serde_json::from_str(stmt.column_text(7))
-                .unwrap_or(serde_json::Value::Null);
-            let theirs_val: serde_json::Value = serde_json::from_str(stmt.column_text(8))
-                .unwrap_or(serde_json::Value::Null);
+            let ours_val: serde_json::Value =
+                serde_json::from_str(stmt.column_text(7)).unwrap_or(serde_json::Value::Null);
+            let theirs_val: serde_json::Value =
+                serde_json::from_str(stmt.column_text(8)).unwrap_or(serde_json::Value::Null);
             let resolved_val: Option<serde_json::Value> = if stmt.column_is_null(9) {
                 None
             } else {
@@ -1667,7 +1943,9 @@ impl Database {
             };
             let strat_str = stmt.column_text(10);
             let strategy = match strat_str {
-                s if s.contains("ThreeWayMerge") => lilia_core::ConflictResolutionStrategy::ThreeWayMerge,
+                s if s.contains("ThreeWayMerge") => {
+                    lilia_core::ConflictResolutionStrategy::ThreeWayMerge
+                }
                 s if s.contains("Manual") => lilia_core::ConflictResolutionStrategy::Manual,
                 _ => lilia_core::ConflictResolutionStrategy::LastWriteWins,
             };
@@ -1694,23 +1972,37 @@ impl Database {
     }
 
     /// Manually resolves a recorded conflict by updating the document to `resolved_value`.
-    pub fn resolve_conflict(&self, conflict_id: i64, resolved_value: serde_json::Value) -> Result<()> {
+    pub fn resolve_conflict(
+        &self,
+        conflict_id: i64,
+        resolved_value: serde_json::Value,
+    ) -> Result<()> {
         let mut writer = self.lock_writer()?;
         let tx = writer.transaction()?;
 
         let (space, doc_id) = {
-            let mut stmt = tx.prepare("SELECT space, doc_id FROM _lilia_conflicts WHERE id = ?1;")?;
+            let mut stmt =
+                tx.prepare("SELECT space, doc_id FROM _lilia_conflicts WHERE id = ?1;")?;
             stmt.bind_int64(1, conflict_id)?;
             if stmt.step()? {
-                (stmt.column_text(0).to_string(), stmt.column_text(1).to_string())
+                (
+                    stmt.column_text(0).to_string(),
+                    stmt.column_text(1).to_string(),
+                )
             } else {
-                return Err(LiliaError::new(ErrorCode::NotFound, "conflict not found", false));
+                return Err(LiliaError::new(
+                    ErrorCode::NotFound,
+                    "conflict not found",
+                    false,
+                ));
             }
         };
 
         let resolved_str = serde_json::to_string(&resolved_value)
             .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;
-        let mut upd = tx.prepare("UPDATE _lilia_conflicts SET status = 'resolved', resolved_value = ?1 WHERE id = ?2;")?;
+        let mut upd = tx.prepare(
+            "UPDATE _lilia_conflicts SET status = 'resolved', resolved_value = ?1 WHERE id = ?2;",
+        )?;
         upd.bind_text_static(1, &resolved_str)?;
         upd.bind_int64(2, conflict_id)?;
         upd.step()?;
@@ -1718,7 +2010,14 @@ impl Database {
         tx.commit()?;
         drop(writer);
 
-        self.json_put_hlc(&space, &doc_id, resolved_value, None, None, lilia_core::ConflictResolutionStrategy::LastWriteWins)?;
+        self.json_put_hlc(
+            &space,
+            &doc_id,
+            resolved_value,
+            None,
+            None,
+            lilia_core::ConflictResolutionStrategy::LastWriteWins,
+        )?;
         Ok(())
     }
 
@@ -1845,6 +2144,7 @@ impl Database {
     }
 
     /// Locks a compartment, removing its key material from memory.
+    #[must_use]
     pub fn lock_compartment(&self, id: &str) -> bool {
         self.key_registry.lock_key(id)
     }
@@ -1890,7 +2190,9 @@ impl Database {
     /// Returns the Field-Level Encryption policy for a document collection if configured.
     #[must_use]
     pub fn fle_policy(&self, space: &str) -> Option<lilia_core::FlePolicy> {
-        self.catalog.spec_for(CollectionKind::Json, space).fle_policy
+        self.catalog
+            .spec_for(CollectionKind::Json, space)
+            .fle_policy
     }
 
     pub fn checkpoint_stats(&self) -> CheckpointStats {
@@ -1899,8 +2201,7 @@ impl Database {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
-            .map(Checkpointer::stats)
-            .unwrap_or_default()
+            .map_or_default(Checkpointer::stats)
     }
 
     /// Drain pending ring-buffer writes cleanly before stopping admission and closing SQLite.
@@ -1970,6 +2271,65 @@ impl Database {
         }
     }
 
+    /// Returns a real-time snapshot of physical flash wear leveling telemetry.
+    #[must_use]
+    pub fn flash_wear_telemetry(&self) -> lilia_core::FlashWearTelemetry {
+        self.wear_manager.report()
+    }
+
+    /// Persists current flash wear leveling telemetry into database metadata.
+    pub fn persist_flash_wear(&self) -> Result<()> {
+        let guard = self.lock_writer()?;
+        self.wear_manager.persist_to_metadata(&guard)
+    }
+
+    /// Verifies whether page `page_id` (1-indexed) matches its Reed-Solomon parity checksum.
+    pub fn verify_page_parity(&self, page_id: u32) -> Result<bool> {
+        if let Some(parity) = &self.parity_manager {
+            parity.verify_page(page_id)
+        } else {
+            Ok(true)
+        }
+    }
+
+    /// Automatically reconstructs and repairs `page_id` in-place using Reed-Solomon parity.
+    pub fn auto_repair_page(&self, page_id: u32) -> Result<lilia_core::PageRepairOutcome> {
+        let Some(parity) = &self.parity_manager else {
+            return Err(LiliaError::new(
+                ErrorCode::InvalidInput,
+                "Reed-Solomon parity is not enabled for this database",
+                false,
+            ));
+        };
+        parity.reconstruct_and_repair_page(page_id)
+    }
+
+    /// Patrolls the entire database and auto-repairs any detected bitflips or physical corruptions.
+    pub fn auto_repair_database(&self) -> Result<lilia_core::RepairSummary> {
+        if let Some(parity) = &self.parity_manager {
+            parity.auto_repair_database()
+        } else {
+            Ok(lilia_core::RepairSummary::default())
+        }
+    }
+
+    /// Synchronizes Reed-Solomon parity blocks for all pages currently in the database.
+    pub fn sync_parity(&self) -> Result<()> {
+        if let Some(parity) = &self.parity_manager {
+            // First flush WAL frames into database file so DB file contains all pages
+            {
+                let writer = self.writer_lock(None)?;
+                let _ = writer.exec("PRAGMA wal_checkpoint(PASSIVE);");
+            }
+            parity.sync_all()?;
+            if let Ok(meta) = std::fs::metadata(parity.parity_path()) {
+                self.wear_manager.record_parity_write(meta.len());
+                self.wear_manager.record_fsync();
+            }
+        }
+        Ok(())
+    }
+
     /// Returns the current 32-byte cryptographic Merkle Root of the database.
     #[must_use]
     pub fn ledger_root(&self) -> [u8; 32] {
@@ -1985,7 +2345,7 @@ impl Database {
     /// Returns a specific commit block by its 1-based sequence number.
     pub fn ledger_commit(&self, seq: u64) -> Result<Option<lilia_core::ledger::LedgerCommit>> {
         let conn = self.read_lock()?;
-        self.ledger.commit_by_seq(&conn, seq)
+        crate::ledger::LedgerManager::commit_by_seq(&conn, seq)
     }
 
     /// Exports a mathematical Inclusion Proof for a JSON document.
@@ -2011,7 +2371,10 @@ impl Database {
     }
 
     /// Exports a mathematical Inclusion Proof for a commit block.
-    pub fn ledger_prove_commit(&self, commit_seq: u64) -> Result<lilia_core::ledger::InclusionProof> {
+    pub fn ledger_prove_commit(
+        &self,
+        commit_seq: u64,
+    ) -> Result<lilia_core::ledger::InclusionProof> {
         let conn = self.read_lock()?;
         self.ledger.prove_commit(&conn, commit_seq)
     }
@@ -2222,6 +2585,81 @@ impl Database {
 
         self.roll_shard_if_due()?;
 
+        // Enforce Row-Level Security write policies
+        for op in operations {
+            match op {
+                BatchOperation::JsonPut {
+                    space, id, value, ..
+                }
+                | BatchOperation::JsonPutHlc {
+                    space, id, value, ..
+                } => {
+                    if !self.is_json_doc_authorized(
+                        space,
+                        value,
+                        lilia_core::security::PolicyAction::Insert,
+                    ) {
+                        return Err(LiliaError::new(
+                            ErrorCode::Unauthorized,
+                            format!("row-level security policy violation: document '{id}' does not belong to the current security context"),
+                            false,
+                        ));
+                    }
+                }
+                BatchOperation::JsonDelete { space, id, .. } => {
+                    if let Ok(Some(existing)) = self.read_json_entry(space, id) {
+                        if !self.is_json_doc_authorized(
+                            space,
+                            &existing.value(),
+                            lilia_core::security::PolicyAction::Delete,
+                        ) {
+                            return Err(LiliaError::new(
+                                ErrorCode::Unauthorized,
+                                format!("row-level security policy violation: document '{id}' cannot be deleted by the current security context"),
+                                false,
+                            ));
+                        }
+                    }
+                }
+                BatchOperation::KvSet {
+                    namespace,
+                    key,
+                    value,
+                    ..
+                } => {
+                    if !self.is_kv_entry_authorized(
+                        namespace,
+                        key,
+                        value,
+                        lilia_core::security::PolicyAction::Insert,
+                    ) {
+                        return Err(LiliaError::new(
+                            ErrorCode::Unauthorized,
+                            format!("row-level security policy violation on kv put in namespace '{namespace}'"),
+                            false,
+                        ));
+                    }
+                }
+                BatchOperation::KvDelete { namespace, key, .. } => {
+                    if let Ok(Some(existing)) = self.kv_get(namespace, key) {
+                        if !self.is_kv_entry_authorized(
+                            namespace,
+                            key,
+                            &existing.value,
+                            lilia_core::security::PolicyAction::Delete,
+                        ) {
+                            return Err(LiliaError::new(
+                                ErrorCode::Unauthorized,
+                                format!("row-level security policy violation on kv delete in namespace '{namespace}'"),
+                                false,
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let effective_ops_cow: std::borrow::Cow<'_, [BatchOperation]> = {
             let mut any_fle = false;
             for op in operations {
@@ -2237,11 +2675,20 @@ impl Database {
                 let mut transformed = Vec::with_capacity(operations.len());
                 for op in operations {
                     match op {
-                        BatchOperation::JsonPut { space, id, value, if_version } => {
+                        BatchOperation::JsonPut {
+                            space,
+                            id,
+                            value,
+                            if_version,
+                        } => {
                             let spec = self.catalog.spec_for(CollectionKind::Json, space);
                             if let Some(policy) = &spec.fle_policy {
                                 let mut encrypted_val = value.clone();
-                                lilia_core::encrypt_json_fields(&mut encrypted_val, policy, &self.key_registry)?;
+                                lilia_core::encrypt_json_fields(
+                                    &mut encrypted_val,
+                                    policy,
+                                    &self.key_registry,
+                                )?;
                                 transformed.push(BatchOperation::JsonPut {
                                     space: space.clone(),
                                     id: id.clone(),
@@ -2298,8 +2745,7 @@ impl Database {
             let op_refs: Vec<&BatchOperation> = operations.iter().collect();
             let mut guards = self.mem_engine.lock_kv_json_shards(&op_refs);
             let now = crate::storage::now_ms();
-            self.mem_engine
-                .preflight_with_guards(&op_refs, &guards, now)?;
+            MemEngine::preflight_with_guards(&op_refs, &guards, now)?;
             let mut results = Vec::with_capacity(operations.len());
             for op in operations {
                 results.push(self.mem_engine.apply_op_with_guards(
@@ -2386,13 +2832,7 @@ impl Database {
 
         let session = if self.undo_log_capacity > 0 || self.live_query_manager.has_subscribers() {
             if let Ok(mut sess) = lilia_sqlite_native::NativeSession::create(&connection, "main") {
-                // The embedding queue is drained by its worker outside any recorded batch:
-                // replaying it from a changeset would conflict with rows already consumed.
-                // The columnar store is derived data maintained by triggers and compaction:
-                // undoing a batch must re-fire those triggers, not rewind their bookkeeping.
-                sess.set_table_filter(|table| {
-                    table != "_lilia_embed_queue" && !table.starts_with("_lilia_col_")
-                });
+                sess.set_table_filter(undo_records_table);
                 let _ = sess.attach_all();
                 Some(sess)
             } else {
@@ -2422,8 +2862,7 @@ impl Database {
             None
         } else {
             let guards = self.mem_engine.lock_kv_json_shards(&mem_non_fts_refs);
-            self.mem_engine
-                .preflight_with_guards(&mem_non_fts_refs, &guards, now)?;
+            MemEngine::preflight_with_guards(&mem_non_fts_refs, &guards, now)?;
             Some(guards)
         };
 
@@ -2467,7 +2906,6 @@ impl Database {
                     &self.json_options,
                     self.hlc.as_ref(),
                     &self.cas,
-
                     self.shard_manager.as_deref(),
                     Some(self.integrity.as_ref()),
                 )?;
@@ -2500,51 +2938,19 @@ impl Database {
             }
         }
 
-        // In-transaction reactive rules and Complex Event Processing (CEP) evaluation
-        if !self.rule_engine.is_empty() {
-            let mut pending_ops = operations.to_vec();
-            let mut cascade_depth = 0;
-            const MAX_CASCADE_DEPTH: usize = 8;
+        self.apply_rule_cascade(&mut transaction, operations, now)?;
 
-            while !pending_ops.is_empty() {
-                if cascade_depth >= MAX_CASCADE_DEPTH {
-                    return Err(LiliaError::new(
-                        ErrorCode::Conflict,
-                        "maximum reactive rule cascade depth exceeded (possible cycle)",
-                        false,
-                    ));
-                }
-                cascade_depth += 1;
-                let current_eval_ops = std::mem::take(&mut pending_ops);
-                for op in &current_eval_ops {
-                    let triggered_ops =
-                        self.rule_engine
-                            .evaluate_in_transaction(&mut transaction, op, now)?;
-                    for trig_op in triggered_ops {
-                        apply(
-                            &mut transaction,
-                            &trig_op,
-                            self.codec.as_ref(),
-                            &self.dict_registry,
-                            &self.json_options,
-                            self.hlc.as_ref(),
-                            &self.cas,
-
-                            self.shard_manager.as_deref(),
-                            Some(self.integrity.as_ref()),
-                        )?;
-                        pending_ops.push(trig_op);
-                    }
-                }
-            }
-        }
-
-        if self.ledger_enabled && !operations.is_empty() {
-            self.ledger
-                .record_commit(&mut transaction, operations, &results, now)?;
-        }
+        self.ledger.record_commit(
+            transaction.conn(),
+            crate::ledger::operation_entries(operations, &results),
+            now,
+        )?;
 
         transaction.commit()?;
+
+        let estimated_wal_bytes = (operations.len() as u64).saturating_mul(4096 + 24);
+        self.wear_manager.record_wal_write(estimated_wal_bytes);
+        self.wear_manager.record_fsync();
 
         if let Some(mut guards) = mem_guards.take() {
             for ((idx, op), (&tier, &mem_fts)) in operations
@@ -2629,12 +3035,13 @@ impl Database {
                             && !self.json_options.disabled_auto_train_spaces.contains(space)
                             && !auto_train_candidates.contains(space)
                         {
-                            if let Ok(mut count_stmt) =
-                                connection.prepare("SELECT count(*) FROM _lilia_json WHERE space = ?1;")
+                            if let Ok(mut count_stmt) = connection
+                                .prepare("SELECT count(*) FROM _lilia_json WHERE space = ?1;")
                             {
                                 let _ = count_stmt.bind_text_static(1, space);
                                 if let Ok(true) = count_stmt.step() {
-                                    let count = count_stmt.column_int64(0) as usize;
+                                    let count =
+                                        crate::storage::sql_count(count_stmt.column_int64(0));
                                     if count >= self.json_options.dict_sample_threshold {
                                         auto_train_candidates.push(space.clone());
                                     }
@@ -2725,6 +3132,8 @@ impl Database {
         update_stmt.step()?;
         drop(update_stmt);
 
+        self.ledger
+            .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
         tx.commit()?;
         drop(connection);
         if queued {
@@ -2783,6 +3192,8 @@ impl Database {
         update_stmt.step()?;
         drop(update_stmt);
 
+        self.ledger
+            .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
         tx.commit()?;
         drop(connection);
         if queued {
@@ -2973,6 +3384,7 @@ impl Database {
     }
 
     /// Promote an ephemeral (`Memory`) or `Buffered` collection to durable `Disk` storage.
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn promote_collection(
         &self,
         kind: lilia_core::CollectionKind,
@@ -3005,7 +3417,8 @@ impl Database {
                 CollectionKind::Kv => {
                     let items = self.mem_engine.kv.scan(Some(name), None, usize::MAX, now);
                     moved = items.len();
-                    let kv_table = crate::sharding::qualified(self.write_schema().as_deref(), "_lilia_kv");
+                    let kv_table =
+                        crate::sharding::qualified(self.write_schema().as_deref(), "_lilia_kv");
                     for (_, key, snap) in items {
                         let mut stmt = tx.prepare(&format!(
                             "INSERT INTO {kv_table}(namespace, key, value, version, expires_at_ms) \
@@ -3018,10 +3431,7 @@ impl Database {
                         stmt.bind_text_static(1, name)?;
                         stmt.bind_blob_static(2, &key)?;
                         stmt.bind_blob_static(3, &snap.value)?;
-                        stmt.bind_int64(
-                            4,
-                            i64::try_from(snap.version.max(1)).unwrap_or(i64::MAX),
-                        )?;
+                        stmt.bind_int64(4, i64::try_from(snap.version.max(1)).unwrap_or(i64::MAX))?;
                         match snap.expires_at_ms {
                             Some(exp) => stmt.bind_int64(5, exp)?,
                             None => stmt.bind_null(5)?,
@@ -3048,17 +3458,16 @@ impl Database {
                             &self.json_options,
                             self.hlc.as_ref(),
                             &self.cas,
-
                             self.shard_manager.as_deref(),
                             Some(self.integrity.as_ref()),
                         )?;
                     }
                 }
                 CollectionKind::TimeSeries => {
-                    let items =
-                        self.mem_engine
-                            .timeseries
-                            .scan(Some(name), None, usize::MAX, now);
+                    let items = self
+                        .mem_engine
+                        .timeseries
+                        .scan(Some(name), None, usize::MAX, now);
                     for (_, key_bytes, snap) in items {
                         let resolution_ms = if key_bytes.len() == 8 {
                             let mut arr = [0u8; 8];
@@ -3079,14 +3488,14 @@ impl Database {
                     }
                 }
                 CollectionKind::Graph => {
-                    let nodes =
-                        self.mem_engine
-                            .graph_nodes
-                            .scan(Some(name), None, usize::MAX, now);
-                    let edges =
-                        self.mem_engine
-                            .graph_edges
-                            .scan(Some(name), None, usize::MAX, now);
+                    let nodes = self
+                        .mem_engine
+                        .graph_nodes
+                        .scan(Some(name), None, usize::MAX, now);
+                    let edges = self
+                        .mem_engine
+                        .graph_edges
+                        .scan(Some(name), None, usize::MAX, now);
                     moved = nodes.len() + edges.len();
                     for (_, _, snap) in nodes {
                         let n = snap.value;
@@ -3106,7 +3515,6 @@ impl Database {
                             &self.json_options,
                             self.hlc.as_ref(),
                             &self.cas,
-
                             self.shard_manager.as_deref(),
                             Some(self.integrity.as_ref()),
                         )?;
@@ -3128,7 +3536,6 @@ impl Database {
                             &self.json_options,
                             self.hlc.as_ref(),
                             &self.cas,
-
                             self.shard_manager.as_deref(),
                             Some(self.integrity.as_ref()),
                         )?;
@@ -3142,7 +3549,10 @@ impl Database {
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .get(name)
                         .cloned();
-                    let vecs = self.mem_engine.vectors.scan(Some(name), None, usize::MAX, now);
+                    let vecs = self
+                        .mem_engine
+                        .vectors
+                        .scan(Some(name), None, usize::MAX, now);
                     moved = vecs.len();
                     for (_, id_bytes, snap) in vecs {
                         let id = String::from_utf8_lossy(&id_bytes).into_owned();
@@ -3162,7 +3572,6 @@ impl Database {
                             &self.json_options,
                             self.hlc.as_ref(),
                             &self.cas,
-
                             self.shard_manager.as_deref(),
                             Some(self.integrity.as_ref()),
                         )?;
@@ -3184,23 +3593,24 @@ impl Database {
                     }
                     moved = rows.len();
                     for (doc_id, content) in rows {
-                        crate::transaction::apply_fts_index(&mut tx, name, &doc_id, &content, false)?;
+                        crate::transaction::apply_fts_index(
+                            &mut tx, name, &doc_id, &content, false,
+                        )?;
                     }
-                    let mut del = tx.prepare(
-                        "DELETE FROM _lilia_mem._lilia_mem_fts WHERE collection = ?1;",
-                    )?;
+                    let mut del =
+                        tx.prepare("DELETE FROM _lilia_mem._lilia_mem_fts WHERE collection = ?1;")?;
                     del.bind_text_static(1, name)?;
                     del.step()?;
                 }
                 CollectionKind::Crdt => {
-                    let counters = self
-                        .mem_engine
-                        .crdt_counters
-                        .scan(Some(name), None, usize::MAX, now);
-                    let orsets = self
-                        .mem_engine
-                        .crdt_orsets
-                        .scan(Some(name), None, usize::MAX, now);
+                    let counters =
+                        self.mem_engine
+                            .crdt_counters
+                            .scan(Some(name), None, usize::MAX, now);
+                    let orsets =
+                        self.mem_engine
+                            .crdt_orsets
+                            .scan(Some(name), None, usize::MAX, now);
                     let jsons = self
                         .mem_engine
                         .crdt_json
@@ -3266,11 +3676,13 @@ impl Database {
                     for (_, id_bytes, snap) in jsons {
                         let id = String::from_utf8_lossy(&id_bytes).into_owned();
                         let (doc, materialized, _) = snap.value;
-                        let raw = serde_json::to_vec(&doc)
-                            .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;
+                        let raw = serde_json::to_vec(&doc).map_err(|e| {
+                            LiliaError::new(ErrorCode::Storage, e.to_string(), false)
+                        })?;
                         let state = lilia_core::compress_bytes(&raw);
-                        let mat_str = serde_json::to_string(&materialized)
-                            .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;
+                        let mat_str = serde_json::to_string(&materialized).map_err(|e| {
+                            LiliaError::new(ErrorCode::Storage, e.to_string(), false)
+                        })?;
                         let mut stmt = tx.prepare(
                             "INSERT INTO _lilia_crdt_json(space, id, state, materialized, version) \
                              VALUES(?1, ?2, ?3, ?4, ?5) \
@@ -3283,22 +3695,24 @@ impl Database {
                         stmt.bind_text_static(2, &id)?;
                         stmt.bind_blob_static(3, &state)?;
                         stmt.bind_text_static(4, &mat_str)?;
-                        stmt.bind_int64(
-                            5,
-                            i64::try_from(snap.version.max(1)).unwrap_or(i64::MAX),
-                        )?;
+                        stmt.bind_int64(5, i64::try_from(snap.version.max(1)).unwrap_or(i64::MAX))?;
                         stmt.step()?;
                     }
                 }
                 CollectionKind::Geofence | CollectionKind::SqlTable => {
                     return Err(LiliaError::new(
                         ErrorCode::InvalidInput,
-                        format!("{} collections cannot be promoted automatically", kind.as_str()),
+                        format!(
+                            "{} collections cannot be promoted automatically",
+                            kind.as_str()
+                        ),
                         false,
                     ));
                 }
             }
 
+            self.ledger
+                .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
             tx.commit()?;
         }
 
@@ -3414,11 +3828,14 @@ impl Database {
                     moved = rows.len();
                     for schema in self.data_schemas() {
                         let kv_table = crate::sharding::qualified(schema.as_deref(), "_lilia_kv");
-                        let mut del = tx.prepare(&format!("DELETE FROM {kv_table} WHERE namespace = ?1;"))?;
+                        let mut del =
+                            tx.prepare(&format!("DELETE FROM {kv_table} WHERE namespace = ?1;"))?;
                         del.bind_text_static(1, name)?;
                         del.step()?;
                     }
                     CollectionCatalog::delete_persisted_spec(tx.conn(), kind, name)?;
+                    self.ledger
+                        .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
                     tx.commit()?;
                     self.catalog.set_spec(next);
                     for (key, value, _ver, exp) in rows {
@@ -3453,12 +3870,15 @@ impl Database {
                     for schema in self.data_schemas() {
                         for table in ["_lilia_json", "_lilia_json_index_entries"] {
                             let table = crate::sharding::qualified(schema.as_deref(), table);
-                            let mut del = tx.prepare(&format!("DELETE FROM {table} WHERE space = ?1;"))?;
+                            let mut del =
+                                tx.prepare(&format!("DELETE FROM {table} WHERE space = ?1;"))?;
                             del.bind_text_static(1, name)?;
                             del.step()?;
                         }
                     }
                     CollectionCatalog::delete_persisted_spec(tx.conn(), kind, name)?;
+                    self.ledger
+                        .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
                     tx.commit()?;
                     self.catalog.set_spec(next);
                     for (id, val) in rows {
@@ -3480,10 +3900,12 @@ impl Database {
                         }
                     }
                     for schema in self.data_schemas() {
-                        let chunks = crate::sharding::qualified(schema.as_deref(), "_lilia_timeseries_chunks");
-                        let mut del = tx.prepare(&format!(
-                            "DELETE FROM {chunks} WHERE series_id = ?1;"
-                        ))?;
+                        let chunks = crate::sharding::qualified(
+                            schema.as_deref(),
+                            "_lilia_timeseries_chunks",
+                        );
+                        let mut del =
+                            tx.prepare(&format!("DELETE FROM {chunks} WHERE series_id = ?1;"))?;
                         del.bind_text_static(1, name)?;
                         del.step()?;
                     }
@@ -3492,6 +3914,8 @@ impl Database {
                         kind,
                         name,
                     )?;
+                    self.ledger
+                        .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
                     tx.commit()?;
                     self.catalog.set_spec(next);
                     for (res, pts) in rows {
@@ -3507,8 +3931,8 @@ impl Database {
                         )?;
                         stmt.bind_text_static(1, name)?;
                         while stmt.step()? {
-                            let meta: serde_json::Value =
-                                serde_json::from_str(stmt.column_text(2)).map_err(|e| {
+                            let meta: serde_json::Value = serde_json::from_str(stmt.column_text(2))
+                                .map_err(|e| {
                                     LiliaError::new(ErrorCode::Storage, e.to_string(), false)
                                 })?;
                             nodes.push(lilia_core::GraphNode {
@@ -3554,6 +3978,8 @@ impl Database {
                         del.step()?;
                     }
                     CollectionCatalog::delete_persisted_spec(tx.conn(), kind, name)?;
+                    self.ledger
+                        .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
                     tx.commit()?;
                     self.catalog.set_spec(next);
                     for n in nodes {
@@ -3597,8 +4023,7 @@ impl Database {
                         while stmt.step()? {
                             let id = stmt.column_text(0).to_string();
                             let dim = u32::try_from(stmt.column_int64(1).max(0)).unwrap_or(0);
-                            let el =
-                                lilia_core::VectorElementType::try_from(stmt.column_int64(2))?;
+                            let el = lilia_core::VectorElementType::try_from(stmt.column_int64(2))?;
                             let blob = stmt.column_blob(3).to_vec();
                             vecs.push((id, dim, el, blob));
                         }
@@ -3614,6 +4039,8 @@ impl Database {
                         del.step()?;
                     }
                     CollectionCatalog::delete_persisted_spec(tx.conn(), kind, name)?;
+                    self.ledger
+                        .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
                     tx.commit()?;
                     self.hnsw_cache
                         .write()
@@ -3655,7 +4082,8 @@ impl Database {
                     }
                     moved = docs.len();
                     {
-                        let mut del = tx.prepare("DELETE FROM _lilia_fts WHERE collection = ?1;")?;
+                        let mut del =
+                            tx.prepare("DELETE FROM _lilia_fts WHERE collection = ?1;")?;
                         del.bind_text_static(1, name)?;
                         del.step()?;
                     }
@@ -3676,6 +4104,8 @@ impl Database {
                         ins.step()?;
                     }
                     CollectionCatalog::delete_persisted_spec(tx.conn(), kind, name)?;
+                    self.ledger
+                        .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
                     tx.commit()?;
                     self.catalog.set_spec(next);
                 }
@@ -3713,9 +4143,8 @@ impl Database {
                         }
                     }
                     {
-                        let mut stmt = tx.prepare(
-                            "SELECT id, state FROM _lilia_crdt_json WHERE space = ?1;",
-                        )?;
+                        let mut stmt =
+                            tx.prepare("SELECT id, state FROM _lilia_crdt_json WHERE space = ?1;")?;
                         stmt.bind_text_static(1, name)?;
                         while stmt.step()? {
                             let id = stmt.column_text(0).to_string();
@@ -3738,14 +4167,18 @@ impl Database {
                         del.step()?;
                     }
                     CollectionCatalog::delete_persisted_spec(tx.conn(), kind, name)?;
+                    self.ledger
+                        .record_commit(tx.conn(), Vec::new(), crate::storage::now_ms())?;
                     tx.commit()?;
                     self.catalog.set_spec(next);
                     for (id, actor, p, n) in counters {
                         if p > 0 {
-                            self.mem_engine.crdt_counter_incr(name, &id, &actor, p, false);
+                            self.mem_engine
+                                .crdt_counter_incr(name, &id, &actor, p, false);
                         }
                         if n > 0 {
-                            self.mem_engine.crdt_counter_incr(name, &id, &actor, n, true);
+                            self.mem_engine
+                                .crdt_counter_incr(name, &id, &actor, n, true);
                         }
                     }
                     for (id, elem) in orsets {
@@ -3760,7 +4193,10 @@ impl Database {
                 CollectionKind::Geofence | CollectionKind::SqlTable => {
                     return Err(LiliaError::new(
                         ErrorCode::InvalidInput,
-                        format!("{} collections cannot be demoted automatically", kind.as_str()),
+                        format!(
+                            "{} collections cannot be demoted automatically",
+                            kind.as_str()
+                        ),
                         false,
                     ));
                 }
@@ -3778,14 +4214,15 @@ impl Database {
         let (table_name, rewritten) = crate::storage::rewrite_ephemeral_create_sql(sql)?;
         let writer = self.lock_writer()?;
         {
-            let mut check = writer.prepare(
-                "SELECT 1 FROM main.sqlite_master WHERE name = ?1 LIMIT 1;",
-            )?;
+            let mut check =
+                writer.prepare("SELECT 1 FROM main.sqlite_master WHERE name = ?1 LIMIT 1;")?;
             check.bind_text_static(1, &table_name)?;
             if check.step()? {
                 return Err(LiliaError::new(
                     ErrorCode::InvalidInput,
-                    format!("ephemeral table '{table_name}' conflicts with persistent table in main"),
+                    format!(
+                        "ephemeral table '{table_name}' conflicts with persistent table in main"
+                    ),
                     false,
                 ));
             }
@@ -3795,7 +4232,7 @@ impl Database {
         Ok(())
     }
 
-    /// Acquire a cloneable high-speed producer handle into LiliaDB's lock-free [`crate::ring_buffer::WriteRingBuffer`].
+    /// Acquire a cloneable high-speed producer handle into `LiliaDB`'s lock-free [`crate::ring_buffer::WriteRingBuffer`].
     #[must_use]
     pub fn ring_buffer(&self) -> crate::ring_buffer::RingBufferHandle {
         crate::ring_buffer::RingBufferHandle {
@@ -3803,14 +4240,16 @@ impl Database {
         }
     }
 
-    /// Append TimeSeries points via the lock-free [`crate::ring_buffer::WriteRingBuffer`] (or RAM for [`StorageTier::Memory`]).
+    /// Append `TimeSeries` points via the lock-free [`crate::ring_buffer::WriteRingBuffer`] (or RAM for [`StorageTier::Memory`]).
     pub fn ts_append_buffered(
         &self,
         series_id: &str,
         points: &[lilia_core::TimeSeriesPoint],
     ) -> Result<()> {
         crate::storage::validate_name("series_id", series_id)?;
-        if self.catalog.tier_for(lilia_core::CollectionKind::TimeSeries, series_id)
+        if self
+            .catalog
+            .tier_for(lilia_core::CollectionKind::TimeSeries, series_id)
             == lilia_core::StorageTier::Memory
         {
             self.mem_engine.ts_append_direct(series_id, 0, points)?;
@@ -3845,6 +4284,7 @@ impl Database {
         self.mem_engine.stats()
     }
 
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     fn emit_batch_events(
         &self,
         operations: &[BatchOperation],
@@ -3958,7 +4398,9 @@ impl Database {
                 }
                 BatchOperation::CrdtPnCounterIncrement { space, id, .. }
                 | BatchOperation::CrdtPnCounterDecrement { space, id, .. } => {
-                    let val = if self.catalog.tier_for(lilia_core::CollectionKind::Crdt, space)
+                    let val = if self
+                        .catalog
+                        .tier_for(lilia_core::CollectionKind::Crdt, space)
                         == lilia_core::StorageTier::Memory
                     {
                         self.mem_engine
@@ -4057,7 +4499,7 @@ impl std::fmt::Debug for LiveQueryHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LiveQueryHandle")
             .field("id", &self.id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -4096,10 +4538,14 @@ impl Resources {
                 false,
             ));
         }
+        let changes = connection
+            .as_ref()
+            .map_or(0, NativeConnection::total_changes);
         Ok(WriterGuard {
             connection,
             _permit: Some(permit),
             _operation: Some(operation),
+            backpressure: Some((self.wal_backpressure, changes)),
         })
     }
 
@@ -4129,10 +4575,14 @@ impl Resources {
                 false,
             ));
         }
+        let changes = connection
+            .as_ref()
+            .map_or(0, NativeConnection::total_changes);
         Ok(WriterGuard {
             connection,
             _permit: permit,
             _operation: operation,
+            backpressure: Some((self.wal_backpressure, changes)),
         })
     }
 
@@ -4156,6 +4606,7 @@ impl Resources {
             connection,
             _permit: None,
             _operation: Some(operation),
+            backpressure: None,
         })
     }
 

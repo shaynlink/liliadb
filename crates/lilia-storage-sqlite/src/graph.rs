@@ -162,12 +162,10 @@ impl Database {
         match self.catalog.tier_for(CollectionKind::Graph, graph) {
             StorageTier::Memory => {
                 let norm_limit = usize::try_from(normalize_limit(limit)).unwrap_or(usize::MAX);
-                let scanned = self.mem_engine.graph_nodes.scan(
-                    Some(graph),
-                    None,
-                    usize::MAX,
-                    now_ms(),
-                );
+                let scanned =
+                    self.mem_engine
+                        .graph_nodes
+                        .scan(Some(graph), None, usize::MAX, now_ms());
                 let mut nodes = Vec::new();
                 for (_, _, snap) in scanned {
                     if kind_filter.is_some_and(|k| snap.value.kind != k) {
@@ -301,7 +299,9 @@ impl Database {
         validate_name("target", target)?;
         match self.catalog.tier_for(CollectionKind::Graph, graph) {
             StorageTier::Memory => {
-                return Ok(self.mem_engine.graph_remove_edge(graph, source, target, kind));
+                return Ok(self
+                    .mem_engine
+                    .graph_remove_edge(graph, source, target, kind));
             }
             StorageTier::Buffered => {
                 self.ring_core.flush()?;
@@ -428,10 +428,12 @@ impl Database {
                 while let Some(cur) = queue.pop_front() {
                     for edge in &edges {
                         let next = match direction {
-                            Direction::Outgoing if edge.source == cur => Some(&edge.target),
-                            Direction::Incoming if edge.target == cur => Some(&edge.source),
-                            Direction::Both if edge.source == cur => Some(&edge.target),
-                            Direction::Both if edge.target == cur => Some(&edge.source),
+                            Direction::Outgoing | Direction::Both if edge.source == cur => {
+                                Some(&edge.target)
+                            }
+                            Direction::Incoming | Direction::Both if edge.target == cur => {
+                                Some(&edge.source)
+                            }
                             _ => None,
                         };
                         if let Some(neighbor) = next {
@@ -508,12 +510,10 @@ impl Database {
         validate_name("node", node)?;
         match self.catalog.tier_for(CollectionKind::Graph, graph) {
             StorageTier::Memory => {
-                let edges = self.mem_engine.graph_edges.scan(
-                    Some(graph),
-                    None,
-                    usize::MAX,
-                    now_ms(),
-                );
+                let edges =
+                    self.mem_engine
+                        .graph_edges
+                        .scan(Some(graph), None, usize::MAX, now_ms());
                 let mut neighbors = BTreeSet::new();
                 for (_, _, snap) in edges {
                     let edge = snap.value;

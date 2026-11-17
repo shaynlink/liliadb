@@ -149,24 +149,13 @@ impl MerkleTree {
             };
         }
 
-        let mut levels = Vec::new();
-        levels.push(leaves.to_vec());
-
-        while levels.last().is_some_and(|lvl| lvl.len() > 1) {
-            let prev = levels.last().expect("must exist");
-            let mut next = Vec::with_capacity(prev.len().div_ceil(2));
-            let mut i = 0;
-            while i < prev.len() {
-                let left = &prev[i];
-                let right = if i + 1 < prev.len() {
-                    &prev[i + 1]
-                } else {
-                    // Duplicate last element if odd
-                    left
-                };
-                next.push(hash_internal_node(left, right));
-                i += 2;
-            }
+        let mut levels = vec![leaves.to_vec()];
+        while let Some(prev) = levels.last().filter(|lvl| lvl.len() > 1) {
+            // An odd last node is paired with itself.
+            let next = prev
+                .chunks(2)
+                .map(|pair| hash_internal_node(&pair[0], pair.get(1).unwrap_or(&pair[0])))
+                .collect();
             levels.push(next);
         }
 
@@ -191,8 +180,7 @@ impl MerkleTree {
             return path;
         }
 
-        for level in 0..self.levels.len() - 1 {
-            let current_level = &self.levels[level];
+        for current_level in &self.levels[..self.levels.len() - 1] {
             let is_even = leaf_index.is_multiple_of(2);
             let sibling_index = if is_even {
                 if leaf_index + 1 < current_level.len() {
@@ -253,19 +241,16 @@ impl LedgerAccumulator {
     /// Returns the current overall Merkle root.
     #[must_use]
     pub fn root(&self) -> [u8; 32] {
-        self.tree
-            .as_ref()
-            .map(MerkleTree::root)
-            .unwrap_or([0u8; 32])
+        self.tree.as_ref().map_or([0u8; 32], MerkleTree::root)
     }
 
     /// Generates the audit path for a commit by its 1-based sequence index.
     #[must_use]
     pub fn audit_path_for_commit(&self, commit_seq: u64) -> Option<Vec<AuditHop>> {
-        if commit_seq == 0 || commit_seq as usize > self.commit_hashes.len() {
+        let index = usize::try_from(commit_seq.checked_sub(1)?).ok()?;
+        if index >= self.commit_hashes.len() {
             return None;
         }
-        let index = (commit_seq - 1) as usize;
         self.tree.as_ref().map(|t| t.audit_path(index))
     }
 
@@ -294,9 +279,9 @@ pub struct InclusionProof {
     /// Cryptographic hash of the commit block.
     #[serde(with = "hex_bytes")]
     pub commit_hash: [u8; 32],
-    /// Audit path from leaf_hash to tx_root.
+    /// Audit path from `leaf_hash` to `tx_root`.
     pub tx_audit_path: Vec<AuditHop>,
-    /// Audit path from commit_hash to the database merkle_root.
+    /// Audit path from `commit_hash` to the database `merkle_root`.
     pub ledger_audit_path: Vec<AuditHop>,
     /// Database Merkle root at the time of proof generation.
     #[serde(with = "hex_bytes")]
@@ -377,6 +362,8 @@ pub struct LedgerVerificationReport {
 pub mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serializer};
 
+    /// # Errors
+    /// The serializer's own errors.
     pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -384,6 +371,8 @@ pub mod hex_bytes {
         serializer.serialize_str(&hex::encode(bytes))
     }
 
+    /// # Errors
+    /// When the input is not 64 hexadecimal digits.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
     where
         D: Deserializer<'de>,
@@ -411,7 +400,7 @@ mod tests {
         let tree = MerkleTree::build(&[leaf]);
         assert_eq!(tree.root(), leaf);
         let path = tree.audit_path(0);
-        assert!(path.is_empty());
+        assert_eq!(path, []);
         assert_eq!(verify_audit_path(&leaf, &path), leaf);
     }
 

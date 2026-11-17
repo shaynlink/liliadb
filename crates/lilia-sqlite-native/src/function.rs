@@ -64,6 +64,37 @@ impl NativeContext {
         let c_str = CString::new(msg).unwrap_or_default();
         unsafe { ffi::sqlite3_result_error(self.0, c_str.as_ptr(), -1) };
     }
+
+    /// Returns a mutable reference to cached auxiliary data for the function argument at `arg_idx`.
+    #[inline]
+    #[must_use]
+    #[allow(clippy::mut_from_ref)]
+    pub fn get_auxdata<T>(&self, arg_idx: i32) -> Option<&mut T> {
+        let ptr = unsafe { ffi::sqlite3_get_auxdata(self.0, arg_idx) };
+        if ptr.is_null() {
+            None
+        } else {
+            unsafe { Some(&mut *(ptr.cast::<T>())) }
+        }
+    }
+
+    /// Caches auxiliary data for the function argument at `arg_idx`, with an automatic destructor on finalize.
+    #[inline]
+    pub fn set_auxdata<T>(&self, arg_idx: i32, data: Box<T>) {
+        unsafe extern "C" fn x_del<T>(p: *mut std::ffi::c_void) {
+            if !p.is_null() {
+                drop(Box::from_raw(p.cast::<T>()));
+            }
+        }
+        unsafe {
+            ffi::sqlite3_set_auxdata(
+                self.0,
+                arg_idx,
+                Box::into_raw(data).cast(),
+                Some(x_del::<T>),
+            );
+        }
+    }
 }
 
 /// Safe wrapper around `sqlite3_value` argument passed to scalar functions.

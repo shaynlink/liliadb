@@ -21,6 +21,9 @@ pub const SIV_MIN_PAYLOAD_LEN: usize = SIV_TAG_LEN;
 /// Encrypts `plaintext` using AES-256-GCM (Randomized AEAD).
 ///
 /// Encoded layout: `[12-byte random nonce][ciphertext with 16-byte GCM tag]`.
+///
+/// # Errors
+/// `Storage` when the cipher fails to encrypt.
 pub fn encrypt_gcm(plaintext: &[u8], key: &[u8; 32], ad: Option<&[u8]>) -> Result<Vec<u8>> {
     let cipher = Aes256Gcm::new(aes_gcm::Key::<Aes256Gcm>::from_slice(key));
     let nonce_bytes: [u8; GCM_NONCE_LEN] = rand::random();
@@ -46,6 +49,10 @@ pub fn encrypt_gcm(plaintext: &[u8], key: &[u8; 32], ad: Option<&[u8]>) -> Resul
 }
 
 /// Decrypts an AES-256-GCM encoded payload.
+///
+/// # Errors
+/// `Corrupt` when the payload is truncated or fails authentication (wrong key, altered data or
+/// associated data).
 pub fn decrypt_gcm(payload: &[u8], key: &[u8; 32], ad: Option<&[u8]>) -> Result<Vec<u8>> {
     if payload.len() < GCM_MIN_PAYLOAD_LEN {
         return Err(LiliaError::new(
@@ -76,6 +83,9 @@ pub fn decrypt_gcm(payload: &[u8], key: &[u8; 32], ad: Option<&[u8]>) -> Result<
 /// Encrypts `plaintext` using AES-256-SIV (Deterministic AEAD, RFC 5297).
 ///
 /// For identical plaintext, key, and associated data (`ad`), identical ciphertext is produced.
+///
+/// # Errors
+/// `Storage` when the cipher fails to encrypt.
 pub fn encrypt_siv(plaintext: &[u8], key: &[u8; 64], ad: Option<&[u8]>) -> Result<Vec<u8>> {
     let cipher = Aes256SivAead::new(&(*key).into());
     // Deterministic AEAD uses empty nonce (RFC 5297 section 3)
@@ -96,6 +106,9 @@ pub fn encrypt_siv(plaintext: &[u8], key: &[u8; 64], ad: Option<&[u8]>) -> Resul
 }
 
 /// Decrypts an AES-256-SIV payload.
+///
+/// # Errors
+/// `Corrupt` when the payload is truncated or fails authentication.
 pub fn decrypt_siv(payload: &[u8], key: &[u8; 64], ad: Option<&[u8]>) -> Result<Vec<u8>> {
     if payload.len() < SIV_MIN_PAYLOAD_LEN {
         return Err(LiliaError::new(

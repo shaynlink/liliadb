@@ -101,7 +101,7 @@ impl LevenshteinAutomaton {
         next_d[0] = (state.distances[0].saturating_add(1)).min(limit);
 
         for j in 1..=n {
-            let cost: u8 = if self.chars[j - 1] == c { 0 } else { 1 };
+            let cost: u8 = u8::from(self.chars[j - 1] != c);
             let sub = state.distances[j - 1].saturating_add(cost);
             let ins = next_d[j - 1].saturating_add(1);
             let del = state.distances[j].saturating_add(1);

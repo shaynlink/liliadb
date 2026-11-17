@@ -91,7 +91,10 @@ impl AutotuneOptions {
             (self.max_actions_per_cycle > 0, "max_actions_per_cycle"),
             (self.max_tracked_queries > 0, "max_tracked_queries"),
             (self.backfill_chunk_docs > 0, "backfill_chunk_docs"),
-            (self.max_auto_indexes_per_space > 0, "max_auto_indexes_per_space"),
+            (
+                self.max_auto_indexes_per_space > 0,
+                "max_auto_indexes_per_space",
+            ),
         ];
         for (valid, name) in checks {
             if !valid {

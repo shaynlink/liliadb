@@ -38,7 +38,7 @@ impl FieldCipherAlgorithm {
 /// A declarative encryption rule for a specific field within a collection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldEncryptionRule {
-    /// Field name or JSON path (e.g. "email", "$.medical_record", "/ssn").
+    /// Field name or JSON path (e.g. "email", "$.`medical_record`", "/ssn").
     pub path: String,
     /// Algorithm (Randomized GCM vs Deterministic SIV).
     pub algorithm: FieldCipherAlgorithm,
@@ -102,7 +102,8 @@ impl FlePolicy {
         algo: FieldCipherAlgorithm,
         key_id: impl Into<String>,
     ) -> Self {
-        self.rules.push(FieldEncryptionRule::new(path, algo, key_id));
+        self.rules
+            .push(FieldEncryptionRule::new(path, algo, key_id));
         self
     }
 
@@ -131,8 +132,16 @@ mod tests {
     #[test]
     fn test_policy_matching() {
         let policy = FlePolicy::new()
-            .field("email", FieldCipherAlgorithm::DeterministicSiv, "vault:team")
-            .field("$.medical_notes", FieldCipherAlgorithm::RandomizedGcm, "vault:private");
+            .field(
+                "email",
+                FieldCipherAlgorithm::DeterministicSiv,
+                "vault:team",
+            )
+            .field(
+                "$.medical_notes",
+                FieldCipherAlgorithm::RandomizedGcm,
+                "vault:private",
+            );
 
         assert!(policy.is_field_encrypted("email"));
         assert!(policy.is_field_encrypted("$.email"));

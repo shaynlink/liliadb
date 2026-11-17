@@ -129,6 +129,7 @@ pub struct SqliteCursorStream<'a> {
     codec: Arc<dyn lilia_core::ValueCodec>,
     dict_registry: Arc<lilia_core::DictionaryRegistry>,
     key_registry: Arc<lilia_core::KeyRegistry>,
+    symbol_filter: Option<u64>,
     finished: bool,
 }
 
@@ -149,44 +150,74 @@ impl Iterator for SqliteCursorStream<'_> {
             return None;
         }
 
-        match self.stmt.step() {
-            Ok(true) => {
-                let id = self.stmt.column_text(0).to_string();
-                let format = self.stmt.column_int64(2);
-                let dict_id = self.stmt.column_int64(3);
-                match decode_stored_doc(
-                    &self.stmt,
-                    1,
-                    format,
-                    dict_id,
-                    &self.space,
-                    self.codec.as_ref(),
-                    &self.dict_registry,
-                    Some(self.key_registry.as_ref()),
-                ) {
-                    Ok(doc) => Some(Ok(StreamDocument::new(id, doc))),
-                    Err(e) => {
-                        self.finished = true;
-                        Some(Err(e))
+        loop {
+            match self.stmt.step() {
+                Ok(true) => {
+                    let format = self.stmt.column_int64(2);
+                    if let Some(query_sig) = self.symbol_filter {
+                        if format == 2 {
+                            let blob = self.stmt.column_blob(1);
+                            if let Some(doc_mask) =
+                                lilia_core::compression::dict::extract_symbol_signature(blob)
+                            {
+                                if (doc_mask & query_sig) != query_sig {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    let id = self.stmt.column_text(0).to_string();
+                    let dict_id = self.stmt.column_int64(3);
+                    match decode_stored_doc(
+                        &self.stmt,
+                        1,
+                        format,
+                        dict_id,
+                        &self.space,
+                        self.codec.as_ref(),
+                        &self.dict_registry,
+                        Some(self.key_registry.as_ref()),
+                    ) {
+                        Ok(doc) => return Some(Ok(StreamDocument::new(id, doc))),
+                        Err(e) => {
+                            self.finished = true;
+                            return Some(Err(e));
+                        }
                     }
                 }
-            }
-            Ok(false) => {
-                self.finished = true;
-                None
-            }
-            Err(e) => {
-                self.finished = true;
-                Some(Err(e))
+                Ok(false) => {
+                    self.finished = true;
+                    return None;
+                }
+                Err(e) => {
+                    self.finished = true;
+                    return Some(Err(e));
+                }
             }
         }
     }
 }
 
 /// Open a streaming iterator over documents in the specified space with O(1) RAM.
+///
+/// # Errors
+/// Propagates errors from the operations it performs.
 pub fn open_document_stream<'a>(
     db: &'a Database,
     space: &str,
+) -> Result<Box<dyn Iterator<Item = Result<StreamDocument>> + 'a>> {
+    open_document_stream_filtered(db, space, None)
+}
+
+/// Open a streaming iterator over documents with optional compressed-domain symbol filtering.
+///
+/// # Errors
+/// Propagates errors from the operations it performs.
+pub fn open_document_stream_filtered<'a>(
+    db: &'a Database,
+    space: &str,
+    symbol_filter: Option<u64>,
 ) -> Result<Box<dyn Iterator<Item = Result<StreamDocument>> + 'a>> {
     crate::storage::validate_name("space", space)?;
     let tier = db.catalog.tier_for(CollectionKind::Json, space);
@@ -196,8 +227,7 @@ pub fn open_document_stream<'a>(
         let raw = db.mem_engine.json.scan(Some(space), None, usize::MAX, now);
         let iter = raw.into_iter().filter_map(|(_ns, key_bytes, snap)| {
             let id = String::from_utf8(key_bytes).ok()?;
-            let doc = BinaryDoc::from_json_value(&snap.value);
-            Some(Ok(StreamDocument::new(id, doc)))
+            Some(BinaryDoc::from_json_value(&snap.value).map(|doc| StreamDocument::new(id, doc)))
         });
         return Ok(Box::new(iter));
     }
@@ -219,6 +249,7 @@ pub fn open_document_stream<'a>(
         codec: Arc::clone(&db.codec),
         dict_registry: Arc::clone(&db.dict_registry),
         key_registry: Arc::clone(&db.key_registry),
+        symbol_filter,
         finished: false,
     }))
 }

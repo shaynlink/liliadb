@@ -7,16 +7,23 @@ use std::thread::{self, JoinHandle};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 
-#[cfg(not(target_arch = "wasm32"))]
-use lilia_core::LiliaError;
+pub use lilia_core::CheckpointStats;
 #[cfg(not(target_arch = "wasm32"))]
 use lilia_core::ErrorCode;
-pub use lilia_core::CheckpointStats;
+#[cfg(not(target_arch = "wasm32"))]
+use lilia_core::LiliaError;
 use lilia_core::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use lilia_sqlite_native::NativeConnection;
 
 use crate::engine::CheckpointPolicy;
+
+/// WAL size, in bytes, past which writers checkpoint themselves between two transactions
+/// (see `WalBackpressure`): four times the background threshold, and never below 4 MiB so that
+/// writers only step in when the WAL is not being rewound.
+pub(crate) fn writer_wal_limit(wal_bytes: u64) -> u64 {
+    wal_bytes.saturating_mul(4).max(4 * 1024 * 1024)
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
@@ -39,6 +46,8 @@ impl Checkpointer {
         policy: CheckpointPolicy,
         synchronous: &str,
         cas: Option<Arc<crate::cas::CasEngine>>,
+        wear: Option<Arc<crate::wear::FlashWearManager>>,
+        parity: Option<Arc<crate::parity::ParityManager>>,
     ) -> Result<Self> {
         let connection = NativeConnection::open_with_config(path, synchronous, 0, 0, -2048)?;
         connection.pragma_update("wal_autocheckpoint", "0")?;
@@ -52,7 +61,18 @@ impl Checkpointer {
         let shared = Arc::clone(&stats);
         let worker = thread::Builder::new()
             .name("lilia-checkpoint".into())
-            .spawn(move || run(&connection, page_size, policy, &receive, &shared, cas))
+            .spawn(move || {
+                run(
+                    &connection,
+                    page_size,
+                    policy,
+                    &receive,
+                    &shared,
+                    cas.as_deref(),
+                    wear,
+                    parity,
+                );
+            })
             .map_err(|error| LiliaError::new(ErrorCode::Io, error.to_string(), false))?;
         let service = Self {
             wake: Some(wake),
@@ -86,6 +106,8 @@ impl Checkpointer {
         _policy: CheckpointPolicy,
         _synchronous: &str,
         _cas: Option<Arc<crate::cas::CasEngine>>,
+        _wear: Option<Arc<crate::wear::FlashWearManager>>,
+        _parity: Option<Arc<crate::parity::ParityManager>>,
     ) -> Result<Self> {
         Ok(Self {
             stats: Arc::new(Mutex::new(CheckpointStats::default())),
@@ -114,18 +136,25 @@ impl Drop for Checkpointer {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 fn run(
     connection: &NativeConnection,
     page_size: u64,
     policy: CheckpointPolicy,
     receive: &mpsc::Receiver<()>,
     stats: &Mutex<CheckpointStats>,
-    cas: Option<Arc<crate::cas::CasEngine>>,
+    cas: Option<&crate::cas::CasEngine>,
+    wear: Option<Arc<crate::wear::FlashWearManager>>,
+    parity: Option<Arc<crate::parity::ParityManager>>,
 ) {
-    let interval = Duration::from_millis(policy.interval_ms);
     let mut tick = Instant::now();
     let mut defer_until_tick = false;
     loop {
+        let current_interval_ms = wear.as_ref().map_or(policy.interval_ms, |w| {
+            w.adaptive_interval(policy.interval_ms)
+        });
+        let interval = Duration::from_millis(current_interval_ms);
+
         if matches!(
             receive.recv_timeout(interval.saturating_sub(tick.elapsed())),
             Err(mpsc::RecvTimeoutError::Disconnected)
@@ -150,10 +179,26 @@ fn run(
                 stats.checkpointed_frames = copied;
                 stats.last_error = None;
                 defer_until_tick = busy != 0 || (log >= 0 && copied < log);
+
+                if copied > 0 {
+                    let frame_bytes = page_size.saturating_add(24);
+                    let copied_bytes = u64::try_from(copied)
+                        .unwrap_or(0)
+                        .saturating_mul(frame_bytes);
+                    if let Some(w) = wear.as_ref() {
+                        w.record_db_write(copied_bytes);
+                        w.record_fsync();
+                    }
+                    if let Some(p) = parity.as_ref() {
+                        let _ = p.sync_all();
+                    }
+                }
+
                 if defer_until_tick {
                     stats.incomplete = stats.incomplete.saturating_add(1);
-                } else if let Some(ref cas_engine) = cas {
-                    if cas_engine.options().enabled && cas_engine.options().auto_purge_on_checkpoint {
+                } else if let Some(cas_engine) = cas {
+                    if cas_engine.options().enabled && cas_engine.options().auto_purge_on_checkpoint
+                    {
                         let _ = crate::cas::purge_orphan_blobs(connection, cas_engine);
                     }
                 }
@@ -178,7 +223,12 @@ fn maybe_checkpoint(
     let outstanding = u64::try_from(log.saturating_sub(copied)).unwrap_or(0);
     // WAL frames contain a page plus a 24-byte header. Allocated file length may
     // stay large after checkpoint/reuse and must not trigger repeated checkpoints.
-    if !elapsed && outstanding.saturating_mul(page_size.saturating_add(24)) < limit {
+    let frame_bytes = page_size.saturating_add(24);
+    let outstanding_bytes = outstanding.saturating_mul(frame_bytes);
+    let wal_bytes = u64::try_from(log).unwrap_or(0).saturating_mul(frame_bytes);
+    // Past the writer limit, the writer that sent this notification checkpoints itself: competing
+    // for the checkpoint lock would only make its attempt fail. Interval ticks always run.
+    if !elapsed && (outstanding_bytes < limit || wal_bytes >= writer_wal_limit(limit)) {
         return Ok(None);
     }
     state(connection, "PRAGMA wal_checkpoint(PASSIVE)").map(Some)

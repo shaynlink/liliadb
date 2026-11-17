@@ -21,7 +21,6 @@ mod tests;
 pub use causality::{detect_causality, CausalRelation};
 pub use clock::{HybridClock, DEFAULT_MAX_DRIFT_MS};
 pub use merge::{
-    three_way_merge, ConflictRecord, ConflictResolutionStrategy, FieldConflict,
-    ThreeWayMergeResult,
+    three_way_merge, ConflictRecord, ConflictResolutionStrategy, FieldConflict, ThreeWayMergeResult,
 };
 pub use timestamp::{now_ms, Hlc, HlcError};

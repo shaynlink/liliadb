@@ -6,9 +6,7 @@ pub use lilia_core::rules::{
     interpolate_value, Action, Rule, RuleBuilder, RuleContext, SlidingWindow, TriggerMode,
     WindowCondition,
 };
-use lilia_core::{
-    parse_expr, BatchOperation, ErrorCode, Expr, LiliaError, Result,
-};
+use lilia_core::{parse_expr, BatchOperation, ErrorCode, Expr, LiliaError, Result};
 use lilia_sqlite_native::{NativeConnection, NativeTransaction};
 use serde_json::Value;
 
@@ -36,6 +34,8 @@ pub struct CompiledRule {
 }
 
 impl CompiledRule {
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn compile(name: &str, rule: Rule) -> Result<Self> {
         let compiled_expr = parse_expr(&rule.when)?;
         let target = if let Some(ref t) = rule.target {
@@ -72,17 +72,16 @@ impl RuleEngine {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.rules
-            .read()
-            .map(|r| r.is_empty())
-            .unwrap_or(true)
+        self.rules.read().map_or(true, |r| r.is_empty())
     }
 
     /// Load persisted rules from `_lilia_rules`.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn load_from_connection(&self, conn: &NativeConnection) -> Result<()> {
-        let mut stmt = conn.prepare(
-            "SELECT name, definition FROM _lilia_rules WHERE enabled = 1;",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT name, definition FROM _lilia_rules WHERE enabled = 1;")?;
 
         let mut loaded = Vec::new();
         while stmt.step()? {
@@ -103,11 +102,19 @@ impl RuleEngine {
     }
 
     /// Register and persist a rule.
-    pub fn register(&self, conn: &NativeConnection, name: &str, rule: Rule) -> Result<()> {
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` errors detected here, and propagates errors from the
+    /// operations it performs.
+    pub fn register(&self, conn: &NativeConnection, name: &str, rule: &Rule) -> Result<()> {
         validate_name("rule_name", name)?;
         let compiled = CompiledRule::compile(name, rule.clone())?;
-        let def_json = serde_json::to_string(&rule).map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid rule json: {e}"), false)
+        let def_json = serde_json::to_string(rule).map_err(|e| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid rule json: {e}"),
+                false,
+            )
         })?;
 
         let mut stmt = conn.prepare(
@@ -126,6 +133,9 @@ impl RuleEngine {
     }
 
     /// Unregister a rule and remove its CEP window history.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn unregister(&self, conn: &NativeConnection, name: &str) -> Result<bool> {
         let mut stmt = conn.prepare("DELETE FROM _lilia_rules WHERE name = ?1;")?;
         stmt.bind_text_static(1, name)?;
@@ -134,7 +144,8 @@ impl RuleEngine {
         let deleted = conn.changes() > 0;
 
         if deleted {
-            let mut cep_del = conn.prepare("DELETE FROM _lilia_cep_window_events WHERE rule_name = ?1;")?;
+            let mut cep_del =
+                conn.prepare("DELETE FROM _lilia_cep_window_events WHERE rule_name = ?1;")?;
             cep_del.bind_text_static(1, name)?;
             let _ = cep_del.step();
         }
@@ -146,11 +157,7 @@ impl RuleEngine {
     /// Retrieve a registered rule definition by name.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Rule> {
-        self.rules
-            .read()
-            .ok()?
-            .get(name)
-            .map(|c| c.rule.clone())
+        self.rules.read().ok()?.get(name).map(|c| c.rule.clone())
     }
 
     /// List all registered rules.
@@ -158,18 +165,16 @@ impl RuleEngine {
     pub fn list(&self) -> Vec<(String, Rule)> {
         self.rules
             .read()
-            .map(|r| {
-                r.iter()
-                    .map(|(k, v)| (k.clone(), v.rule.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
+            .map_or_default(|r| r.iter().map(|(k, v)| (k.clone(), v.rule.clone())).collect())
     }
 
     /// Clear all rules.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn clear(&self, conn: &NativeConnection) -> Result<usize> {
         conn.exec("DELETE FROM _lilia_rules;")?;
-        let count = conn.changes() as usize;
+        let count = usize::try_from(conn.changes()).unwrap_or_default();
         conn.exec("DELETE FROM _lilia_cep_window_events;")?;
 
         if let Ok(mut r) = self.rules.write() {
@@ -215,11 +220,7 @@ impl RuleEngine {
     }
 
     fn remove_compiled(&self, name: &str) {
-        let removed = self
-            .rules
-            .write()
-            .ok()
-            .and_then(|mut r| r.remove(name));
+        let removed = self.rules.write().ok().and_then(|mut r| r.remove(name));
 
         if let Some(arc) = removed {
             if arc.target.is_empty() {
@@ -252,6 +253,10 @@ impl RuleEngine {
     ///
     /// Evaluates both simple reactive rules and temporal sliding window CEP patterns.
     /// Returns synthesized [`BatchOperation`]s to be applied in the same transaction.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn evaluate_in_transaction(
         &self,
         tx: &mut NativeTransaction<'_>,
@@ -264,16 +269,10 @@ impl RuleEngine {
 
         let (collection, key, id, json_val, raw_bytes) = match op {
             BatchOperation::JsonPut {
-                space,
-                id,
-                value,
-                ..
+                space, id, value, ..
             }
             | BatchOperation::JsonPutHlc {
-                space,
-                id,
-                value,
-                ..
+                space, id, value, ..
             } => (space.as_str(), id.as_str(), id.as_str(), Some(value), None),
             BatchOperation::JsonDelete { space, id, .. } => {
                 (space.as_str(), id.as_str(), id.as_str(), None, None)
@@ -285,7 +284,13 @@ impl RuleEngine {
                 ..
             } => {
                 let k_str = std::str::from_utf8(key).unwrap_or("");
-                (namespace.as_str(), k_str, k_str, None, Some((key.as_slice(), value.as_slice())))
+                (
+                    namespace.as_str(),
+                    k_str,
+                    k_str,
+                    None,
+                    Some((key.as_slice(), value.as_slice())),
+                )
             }
             BatchOperation::KvDelete { namespace, key, .. } => {
                 let k_str = std::str::from_utf8(key).unwrap_or("");
@@ -318,11 +323,18 @@ impl RuleEngine {
 
                 // Partition key resolution
                 let partition_key = match &window.partition_by {
-                    Some(expr) if expr == "$key" || expr == "$id" || expr == "key" => key.to_string(),
+                    Some(expr) if expr == "$key" || expr == "$id" || expr == "key" => {
+                        key.to_string()
+                    }
                     Some(expr) => {
                         if let Some(val) = json_val {
-                            let clean = expr.trim_start_matches("$event.").trim_start_matches(&format!("{collection}."));
-                            val.get(clean).and_then(|v| v.as_str()).unwrap_or(key).to_string()
+                            let clean = expr
+                                .trim_start_matches("$event.")
+                                .trim_start_matches(&format!("{collection}."));
+                            val.get(clean)
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(key)
+                                .to_string()
                         } else {
                             key.to_string()
                         }
@@ -331,16 +343,14 @@ impl RuleEngine {
                 };
 
                 // Extract numeric value if needed
-                let event_val = json_val.and_then(|v| {
-                    match &window.condition {
-                        WindowCondition::SumGreaterThan { field, .. }
-                        | WindowCondition::AvgGreaterThan { field, .. }
-                        | WindowCondition::MaxGreaterThan { field, .. }
-                        | WindowCondition::MinLessThan { field, .. } => {
-                            v.get(field).and_then(Value::as_f64)
-                        }
-                        _ => None,
+                let event_val = json_val.and_then(|v| match &window.condition {
+                    WindowCondition::SumGreaterThan { field, .. }
+                    | WindowCondition::AvgGreaterThan { field, .. }
+                    | WindowCondition::MaxGreaterThan { field, .. }
+                    | WindowCondition::MinLessThan { field, .. } => {
+                        v.get(field).and_then(Value::as_f64)
                     }
+                    _ => None,
                 });
 
                 // Query window state prior to insertion for edge-triggering
@@ -350,14 +360,7 @@ impl RuleEngine {
                 let prev_satisfied = evaluate_window_condition(&window.condition, prev_stats);
 
                 // Insert event into CEP window state
-                insert_cep_event(
-                    tx,
-                    &rule.name,
-                    &partition_key,
-                    now,
-                    event_val,
-                    json_val,
-                )?;
+                insert_cep_event(tx, &rule.name, &partition_key, now, event_val, json_val)?;
 
                 // Prune expired events
                 prune_cep_events(tx, &rule.name, &partition_key, now, window.duration_ms)?;
@@ -419,7 +422,7 @@ fn query_window_stats(
     now: i64,
     duration_ms: u64,
 ) -> Result<WindowStats> {
-    let cutoff = now.saturating_sub(duration_ms as i64);
+    let cutoff = now.saturating_sub(i64::try_from(duration_ms).unwrap_or(i64::MAX));
     let mut stmt = tx.conn().prepare(
         "SELECT COUNT(*), SUM(event_value), AVG(event_value), MIN(event_value), MAX(event_value) \
          FROM _lilia_cep_window_events \
@@ -430,12 +433,34 @@ fn query_window_stats(
     stmt.bind_int64(3, cutoff)?;
 
     if stmt.step()? {
-        let count = stmt.column_int64(0) as u64;
-        let sum = if count > 0 { Some(stmt.column_double(1)) } else { None };
-        let avg = if count > 0 { Some(stmt.column_double(2)) } else { None };
-        let min = if count > 0 { Some(stmt.column_double(3)) } else { None };
-        let max = if count > 0 { Some(stmt.column_double(4)) } else { None };
-        Ok(WindowStats { count, sum, avg, min, max })
+        let count = u64::try_from(stmt.column_int64(0)).unwrap_or_default();
+        let sum = if count > 0 {
+            Some(stmt.column_double(1))
+        } else {
+            None
+        };
+        let avg = if count > 0 {
+            Some(stmt.column_double(2))
+        } else {
+            None
+        };
+        let min = if count > 0 {
+            Some(stmt.column_double(3))
+        } else {
+            None
+        };
+        let max = if count > 0 {
+            Some(stmt.column_double(4))
+        } else {
+            None
+        };
+        Ok(WindowStats {
+            count,
+            sum,
+            avg,
+            min,
+            max,
+        })
     } else {
         Ok(WindowStats::default())
     }
@@ -476,7 +501,7 @@ fn prune_cep_events(
     now: i64,
     duration_ms: u64,
 ) -> Result<()> {
-    let cutoff = now.saturating_sub(duration_ms as i64);
+    let cutoff = now.saturating_sub(i64::try_from(duration_ms).unwrap_or(i64::MAX));
     let mut stmt = tx.conn().prepare(
         "DELETE FROM _lilia_cep_window_events \
          WHERE rule_name = ?1 AND partition_key = ?2 AND event_timestamp_ms < ?3;",
@@ -489,20 +514,24 @@ fn prune_cep_events(
     Ok(())
 }
 
-fn evaluate_window_condition(
-    cond: &WindowCondition,
-    stats: WindowStats,
-) -> bool {
+fn evaluate_window_condition(cond: &WindowCondition, stats: WindowStats) -> bool {
     match cond {
         WindowCondition::CountGreaterThan(thresh) => stats.count > *thresh,
         WindowCondition::CountGreaterOrEqual(thresh) => stats.count >= *thresh,
-        WindowCondition::SumGreaterThan { threshold, .. } => stats.sum.is_some_and(|s| s > *threshold),
-        WindowCondition::AvgGreaterThan { threshold, .. } => stats.avg.is_some_and(|a| a > *threshold),
-        WindowCondition::MaxGreaterThan { threshold, .. } => stats.max.is_some_and(|m| m > *threshold),
+        WindowCondition::SumGreaterThan { threshold, .. } => {
+            stats.sum.is_some_and(|s| s > *threshold)
+        }
+        WindowCondition::AvgGreaterThan { threshold, .. } => {
+            stats.avg.is_some_and(|a| a > *threshold)
+        }
+        WindowCondition::MaxGreaterThan { threshold, .. } => {
+            stats.max.is_some_and(|m| m > *threshold)
+        }
         WindowCondition::MinLessThan { threshold, .. } => stats.min.is_some_and(|m| m < *threshold),
     }
 }
 
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn action_to_batch_operation(
     action: &Action,
     ctx: &RuleContext,
@@ -515,7 +544,8 @@ fn action_to_batch_operation(
         } => {
             let target_coll = interpolate_string(collection, ctx);
             let mut final_doc = interpolate_value(document, ctx);
-            let doc_id = if let Some(id_val) = final_doc.get("_id").or_else(|| final_doc.get("id")) {
+            let doc_id = if let Some(id_val) = final_doc.get("_id").or_else(|| final_doc.get("id"))
+            {
                 if let Some(s) = id_val.as_str() {
                     s.to_string()
                 } else {
@@ -602,7 +632,7 @@ fn action_to_batch_operation(
                 let p_interp = interpolate_value(param, ctx);
                 match p_interp {
                     Value::Null => stmt.bind_null(col)?,
-                    Value::Bool(b) => stmt.bind_int64(col, if b { 1 } else { 0 })?,
+                    Value::Bool(b) => stmt.bind_int64(col, i64::from(b))?,
                     Value::Number(n) => {
                         if let Some(i) = n.as_i64() {
                             stmt.bind_int64(col, i)?;
@@ -627,6 +657,61 @@ fn action_to_batch_operation(
     }
 }
 
+/// Deepest chain of rule actions triggering further rules before the write is refused as a cycle.
+const MAX_RULE_CASCADE_DEPTH: usize = 8;
+
+impl Database {
+    /// Evaluates the reactive rules against `operations` inside `transaction` and applies the
+    /// writes they trigger, level by level, so every action commits or rolls back with its cause.
+    ///
+    /// Both write paths call it: atomic batches and interactive [`crate::Transaction`]s.
+    pub(crate) fn apply_rule_cascade(
+        &self,
+        transaction: &mut NativeTransaction<'_>,
+        operations: &[BatchOperation],
+        now: i64,
+    ) -> Result<()> {
+        if self.rule_engine.is_empty() {
+            return Ok(());
+        }
+        let mut pending = operations.to_vec();
+        for _ in 0..MAX_RULE_CASCADE_DEPTH {
+            if pending.is_empty() {
+                return Ok(());
+            }
+            let level = std::mem::take(&mut pending);
+            for operation in &level {
+                for triggered in
+                    self.rule_engine
+                        .evaluate_in_transaction(transaction, operation, now)?
+                {
+                    crate::transaction::apply(
+                        transaction,
+                        &triggered,
+                        self.codec.as_ref(),
+                        &self.dict_registry,
+                        &self.json_options,
+                        self.hlc.as_ref(),
+                        &self.cas,
+                        self.shard_manager.as_deref(),
+                        Some(self.integrity.as_ref()),
+                    )?;
+                    pending.push(triggered);
+                }
+            }
+        }
+        if pending.is_empty() {
+            Ok(())
+        } else {
+            Err(LiliaError::new(
+                ErrorCode::Conflict,
+                "maximum reactive rule cascade depth exceeded (possible cycle)",
+                false,
+            ))
+        }
+    }
+}
+
 /// Fluent public handle returned by [`crate::Database::rules()`].
 #[derive(Debug, Clone)]
 pub struct RulesManager<'a> {
@@ -640,13 +725,19 @@ impl<'a> RulesManager<'a> {
     }
 
     /// Register a declarative reactive rule or sliding window CEP rule.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn register(&self, name: &str, rule: impl Into<Rule>) -> Result<()> {
         let r = rule.into();
         let writer = self.db.lock_writer()?;
-        self.db.rule_engine.register(&writer, name, r)
+        self.db.rule_engine.register(&writer, name, &r)
     }
 
     /// Unregister a rule by name.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn unregister(&self, name: &str) -> Result<bool> {
         let writer = self.db.lock_writer()?;
         self.db.rule_engine.unregister(&writer, name)
@@ -665,6 +756,9 @@ impl<'a> RulesManager<'a> {
     }
 
     /// Clear all rules.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn clear(&self) -> Result<usize> {
         let writer = self.db.lock_writer()?;
         self.db.rule_engine.clear(&writer)

@@ -6,11 +6,11 @@ use lilia_sqlite_native::StmtSlot;
 
 use crate::storage::{normalize_limit, parse_version, validate_name};
 use crate::Database;
-pub use lilia_core::DictStats;
 use lilia_core::json::BinaryDoc;
+pub use lilia_core::DictStats;
 use lilia_core::{
-    compression::decompress_bytes, json_patch, CollectionKind, ErrorCode, JsonEntry,
-    JsonIndexInfo, JsonRevisionInfo, LiliaError, Result, StorageTier, Version,
+    compression::decompress_bytes, json_patch, CollectionKind, ErrorCode, JsonEntry, JsonIndexInfo,
+    JsonRevisionInfo, LiliaError, Result, StorageTier, Version,
 };
 
 pub(crate) fn json_snapshot_to_entry(
@@ -18,15 +18,19 @@ pub(crate) fn json_snapshot_to_entry(
     id: String,
     value: &serde_json::Value,
     version: u64,
-) -> JsonEntry {
-    JsonEntry::new(space, id, BinaryDoc::from_json_value(value), version.max(1))
+) -> Result<JsonEntry> {
+    Ok(JsonEntry::new(
+        space,
+        id,
+        BinaryDoc::from_json_value(value)?,
+        version.max(1),
+    ))
 }
-
-
 
 #[allow(dead_code)]
 pub const MAGIC_RAW: &[u8; 4] = b"LBJ\x01";
-pub const MAGIC_ZSTD: &[u8; 4] = b"LBZ\x01";
+pub const MAGIC_ZSTD: &[u8; 4] = b"LBZ\x02";
+pub const MAGIC_ZSTD_V1: &[u8; 4] = b"LBZ\x01";
 
 pub(crate) enum EncodedDoc {
     Text(String),
@@ -59,6 +63,7 @@ pub(crate) fn decode_json_value(
         .map_err(|error| LiliaError::new(ErrorCode::Storage, error.to_string(), false))
 }
 
+#[allow(clippy::too_many_arguments)] // the stored row's columns plus the three decoding registries
 pub(crate) fn decode_stored_doc(
     stmt: &lilia_sqlite_native::NativeStatement,
     col_idx: i32,
@@ -81,8 +86,14 @@ pub(crate) fn decode_stored_doc(
         }
         2 => {
             let blob = stmt.column_blob(col_idx);
-            let mut resolved_dict_id = dict_id as u32;
-            let payload = if blob.starts_with(MAGIC_ZSTD) && blob.len() >= 8 {
+            let mut resolved_dict_id = u32::try_from(dict_id).unwrap_or_default();
+            let payload = if blob.starts_with(MAGIC_ZSTD) && blob.len() >= 16 {
+                let embedded_id = u32::from_le_bytes(blob[4..8].try_into().unwrap());
+                if resolved_dict_id == 0 {
+                    resolved_dict_id = embedded_id;
+                }
+                &blob[16..]
+            } else if blob.starts_with(MAGIC_ZSTD_V1) && blob.len() >= 8 {
                 let embedded_id = u32::from_le_bytes(blob[4..8].try_into().unwrap());
                 if resolved_dict_id == 0 {
                     resolved_dict_id = embedded_id;
@@ -110,7 +121,7 @@ pub(crate) fn decode_stored_doc(
         _ => {
             let text = stmt.column_text(col_idx);
             let val = decode_json_value(text, codec)?;
-            lilia_core::json::BinaryDoc::from_json_value(&val)
+            lilia_core::json::BinaryDoc::from_json_value(&val)?
         }
     };
 
@@ -122,7 +133,7 @@ pub(crate) fn decode_stored_doc(
                 keys,
                 lilia_core::DecryptionMode::Tolerant,
             );
-            raw_doc = lilia_core::json::BinaryDoc::from_json_value(&val);
+            raw_doc = lilia_core::json::BinaryDoc::from_json_value(&val)?;
         }
     }
 
@@ -158,14 +169,13 @@ pub(crate) fn encode_doc_for_storage(
     }
 
     if let Some(dict) = dict_registry.get(space) {
-        let compressed = lilia_core::compression::dict::compress_with_dict(
-            doc.as_bytes(),
-            &dict.raw_bytes,
-            3,
-        )?;
-        let mut payload = Vec::with_capacity(8 + compressed.len());
+        let compressed =
+            lilia_core::compression::dict::compress_with_dict(doc.as_bytes(), &dict.raw_bytes, 3)?;
+        let symbol_mask = dict.symbols.compute_doc_signature(doc.as_bytes());
+        let mut payload = Vec::with_capacity(16 + compressed.len());
         payload.extend_from_slice(MAGIC_ZSTD);
         payload.extend_from_slice(&dict.dict_id.to_le_bytes());
+        payload.extend_from_slice(&symbol_mask.to_le_bytes());
         payload.extend_from_slice(&compressed);
         return Ok((EncodedDoc::Blob(payload), 2, i64::from(dict.dict_id)));
     }
@@ -190,15 +200,17 @@ fn doc_matches_query(
             return false;
         } else if let Ok(expr) = lilia_core::parse_expr(k) {
             if let Ok(eval_val) = lilia_core::eval_expr(&expr, doc) {
-                if eval_val.to_index_strings().iter().any(|s| {
-                    match expected_v {
+                if eval_val
+                    .to_index_strings()
+                    .iter()
+                    .any(|s| match expected_v {
                         serde_json::Value::String(exp_s) => s == exp_s,
                         serde_json::Value::Number(n) => s == &n.to_string(),
                         serde_json::Value::Bool(b) => s == &b.to_string(),
                         serde_json::Value::Null => s == "null",
                         _ => false,
-                    }
-                }) {
+                    })
+                {
                     continue;
                 }
             }
@@ -220,18 +232,18 @@ pub(crate) fn index_keys(
     if filter.is_some_and(|predicate| !lilia_core::eval_filter_predicate(predicate, doc)) {
         return Vec::new();
     }
-    lilia_core::eval_expr(expression, doc)
-        .map(|value| value.to_index_strings())
-        .unwrap_or_default()
+    lilia_core::eval_expr(expression, doc).map_or_default(|value| value.to_index_strings())
 }
 
 /// How a `json_find` was served, reported to the auto-tuner.
-#[derive(Debug, Default)]
-pub(crate) struct FindTrace {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FindTrace {
     /// Name of the index that served the lookup; `None` for a full scan.
-    pub(crate) index_used: Option<String>,
+    pub index_used: Option<String>,
     /// Documents read and tested against the query.
-    pub(crate) rows_examined: u64,
+    pub rows_examined: u64,
+    /// Documents eliminated in the compressed domain without decompression.
+    pub compressed_skipped: u64,
 }
 
 fn insert_nested(
@@ -277,7 +289,10 @@ fn match_composite_index(
         let Some(fields) = lilia_core::index_fields(&index.json_path) else {
             continue;
         };
-        if fields.len() < 2 || best.as_ref().is_some_and(|(_, found)| found.len() >= fields.len())
+        if fields.len() < 2
+            || best
+                .as_ref()
+                .is_some_and(|(_, found)| found.len() >= fields.len())
         {
             continue;
         }
@@ -307,21 +322,23 @@ fn match_composite_index(
         insert_nested(&mut shaped, field, (*constrained[field]).clone());
     }
     let expression = lilia_core::parse_expr(&index.json_path).ok()?;
-    let probe = BinaryDoc::from_json_value(&serde_json::Value::Object(shaped));
+    let probe = BinaryDoc::from_json_value(&serde_json::Value::Object(shaped)).ok()?;
     match lilia_core::eval_expr(&expression, &probe).ok()? {
-        lilia_core::EvaluatedValue::String(key) => Some((index.clone(), serde_json::Value::String(key))),
+        lilia_core::EvaluatedValue::String(key) => {
+            Some((index.clone(), serde_json::Value::String(key)))
+        }
         _ => None,
     }
 }
 
 impl Database {
-    fn read_json_entry(&self, space: &str, id: &str) -> Result<Option<JsonEntry>> {
+    pub(crate) fn read_json_entry(&self, space: &str, id: &str) -> Result<Option<JsonEntry>> {
         validate_name("space", space)?;
         validate_name("id", id)?;
         let tier = self.catalog.tier_for(CollectionKind::Json, space);
         if tier == StorageTier::Memory {
             let now = crate::storage::now_ms();
-            return Ok(self
+            return self
                 .mem_engine
                 .json
                 .get(space, id.as_bytes(), now, true)
@@ -333,7 +350,8 @@ impl Database {
                         lilia_core::DecryptionMode::Tolerant,
                     );
                     json_snapshot_to_entry(space, id.to_owned(), &val, snap.version)
-                }));
+                })
+                .transpose();
         }
         if tier == StorageTier::Buffered {
             let now = crate::storage::now_ms();
@@ -343,7 +361,7 @@ impl Database {
                 .json
                 .get(space, id.as_bytes(), now, false)
             {
-                return Ok(cell
+                return cell
                     .value
                     .state
                     .map(|(val, seq, _)| {
@@ -354,7 +372,8 @@ impl Database {
                             lilia_core::DecryptionMode::Tolerant,
                         );
                         json_snapshot_to_entry(space, id.to_owned(), &v, seq)
-                    }));
+                    })
+                    .transpose();
             }
         }
         let mut connection = self.read_lock()?;
@@ -384,8 +403,67 @@ impl Database {
         Ok(entry)
     }
 
+    pub(crate) fn is_json_doc_authorized(
+        &self,
+        space: &str,
+        doc: &serde_json::Value,
+        action: lilia_core::security::PolicyAction,
+    ) -> bool {
+        let policies = self.security_registry.policies_for_table(space);
+        if policies.is_empty() {
+            return true;
+        }
+        let sec_ctx = crate::security::get_active_context();
+        for np in policies {
+            let applies = match action {
+                lilia_core::security::PolicyAction::Select => np.policy.action.applies_to_read(),
+                lilia_core::security::PolicyAction::Insert
+                | lilia_core::security::PolicyAction::Update
+                | lilia_core::security::PolicyAction::Delete => np.policy.action.applies_to_write(),
+                _ => true,
+            };
+            if !applies {
+                continue;
+            }
+            if let Ok(expr) = lilia_core::parse_expr(&np.policy.condition) {
+                if !lilia_core::security::eval_security_condition(&expr, doc, sec_ctx.as_ref()) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    pub(crate) fn mask_json_entry(&self, space: &str, entry: JsonEntry) -> Result<JsonEntry> {
+        let rules = self.security_registry.masking_rules_for_table(space);
+        if rules.is_empty() {
+            return Ok(entry);
+        }
+        let sec_ctx = crate::security::get_active_context();
+        let mut val = entry.value();
+        lilia_core::security::mask_document(&mut val, &rules, sec_ctx.as_ref(), |exempt, c| {
+            lilia_core::security::eval_exemption_condition(exempt, c)
+        });
+        Ok(JsonEntry::new(
+            space,
+            entry.id,
+            lilia_core::json::BinaryDoc::from_json_value(&val)?,
+            entry.version,
+        ))
+    }
+
     pub fn json_get(&self, space: &str, id: &str) -> Result<Option<JsonEntry>> {
-        self.read_json_entry(space, id)
+        let Some(entry) = self.read_json_entry(space, id)? else {
+            return Ok(None);
+        };
+        if !self.is_json_doc_authorized(
+            space,
+            &entry.value(),
+            lilia_core::security::PolicyAction::Select,
+        ) {
+            return Ok(None);
+        }
+        self.mask_json_entry(space, entry).map(Some)
     }
 
     pub fn json_extract(
@@ -394,33 +472,78 @@ impl Database {
         id: &str,
         path: &str,
     ) -> Result<Option<serde_json::Value>> {
-        Ok(self
-            .read_json_entry(space, id)?
-            .and_then(|entry| entry.doc.extract(path).map(|v| v.to_json_value())))
+        let Some(entry) = self.read_json_entry(space, id)? else {
+            return Ok(None);
+        };
+        if !self.is_json_doc_authorized(
+            space,
+            &entry.value(),
+            lilia_core::security::PolicyAction::Select,
+        ) {
+            return Ok(None);
+        }
+        let masked = self.mask_json_entry(space, entry)?;
+        Ok(masked.doc.extract(path).map(|v| v.to_json_value()))
     }
 
     pub fn json_extract_str(&self, space: &str, id: &str, path: &str) -> Result<Option<String>> {
-        Ok(self
-            .read_json_entry(space, id)?
-            .and_then(|entry| entry.doc.extract_str(path).map(ToOwned::to_owned)))
+        let Some(entry) = self.read_json_entry(space, id)? else {
+            return Ok(None);
+        };
+        if !self.is_json_doc_authorized(
+            space,
+            &entry.value(),
+            lilia_core::security::PolicyAction::Select,
+        ) {
+            return Ok(None);
+        }
+        let masked = self.mask_json_entry(space, entry)?;
+        Ok(masked.doc.extract_str(path).map(ToOwned::to_owned))
     }
 
     pub fn json_extract_i64(&self, space: &str, id: &str, path: &str) -> Result<Option<i64>> {
-        Ok(self
-            .read_json_entry(space, id)?
-            .and_then(|entry| entry.doc.extract_i64(path)))
+        let Some(entry) = self.read_json_entry(space, id)? else {
+            return Ok(None);
+        };
+        if !self.is_json_doc_authorized(
+            space,
+            &entry.value(),
+            lilia_core::security::PolicyAction::Select,
+        ) {
+            return Ok(None);
+        }
+        let masked = self.mask_json_entry(space, entry)?;
+        Ok(masked.doc.extract_i64(path))
     }
 
     pub fn json_extract_f64(&self, space: &str, id: &str, path: &str) -> Result<Option<f64>> {
-        Ok(self
-            .read_json_entry(space, id)?
-            .and_then(|entry| entry.doc.extract_f64(path)))
+        let Some(entry) = self.read_json_entry(space, id)? else {
+            return Ok(None);
+        };
+        if !self.is_json_doc_authorized(
+            space,
+            &entry.value(),
+            lilia_core::security::PolicyAction::Select,
+        ) {
+            return Ok(None);
+        }
+        let masked = self.mask_json_entry(space, entry)?;
+        Ok(masked.doc.extract_f64(path))
     }
 
     pub fn json_extract_bool(&self, space: &str, id: &str, path: &str) -> Result<Option<bool>> {
-        Ok(self
-            .read_json_entry(space, id)?
-            .and_then(|entry| entry.doc.extract_bool(path)))
+        let Some(entry) = self.read_json_entry(space, id)? else {
+            return Ok(None);
+        };
+        if !self.is_json_doc_authorized(
+            space,
+            &entry.value(),
+            lilia_core::security::PolicyAction::Select,
+        ) {
+            return Ok(None);
+        }
+        let masked = self.mask_json_entry(space, entry)?;
+        Ok(masked.doc.extract_bool(path))
     }
 
     fn collect_json_scan_rows(
@@ -429,6 +552,19 @@ impl Database {
         prefix: Option<&str>,
         after: Option<&str>,
         limit: u32,
+    ) -> Result<Vec<JsonEntry>> {
+        self.collect_json_scan_rows_filtered(space, prefix, after, limit, None, None)
+    }
+
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
+    fn collect_json_scan_rows_filtered(
+        &self,
+        space: &str,
+        prefix: Option<&str>,
+        after: Option<&str>,
+        limit: u32,
+        symbol_filter: Option<u64>,
+        mut skipped_counter: Option<&mut u64>,
     ) -> Result<Vec<JsonEntry>> {
         validate_name("space", space)?;
         let limit_i64 = normalize_limit(limit);
@@ -459,12 +595,15 @@ impl Database {
                 if prefix.is_some_and(|p| !id.starts_with(p)) {
                     continue;
                 }
-                entries.push(json_snapshot_to_entry(
+                if !self.is_json_doc_authorized(
                     space,
-                    id,
                     &snap.value,
-                    snap.version,
-                ));
+                    lilia_core::security::PolicyAction::Select,
+                ) {
+                    continue;
+                }
+                let entry = json_snapshot_to_entry(space, id, &snap.value, snap.version)?;
+                entries.push(self.mask_json_entry(space, entry)?);
                 if entries.len() >= limit_usize {
                     break;
                 }
@@ -506,8 +645,24 @@ impl Database {
                 stmt.bind_text_static(4, &like_pattern)?;
                 stmt.bind_int64(5, fetch_limit)?;
                 while stmt.step()? {
-                    let id = stmt.column_text(0).to_string();
                     let format = stmt.column_int64(2);
+                    if let Some(query_sig) = symbol_filter {
+                        if format == 2 {
+                            let blob = stmt.column_blob(1);
+                            if let Some(doc_mask) =
+                                lilia_core::compression::dict::extract_symbol_signature(blob)
+                            {
+                                if (doc_mask & query_sig) != query_sig {
+                                    if let Some(ref mut c) = skipped_counter {
+                                        **c += 1;
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    let id = stmt.column_text(0).to_string();
                     let dict_id = stmt.column_int64(3);
                     let version = parse_version(stmt.column_int64(4))?;
                     let doc = decode_stored_doc(
@@ -529,8 +684,24 @@ impl Database {
                 stmt.bind_text_static(2, after.unwrap_or(""))?;
                 stmt.bind_int64(3, fetch_limit)?;
                 while stmt.step()? {
-                    let id = stmt.column_text(0).to_string();
                     let format = stmt.column_int64(2);
+                    if let Some(query_sig) = symbol_filter {
+                        if format == 2 {
+                            let blob = stmt.column_blob(1);
+                            if let Some(doc_mask) =
+                                lilia_core::compression::dict::extract_symbol_signature(blob)
+                            {
+                                if (doc_mask & query_sig) != query_sig {
+                                    if let Some(ref mut c) = skipped_counter {
+                                        **c += 1;
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    let id = stmt.column_text(0).to_string();
                     let dict_id = stmt.column_int64(3);
                     let version = parse_version(stmt.column_int64(4))?;
                     let doc = decode_stored_doc(
@@ -560,7 +731,7 @@ impl Database {
                 Some((val, seq, _)) => {
                     merged.insert(
                         id.clone(),
-                        Some(json_snapshot_to_entry(space, id, &val, seq)),
+                        Some(json_snapshot_to_entry(space, id, &val, seq)?),
                     );
                 }
                 None => {
@@ -569,7 +740,20 @@ impl Database {
             }
         }
 
-        Ok(merged.into_values().flatten().take(limit_usize).collect())
+        let mut out = Vec::with_capacity(limit_usize.min(merged.len()));
+        for entry in merged.into_values().flatten() {
+            if self.is_json_doc_authorized(
+                space,
+                &entry.value(),
+                lilia_core::security::PolicyAction::Select,
+            ) {
+                out.push(self.mask_json_entry(space, entry)?);
+                if out.len() >= limit_usize {
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub fn json_scan(
@@ -805,8 +989,18 @@ impl Database {
         after_id: Option<&str>,
         limit: u32,
     ) -> Result<Vec<JsonEntry>> {
-        let entries = self.scan_by_index_raw(space, index_name, value, after_id, limit)?;
+        let raw = self.scan_by_index_raw(space, index_name, value, after_id, limit)?;
         self.autotune.record_index_use(space, index_name);
+        let mut entries = Vec::new();
+        for entry in raw {
+            if self.is_json_doc_authorized(
+                space,
+                &entry.value(),
+                lilia_core::security::PolicyAction::Select,
+            ) {
+                entries.push(self.mask_json_entry(space, entry)?);
+            }
+        }
         Ok(entries)
     }
 
@@ -861,7 +1055,7 @@ impl Database {
                     &self.key_registry,
                     lilia_core::DecryptionMode::Tolerant,
                 );
-                let doc = BinaryDoc::from_json_value(&val);
+                let doc = BinaryDoc::from_json_value(&val)?;
                 if let Some(ref filt) = compiled_filter {
                     if !lilia_core::eval_filter_predicate(filt, &doc) {
                         continue;
@@ -932,24 +1126,92 @@ impl Database {
         after_id: Option<&str>,
         limit: u32,
     ) -> Result<Vec<JsonEntry>> {
+        self.json_find_with_trace(space, query, after_id, limit)
+            .map(|(entries, _)| entries)
+    }
+
+    /// Executes a full-collection scan using native Cranelift JIT compilation for
+    /// accelerated hardware register predicate evaluation.
+    pub fn json_filter_predicate_scan(
+        &self,
+        space: &str,
+        predicate: &lilia_core::Expr,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<JsonEntry>> {
+        validate_name("space", space)?;
+        let max_results = usize::try_from(normalize_limit(limit)).unwrap_or(usize::MAX);
+        let compiled = self.jit_cache.get_or_compile(predicate)?;
+
+        let mut results = Vec::new();
+        let mut cursor = after_id.map(ToOwned::to_owned);
+        let mut match_buf = Vec::new();
+
+        while results.len() < max_results {
+            let batch = self.collect_json_scan_rows_filtered(
+                space,
+                None,
+                cursor.as_deref(),
+                1024,
+                None,
+                None,
+            )?;
+            if batch.is_empty() {
+                break;
+            }
+
+            match_buf.clear();
+            let doc_refs: Vec<&BinaryDoc> = batch.iter().map(|e| &e.doc).collect();
+            compiled.eval_batch(&doc_refs, &mut match_buf);
+
+            let match_set: std::collections::HashSet<usize> = match_buf.drain(..).collect();
+            for (i, entry) in batch.into_iter().enumerate() {
+                cursor = Some(entry.id.clone());
+                if match_set.contains(&i) {
+                    results.push(entry);
+                    if results.len() == max_results {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Executes `json_find` and returns both matched documents and a [`FindTrace`]
+    /// reporting index usage, examined rows, and compressed skips.
+    pub fn json_find_with_trace(
+        &self,
+        space: &str,
+        query: &serde_json::Map<String, serde_json::Value>,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> Result<(Vec<JsonEntry>, FindTrace)> {
         validate_name("space", space)?;
         if query.is_empty() {
-            return self.json_scan(space, after_id, limit);
+            let entries = self.json_scan(space, after_id, limit)?;
+            let rows = entries.len() as u64;
+            let trace = FindTrace {
+                index_used: None,
+                rows_examined: rows,
+                compressed_skipped: 0,
+            };
+            return Ok((entries, trace));
         }
         if !self.autotune.records(&self.catalog, space) {
-            return self
-                .json_find_traced(space, query, after_id, limit)
-                .map(|(entries, _)| entries);
+            return self.json_find_traced(space, query, after_id, limit);
         }
         let started = std::time::Instant::now();
         let (entries, trace) = self.json_find_traced(space, query, after_id, limit)?;
         self.autotune
             .record_find(space, query, &trace, entries.len(), started.elapsed());
-        Ok(entries)
+        Ok((entries, trace))
     }
 
     /// Executes `json_find` and reports how it was served (index or scan) and how many documents
     /// were examined, for the auto-tuner.
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     fn json_find_traced(
         &self,
         space: &str,
@@ -961,63 +1223,83 @@ impl Database {
         let max_results = usize::try_from(normalize_limit(limit)).unwrap_or(usize::MAX);
         let mut indexes = self.list_json_indexes(space)?;
         indexes.retain(|index| !self.autotune.is_building(space, &index.index_name));
-        let query_doc = lilia_core::json::BinaryDoc::from_json_value(&serde_json::Value::Object(query.clone()));
+        let query_doc = lilia_core::json::BinaryDoc::from_json_value(&serde_json::Value::Object(
+            query.clone(),
+        ))?;
         let fle_policy = self
             .catalog
             .spec_for(CollectionKind::Json, space)
             .fle_policy;
 
         let matched_index = match_composite_index(&indexes, query, &query_doc, fle_policy.as_ref())
-            .or_else(|| query.iter().find_map(|(k, v)| {
-            for idx in &indexes {
-                // If index is partial, ensure query satisfies the filter predicate
-                if let Some(ref filt_str) = idx.filter {
-                    if let Ok(filt_expr) = lilia_core::parse_expr(filt_str) {
-                        if !lilia_core::eval_filter_predicate(&filt_expr, &query_doc) {
-                            continue;
+            .or_else(|| {
+                query.iter().find_map(|(k, v)| {
+                    for idx in &indexes {
+                        // If index is partial, ensure query satisfies the filter predicate
+                        if let Some(ref filt_str) = idx.filter {
+                            if let Ok(filt_expr) = lilia_core::parse_expr(filt_str) {
+                                if !lilia_core::eval_filter_predicate(&filt_expr, &query_doc) {
+                                    continue;
+                                }
+                            }
                         }
-                    }
-                }
 
-                // 1. Direct name match
-                if &idx.index_name == k {
-                    return Some((idx.clone(), v.clone()));
-                }
+                        // 1. Direct name match
+                        if &idx.index_name == k {
+                            return Some((idx.clone(), v.clone()));
+                        }
 
-                // 2. Direct path or expression match
-                let matches_exact_path = &idx.json_path == k;
-                let matches_prefixed = idx.json_path.strip_prefix("$.") == Some(k.as_str());
-                let matches_slash = idx.json_path.strip_prefix('/') == Some(k.as_str());
-                if matches_exact_path || matches_prefixed || matches_slash {
-                    return Some((idx.clone(), v.clone()));
-                }
+                        // 2. Direct path or expression match
+                        let matches_exact_path = &idx.json_path == k;
+                        let matches_prefixed = idx.json_path.strip_prefix("$.") == Some(k.as_str());
+                        let matches_slash = idx.json_path.strip_prefix('/') == Some(k.as_str());
+                        if matches_exact_path || matches_prefixed || matches_slash {
+                            return Some((idx.clone(), v.clone()));
+                        }
 
-                // 3. Double solution: Transparent expression transformation match
-                // If index is e.g. lower($.email) and query is email: "Alice@example.com"
-                if let Ok(expr) = lilia_core::parse_expr(&idx.json_path) {
-                    if let lilia_core::json::Expr::FunctionCall { ref name, ref args } = expr {
-                        if args.len() == 1 {
-                            if let lilia_core::json::Expr::Path(ref inner_path) = args[0] {
-                                let inner_clean = inner_path.trim_start_matches("$.").trim_start_matches('/');
+                        // 3. Double solution: Transparent expression transformation match
+                        // If index is e.g. lower($.email) and query is email: "Alice@example.com"
+                        if let Ok(lilia_core::json::Expr::FunctionCall { name, args }) =
+                            lilia_core::parse_expr(&idx.json_path)
+                        {
+                            if let [lilia_core::json::Expr::Path(inner_path)] = args.as_slice() {
+                                let inner_clean =
+                                    inner_path.trim_start_matches("$.").trim_start_matches('/');
                                 let k_clean = k.trim_start_matches("$.").trim_start_matches('/');
                                 if inner_clean == k_clean {
-                                    let dummy_doc = lilia_core::json::BinaryDoc::from_json_value(&serde_json::json!({
-                                        "val": v
-                                    }));
                                     let transform_expr = lilia_core::json::Expr::FunctionCall {
-                                        name: name.clone(),
-                                        args: vec![lilia_core::json::Expr::Path("$.val".to_string())],
+                                        name,
+                                        args: vec![lilia_core::json::Expr::Path(
+                                            "$.val".to_string(),
+                                        )],
                                     };
-                                    if let Ok(transformed) = lilia_core::eval_expr(&transform_expr, &dummy_doc) {
+                                    let transformed = lilia_core::json::BinaryDoc::from_json_value(
+                                        &serde_json::json!({ "val": v }),
+                                    )
+                                    .and_then(|dummy_doc| {
+                                        lilia_core::eval_expr(&transform_expr, &dummy_doc)
+                                    });
+                                    if let Ok(transformed) = transformed {
                                         let transformed_v = match transformed {
-                                            lilia_core::EvaluatedValue::String(s) => serde_json::Value::String(s),
-                                            lilia_core::EvaluatedValue::Int(i) => serde_json::Value::Number(i.into()),
-                                            lilia_core::EvaluatedValue::Float(f) => serde_json::Number::from_f64(f)
-                                                .map(serde_json::Value::Number)
-                                                .unwrap_or(serde_json::Value::Null),
-                                            lilia_core::EvaluatedValue::Bool(b) => serde_json::Value::Bool(b),
-                                            lilia_core::EvaluatedValue::Null => serde_json::Value::Null,
-                                            _ => v.clone(),
+                                            lilia_core::EvaluatedValue::String(s) => {
+                                                serde_json::Value::String(s)
+                                            }
+                                            lilia_core::EvaluatedValue::Int(i) => {
+                                                serde_json::Value::Number(i.into())
+                                            }
+                                            lilia_core::EvaluatedValue::Float(f) => {
+                                                serde_json::Number::from_f64(f).map_or(
+                                                    serde_json::Value::Null,
+                                                    serde_json::Value::Number,
+                                                )
+                                            }
+                                            lilia_core::EvaluatedValue::Bool(b) => {
+                                                serde_json::Value::Bool(b)
+                                            }
+                                            lilia_core::EvaluatedValue::Null => {
+                                                serde_json::Value::Null
+                                            }
+                                            lilia_core::EvaluatedValue::List(_) => v.clone(),
                                         };
                                         return Some((idx.clone(), transformed_v));
                                     }
@@ -1025,10 +1307,9 @@ impl Database {
                             }
                         }
                     }
-                }
-            }
-            None
-        }));
+                    None
+                })
+            });
 
         let mut results = Vec::new();
         let mut cursor = after_id.map(ToOwned::to_owned);
@@ -1077,14 +1358,19 @@ impl Database {
             };
 
             if query.len() == 1 {
-                let entries = self.scan_by_index_raw(
-                    space,
-                    &idx.index_name,
-                    &val_str,
-                    after_id,
-                    limit,
-                )?;
-                trace.rows_examined = entries.len() as u64;
+                let raw_entries =
+                    self.scan_by_index_raw(space, &idx.index_name, &val_str, after_id, limit)?;
+                trace.rows_examined = raw_entries.len() as u64;
+                let mut entries = Vec::new();
+                for entry in raw_entries {
+                    if self.is_json_doc_authorized(
+                        space,
+                        &entry.value(),
+                        lilia_core::security::PolicyAction::Select,
+                    ) {
+                        entries.push(self.mask_json_entry(space, entry)?);
+                    }
+                }
                 return Ok((entries, trace));
             }
 
@@ -1102,8 +1388,14 @@ impl Database {
                 for entry in batch {
                     trace.rows_examined += 1;
                     cursor = Some(entry.id.clone());
-                    if doc_matches_query(&entry.doc, query) {
-                        results.push(entry);
+                    if doc_matches_query(&entry.doc, query)
+                        && self.is_json_doc_authorized(
+                            space,
+                            &entry.value(),
+                            lilia_core::security::PolicyAction::Select,
+                        )
+                    {
+                        results.push(self.mask_json_entry(space, entry)?);
                         if results.len() == max_results {
                             break;
                         }
@@ -1111,22 +1403,82 @@ impl Database {
                 }
             }
         } else {
+            let query_sig = self.dict_registry.get(space).and_then(|dict| {
+                let mut tokens = Vec::new();
+                for (k, v) in query {
+                    tokens.push(k.as_str());
+                    match v {
+                        serde_json::Value::String(s) => tokens.push(s.as_str()),
+                        serde_json::Value::Bool(b) => {
+                            tokens.push(if *b { "true" } else { "false" });
+                        }
+                        _ => {}
+                    }
+                }
+                let sig = dict.symbols.query_signature(&tokens);
+                if sig == 0 {
+                    None
+                } else {
+                    Some(sig)
+                }
+            });
+
+            let maybe_compiled_predicate = query.iter().find_map(|(k, v)| {
+                if v == &serde_json::Value::Bool(true) || v == &serde_json::Value::Null {
+                    if let Ok(expr) = lilia_core::parse_expr(k) {
+                        if lilia_core::json::can_jit_expr(&expr) {
+                            return self.jit_cache.get_or_compile(&expr).ok();
+                        }
+                    }
+                }
+                None
+            });
+
+            let mut skipped = 0u64;
+            let mut match_buf = Vec::new();
             while results.len() < max_results {
-                let batch = self.json_scan(space, cursor.as_deref(), 100)?;
+                let batch = self.collect_json_scan_rows_filtered(
+                    space,
+                    None,
+                    cursor.as_deref(),
+                    100,
+                    query_sig,
+                    Some(&mut skipped),
+                )?;
                 if batch.is_empty() {
                     break;
                 }
-                for entry in batch {
-                    trace.rows_examined += 1;
-                    cursor = Some(entry.id.clone());
-                    if doc_matches_query(&entry.doc, query) {
-                        results.push(entry);
-                        if results.len() == max_results {
-                            break;
+                if let Some(ref compiled) = maybe_compiled_predicate {
+                    match_buf.clear();
+                    let doc_refs: Vec<&BinaryDoc> = batch.iter().map(|e| &e.doc).collect();
+                    compiled.eval_batch(&doc_refs, &mut match_buf);
+                    let match_set: std::collections::HashSet<usize> = match_buf.drain(..).collect();
+                    for (i, entry) in batch.into_iter().enumerate() {
+                        trace.rows_examined += 1;
+                        cursor = Some(entry.id.clone());
+                        if match_set.contains(&i)
+                            && (query.len() == 1 || doc_matches_query(&entry.doc, query))
+                        {
+                            results.push(entry);
+                            if results.len() == max_results {
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    for entry in batch {
+                        trace.rows_examined += 1;
+                        cursor = Some(entry.id.clone());
+                        if doc_matches_query(&entry.doc, query) {
+                            results.push(entry);
+                            if results.len() == max_results {
+                                break;
+                            }
                         }
                     }
                 }
             }
+            trace.compressed_skipped = skipped;
         }
 
         Ok((results, trace))
@@ -1142,9 +1494,8 @@ impl Database {
         let mut writer = self.lock_writer()?;
         let tx = writer.transaction()?;
 
-        let mut stmt = tx.prepare(
-            "SELECT value, format, dict_id FROM _lilia_json WHERE space = ?1 LIMIT ?2;",
-        )?;
+        let mut stmt = tx
+            .prepare("SELECT value, format, dict_id FROM _lilia_json WHERE space = ?1 LIMIT ?2;")?;
         stmt.bind_text_static(1, space)?;
         stmt.bind_int64(2, i64::try_from(sample_count).unwrap_or(100))?;
 
@@ -1189,7 +1540,7 @@ impl Database {
         )?;
         stmt_id.bind_text_static(1, space)?;
         let next_dict_id = if stmt_id.step()? {
-            stmt_id.column_int64(0) as u32
+            u32::try_from(stmt_id.column_int64(0)).unwrap_or_default()
         } else {
             1
         };
@@ -1216,8 +1567,14 @@ impl Database {
 
         tx.commit()?;
 
+        let symbols = std::sync::Arc::new(
+            lilia_core::compression::dict::DictionarySymbolTable::from_dict_and_samples(
+                &dict_bytes,
+                &sample_slices,
+            ),
+        );
         self.dict_registry
-            .register(space, next_dict_id, dict_bytes.clone());
+            .register_with_symbols(space, next_dict_id, dict_bytes.clone(), symbols);
 
         Ok(DictStats {
             space: space.to_string(),
@@ -1246,6 +1603,7 @@ impl Database {
         Ok(())
     }
 
+    #[must_use]
     pub fn is_space_auto_train_enabled(&self, space: &str) -> bool {
         if !self.json_options.auto_train_dict {
             return false;
@@ -1290,8 +1648,16 @@ impl Database {
         id: &str,
         target_version: u64,
     ) -> Result<Option<JsonEntry>> {
+        struct RevRow {
+            version: u64,
+            delta: Vec<u8>,
+            is_keyframe: bool,
+            is_deletion: bool,
+        }
+
         validate_name("space", space)?;
         validate_name("id", id)?;
+
         if target_version == 0 {
             return Ok(None);
         }
@@ -1314,13 +1680,6 @@ impl Database {
         stmt.bind_text_static(2, id)?;
         stmt.bind_int64(3, i64::try_from(target_version).unwrap_or(i64::MAX))?;
 
-        struct RevRow {
-            version: u64,
-            delta: Vec<u8>,
-            is_keyframe: bool,
-            is_deletion: bool,
-        }
-
         let mut rows = Vec::new();
         while stmt.step()? {
             rows.push(RevRow {
@@ -1332,11 +1691,9 @@ impl Database {
         }
         drop(stmt);
 
-        if rows.is_empty() {
+        let Some(latest_applicable) = rows.last() else {
             return Ok(None);
-        }
-
-        let latest_applicable = rows.last().unwrap();
+        };
         if latest_applicable.is_deletion {
             return Ok(None);
         }
@@ -1376,7 +1733,7 @@ impl Database {
             return Ok(None);
         }
 
-        let doc = lilia_core::json::BinaryDoc::from_json_value(&current_val);
+        let doc = lilia_core::json::BinaryDoc::from_json_value(&current_val)?;
         Ok(Some(JsonEntry::new(
             space,
             id,
@@ -1475,12 +1832,8 @@ impl Database {
         let from_doc = self.json_get_at_version(space, id, from_version)?;
         let to_doc = self.json_get_at_version(space, id, to_version)?;
 
-        let from_val = from_doc
-            .map(|d| d.to_json_value())
-            .unwrap_or(serde_json::Value::Null);
-        let to_val = to_doc
-            .map(|d| d.to_json_value())
-            .unwrap_or(serde_json::Value::Null);
+        let from_val = from_doc.map_or(serde_json::Value::Null, |d| d.to_json_value());
+        let to_val = to_doc.map_or(serde_json::Value::Null, |d| d.to_json_value());
 
         Ok(json_patch::diff(&from_val, &to_val))
     }
@@ -1560,7 +1913,8 @@ impl<'a> JsonStore<'a> {
         expression: &str,
         options: impl Into<lilia_core::IndexOptions>,
     ) -> Result<()> {
-        self.db.create_json_index_with_options(space, index_name, expression, options.into())
+        self.db
+            .create_json_index_with_options(space, index_name, expression, options.into())
     }
 
     pub fn create_index_simple(
@@ -1609,6 +1963,7 @@ impl<'a> JsonStore<'a> {
         self.db.set_space_auto_train(space, enabled)
     }
 
+    #[must_use]
     pub fn is_auto_train_enabled(&self, space: &str) -> bool {
         self.db.is_space_auto_train_enabled(space)
     }

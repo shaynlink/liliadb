@@ -312,7 +312,8 @@ impl NativeStatement {
                     let msg = if db.is_null() {
                         format!("sqlite step failed with rc={rc}")
                     } else {
-                        let err = unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(db)).to_string_lossy() };
+                        let err =
+                            unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(db)).to_string_lossy() };
                         format!("sqlite step failed: {err} (rc={rc})")
                     };
                     return Err(ffi::sqlite_code_to_lilia(rc, msg));
@@ -395,9 +396,8 @@ impl NativeStatement {
     /// Reads a statement counter, optionally resetting it to zero afterwards.
     #[inline]
     pub fn status(&self, counter: StmtStatus, reset: bool) -> u64 {
-        let value = unsafe {
-            ffi::sqlite3_stmt_status(self.raw, counter.code(), c_int::from(reset))
-        };
+        let value =
+            unsafe { ffi::sqlite3_stmt_status(self.raw, counter.code(), c_int::from(reset)) };
         u64::try_from(value).unwrap_or(0)
     }
 }

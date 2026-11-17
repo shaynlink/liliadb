@@ -139,7 +139,9 @@ pub fn default_model_dir(model: BuiltinModel) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     let base = std::env::var("LOCALAPPDATA").ok().map(PathBuf::from);
     #[cfg(not(target_os = "windows"))]
-    let base = std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".liliadb"));
+    let base = std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".liliadb"));
 
     base.map(|b| b.join("models").join(model.id()))
 }
@@ -167,10 +169,7 @@ impl CandleEmbedder {
     /// # Errors
     ///
     /// Returns an error when no default model directory is found or loading fails.
-    pub fn load_default(
-        model: BuiltinModel,
-        device: DevicePreference,
-    ) -> Result<Self, EmbedError> {
+    pub fn load_default(model: BuiltinModel, device: DevicePreference) -> Result<Self, EmbedError> {
         let dir = default_model_dir(model).ok_or_else(|| EmbedError::ModelFile {
             path: PathBuf::from("default_model_dir"),
             source: std::io::Error::new(
@@ -245,16 +244,18 @@ impl CandleEmbedder {
         let weights_path = dir.join(WEIGHTS_FILE);
 
         let (tensors, source_path) = if gguf_path.exists() {
-            let mut file = std::fs::File::open(&gguf_path).map_err(|source| EmbedError::ModelFile {
-                path: gguf_path.clone(),
-                source,
-            })?;
-            let content = candle_core::quantized::gguf_file::Content::read(&mut file).map_err(
-                |source| EmbedError::Weights {
+            let mut file =
+                std::fs::File::open(&gguf_path).map_err(|source| EmbedError::ModelFile {
                     path: gguf_path.clone(),
                     source,
-                },
-            )?;
+                })?;
+            let content =
+                candle_core::quantized::gguf_file::Content::read(&mut file).map_err(|source| {
+                    EmbedError::Weights {
+                        path: gguf_path.clone(),
+                        source,
+                    }
+                })?;
             let mut map = std::collections::HashMap::with_capacity(content.tensor_infos.len());
             for (name, info) in &content.tensor_infos {
                 let qtensor = info
@@ -281,8 +282,8 @@ impl CandleEmbedder {
                 path: weights_path.clone(),
                 source,
             };
-            let tensors = candle_core::safetensors::load_buffer(&weights, &device)
-                .map_err(weights_error)?;
+            let tensors =
+                candle_core::safetensors::load_buffer(&weights, &device).map_err(weights_error)?;
             drop(weights);
             (tensors, weights_path)
         };

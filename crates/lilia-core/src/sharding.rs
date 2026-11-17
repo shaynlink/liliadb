@@ -3,36 +3,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::calendar::{CivilDate, MS_PER_DAY};
 use crate::{ErrorCode, LiliaError, Result};
-
-/// Date helpers using the Howard Hinnant proleptic Gregorian algorithm.
-pub fn days_to_ymd(days: i64) -> (i32, u32, u32) {
-    let z = days + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1024 + doe / 1461 - doe / 142_401) / 365;
-    let y = (yoe as i64) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
-}
-
-pub fn ymd_to_days(year: i32, month: u32, day: u32) -> i64 {
-    let y = if month <= 2 {
-        (year as i64) - 1
-    } else {
-        year as i64
-    };
-    let era = (if y >= 0 { y } else { y - 399 }) / 400;
-    let yoe = (y - era * 400) as u32;
-    let m = if month > 2 { month - 3 } else { month + 9 };
-    let doy = (153 * m + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + (doe as i64) - 719_468
-}
 
 /// Partitioning granularity defining the temporal boundaries of individual shard databases.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -70,8 +42,11 @@ impl ShardGranularity {
     /// Formats a UNIX timestamp (milliseconds) into the canonical shard identifier string.
     #[must_use]
     pub fn format_period(self, timestamp_ms: i64) -> String {
-        let days = timestamp_ms.div_euclid(86_400_000);
-        let (y, m, d) = days_to_ymd(days);
+        let CivilDate {
+            year: y,
+            month: m,
+            day: d,
+        } = CivilDate::from_days(timestamp_ms.div_euclid(MS_PER_DAY));
         match self {
             Self::Monthly => format!("{y:04}-{m:02}"),
             Self::Daily => format!("{y:04}-{m:02}-{d:02}"),
@@ -80,72 +55,68 @@ impl ShardGranularity {
     }
 
     /// Parses a period identifier (e.g. `2026-10`) into its half-open timestamp range `[start_ms, end_ms)`.
+    ///
+    /// # Errors
+    /// `InvalidInput` when `period` is not a valid identifier for this granularity.
     pub fn parse_period_range(self, period: &str) -> Result<(i64, i64)> {
         let period = period.trim();
-        match self {
-            Self::Monthly => {
-                let parts: Vec<&str> = period.split('-').collect();
-                if parts.len() != 2 {
-                    return Err(LiliaError::new(
-                        ErrorCode::InvalidInput,
-                        format!("invalid monthly shard id '{period}', expected YYYY-MM"),
-                        false,
-                    ));
-                }
-                let year: i32 = parts[0].parse().map_err(|_| {
-                    LiliaError::new(ErrorCode::InvalidInput, "invalid year in shard id", false)
-                })?;
-                let month: u32 = parts[1].parse().map_err(|_| {
-                    LiliaError::new(ErrorCode::InvalidInput, "invalid month in shard id", false)
-                })?;
-                if !(1..=12).contains(&month) {
-                    return Err(LiliaError::new(
-                        ErrorCode::InvalidInput,
-                        format!("month must be 1..=12, got {month}"),
-                        false,
-                    ));
-                }
-                let start_days = ymd_to_days(year, month, 1);
-                let (next_y, next_m) = if month == 12 {
-                    (year + 1, 1)
-                } else {
-                    (year, month + 1)
-                };
-                let end_days = ymd_to_days(next_y, next_m, 1);
-                Ok((start_days * 86_400_000, end_days * 86_400_000))
-            }
-            Self::Daily => {
-                let parts: Vec<&str> = period.split('-').collect();
-                if parts.len() != 3 {
-                    return Err(LiliaError::new(
-                        ErrorCode::InvalidInput,
-                        format!("invalid daily shard id '{period}', expected YYYY-MM-DD"),
-                        false,
-                    ));
-                }
-                let year: i32 = parts[0].parse().map_err(|_| {
-                    LiliaError::new(ErrorCode::InvalidInput, "invalid year in shard id", false)
-                })?;
-                let month: u32 = parts[1].parse().map_err(|_| {
-                    LiliaError::new(ErrorCode::InvalidInput, "invalid month in shard id", false)
-                })?;
-                let day: u32 = parts[2].parse().map_err(|_| {
-                    LiliaError::new(ErrorCode::InvalidInput, "invalid day in shard id", false)
-                })?;
-                let start_days = ymd_to_days(year, month, day);
-                let end_days = start_days + 1;
-                Ok((start_days * 86_400_000, end_days * 86_400_000))
-            }
-            Self::Yearly => {
-                let year: i32 = period.parse().map_err(|_| {
-                    LiliaError::new(ErrorCode::InvalidInput, "invalid year in shard id", false)
-                })?;
-                let start_days = ymd_to_days(year, 1, 1);
-                let end_days = ymd_to_days(year + 1, 1, 1);
-                Ok((start_days * 86_400_000, end_days * 86_400_000))
-            }
+        let parts: Vec<&str> = period.split('-').collect();
+        let (expected_parts, layout) = match self {
+            Self::Monthly => (2, "YYYY-MM"),
+            Self::Daily => (3, "YYYY-MM-DD"),
+            Self::Yearly => (1, "YYYY"),
+        };
+        if parts.len() != expected_parts {
+            return Err(LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid {self} shard id '{period}', expected {layout}"),
+                false,
+            ));
         }
+        let year: i64 = parse_component(parts[0], "year")?;
+        let month: u32 = parts
+            .get(1)
+            .map_or(Ok(1), |part| parse_component(part, "month"))?;
+        let day: u32 = parts
+            .get(2)
+            .map_or(Ok(1), |part| parse_component(part, "day"))?;
+        let start = CivilDate::new(year, month, day).ok_or_else(|| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("shard id '{period}' is not a calendar date"),
+                false,
+            )
+        })?;
+        let end = match self {
+            Self::Monthly if month == 12 => CivilDate {
+                year: year + 1,
+                month: 1,
+                day: 1,
+            },
+            Self::Monthly => CivilDate {
+                year,
+                month: month + 1,
+                day: 1,
+            },
+            Self::Daily => CivilDate::from_days(start.to_days() + 1),
+            Self::Yearly => CivilDate {
+                year: year + 1,
+                month: 1,
+                day: 1,
+            },
+        };
+        Ok((start.to_days() * MS_PER_DAY, end.to_days() * MS_PER_DAY))
     }
+}
+
+fn parse_component<T: std::str::FromStr>(part: &str, name: &str) -> Result<T> {
+    part.parse().map_err(|_| {
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid {name} in shard id"),
+            false,
+        )
+    })
 }
 
 impl fmt::Display for ShardGranularity {
@@ -327,33 +298,40 @@ pub struct ShardArchiveResult {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_ymd_conversion_roundtrip() {
-        let (y, m, d) = (2026, 11, 13);
-        let days = ymd_to_days(y, m, d);
-        let (y2, m2, d2) = days_to_ymd(days);
-        assert_eq!((y, m, d), (y2, m2, d2));
+    fn days_of(year: i64, month: u32, day: u32) -> i64 {
+        CivilDate::new(year, month, day).unwrap().to_days()
     }
 
     #[test]
     fn test_monthly_granularity() {
         let gran = ShardGranularity::Monthly;
         // 2026-10-15 12:00:00 UTC
-        let days = ymd_to_days(2026, 10, 15);
+        let days = days_of(2026, 10, 15);
         let ts = days * 86_400_000 + 43_200_000;
         assert_eq!(gran.format_period(ts), "2026-10");
 
         let (start, end) = gran.parse_period_range("2026-10").unwrap();
-        assert_eq!(start, ymd_to_days(2026, 10, 1) * 86_400_000);
-        assert_eq!(end, ymd_to_days(2026, 11, 1) * 86_400_000);
+        assert_eq!(start, days_of(2026, 10, 1) * 86_400_000);
+        assert_eq!(end, days_of(2026, 11, 1) * 86_400_000);
+        // Early-month days used to be attributed to the following year.
+        assert_eq!(
+            gran.format_period(days_of(1970, 1, 10) * 86_400_000),
+            "1970-01"
+        );
+        assert_eq!(
+            gran.format_period(days_of(2026, 12, 31) * 86_400_000),
+            "2026-12"
+        );
+        assert!(gran.parse_period_range("2026-13").is_err());
     }
 
     #[test]
     fn test_daily_granularity() {
         let gran = ShardGranularity::Daily;
-        let days = ymd_to_days(2026, 10, 15);
+        let days = days_of(2026, 10, 15);
         let ts = days * 86_400_000;
         assert_eq!(gran.format_period(ts), "2026-10-15");
+        assert!(gran.parse_period_range("2026-02-30").is_err());
 
         let (start, end) = gran.parse_period_range("2026-10-15").unwrap();
         assert_eq!(start, days * 86_400_000);

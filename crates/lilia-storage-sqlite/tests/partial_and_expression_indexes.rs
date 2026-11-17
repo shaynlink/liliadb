@@ -147,7 +147,13 @@ fn test_expression_index_lower_email_and_transparent_matching() {
 
     // 1. Direct scan by transformed lower-case email
     let found = db
-        .json_scan_by_index("users", "idx_lower_email", "alice.wonderland@example.com", None, 10)
+        .json_scan_by_index(
+            "users",
+            "idx_lower_email",
+            "alice.wonderland@example.com",
+            None,
+            10,
+        )
         .unwrap();
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].id, "user_1");

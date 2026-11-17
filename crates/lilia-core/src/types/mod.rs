@@ -20,4 +20,6 @@ pub use index::{
     SqlQueryResult, UndoEntry, UndoResult, Version,
 };
 pub use stats::{CheckpointStats, DictStats, ImpactAnalysis, ResourceProfile, TableStorageStat};
-pub use vector::{HnswConfig, HybridHit, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric};
+pub use vector::{
+    HnswConfig, HybridHit, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric,
+};

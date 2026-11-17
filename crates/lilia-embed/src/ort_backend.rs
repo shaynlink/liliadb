@@ -1,6 +1,6 @@
 //! In-database text embedding backend powered by ONNX Runtime (`ort`).
 //!
-//! Suitable for Android NNAPI, Windows DirectML, and quantized ONNX models (~20 MB).
+//! Suitable for Android `NNAPI`, Windows `DirectML`, and quantized ONNX models (~20 MB).
 
 use std::path::{Path, PathBuf};
 
@@ -42,7 +42,7 @@ impl From<OrtError> for LiliaError {
     }
 }
 
-/// Sentence-transformer running on ONNX Runtime (CPU, NNAPI, DirectML, CoreML).
+/// Sentence-transformer running on ONNX Runtime (CPU, `NNAPI`, `DirectML`, `CoreML`).
 pub struct OrtEmbedder {
     model_id: BuiltinModel,
     session: Session,
@@ -59,6 +59,10 @@ impl std::fmt::Debug for OrtEmbedder {
 
 impl OrtEmbedder {
     /// Loads an ONNX model from `dir`, which must contain `model.onnx` and `tokenizer.json`.
+    ///
+    /// # Errors
+    /// [`OrtError::ModelFile`] when a file is missing or unreadable, and the ONNX Runtime or
+    /// tokenizer error when the model cannot be loaded.
     pub fn load(model: BuiltinModel, dir: impl AsRef<Path>) -> Result<Self, OrtError> {
         let dir = dir.as_ref();
         let model_path = dir.join(ONNX_FILE);
@@ -107,6 +111,9 @@ impl OrtEmbedder {
     }
 
     /// Embeds texts into unit-length vectors using ONNX Runtime.
+    ///
+    /// # Errors
+    /// The tokenizer or ONNX Runtime error when a text cannot be encoded or the model fails.
     pub fn embed_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, OrtError> {
         if texts.is_empty() {
             return Ok(Vec::new());
@@ -155,26 +162,26 @@ impl OrtEmbedder {
         // Perform mean-pooling and L2 normalization
         for r in 0..rows {
             let mut pooled = vec![0.0_f32; dim];
-            let mut count = 0.0_f32;
+            let mut count = 0_u16;
             for t in 0..width {
-                let mask = attention_mask[r * width + t] as f32;
-                if mask > 0.0 {
-                    count += 1.0;
+                if attention_mask[r * width + t] > 0 {
+                    count = count.saturating_add(1);
                     let offset = (r * width + t) * dim;
-                    for d in 0..dim {
-                        pooled[d] += output_data[offset + d];
+                    for (sum, value) in pooled.iter_mut().zip(&output_data[offset..offset + dim]) {
+                        *sum += value;
                     }
                 }
             }
-            if count > 0.0 {
-                for d in 0..dim {
-                    pooled[d] /= count;
+            if count > 0 {
+                let count = f32::from(count);
+                for sum in &mut pooled {
+                    *sum /= count;
                 }
             }
             // L2 normalize
             let norm = pooled.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-            for d in 0..dim {
-                pooled[d] /= norm;
+            for value in &mut pooled {
+                *value /= norm;
             }
             results.push(pooled);
         }

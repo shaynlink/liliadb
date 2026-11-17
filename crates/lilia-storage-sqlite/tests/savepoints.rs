@@ -38,13 +38,14 @@ fn test_speculative_savepoint_rollback_user_example() {
     let mut tx = db.transaction().expect("begin transaction");
 
     // 1. Write user in parent transaction
-    tx.json()
-        .put("users", "u1", &user)
-        .expect("put user u1");
+    tx.json().put("users", "u1", &user).expect("put user u1");
 
     // Verify user is visible within transaction before savepoint
     let fetched = tx.json().get("users", "u1").expect("get u1");
-    assert!(fetched.is_some(), "user u1 must be visible in active transaction");
+    assert!(
+        fetched.is_some(),
+        "user u1 must be visible in active transaction"
+    );
 
     // 2. Speculative attempt inside a named savepoint
     let savepoint_result = tx.spans_savepoint("external_enrichment", |sub_tx| {
@@ -93,7 +94,10 @@ fn test_speculative_savepoint_rollback_user_example() {
     tx.commit().expect("commit transaction");
 
     // 5. Verify persistent DB state
-    let doc_in_db = db.json_get("users", "u1").expect("query db").expect("doc exists");
+    let doc_in_db = db
+        .json_get("users", "u1")
+        .expect("query db")
+        .expect("doc exists");
     assert_eq!(doc_in_db.id, "u1");
 
     let edges = db
@@ -240,8 +244,14 @@ fn test_multi_model_subsystems_in_savepoint() {
             .json()
             .put("users", "guest", &json!({"name": "Temporary Guest"}))
             .unwrap();
-        sub_tx.graph().add_edge("admin", "guest", "INVITED").unwrap();
-        sub_tx.fts().index("users", "guest", "Temporary Guest Account").unwrap();
+        sub_tx
+            .graph()
+            .add_edge("admin", "guest", "INVITED")
+            .unwrap();
+        sub_tx
+            .fts()
+            .index("users", "guest", "Temporary Guest Account")
+            .unwrap();
 
         // Verify all visible in savepoint
         assert!(sub_tx.kv().get("config", b"temp_flag")?.is_some());
@@ -365,7 +375,11 @@ fn test_memory_tier_savepoint_rollback() {
 
     // After rollback: k2 is gone, k1 has reverted to initial
     assert!(tx.json().get("mem_cache", "k2").unwrap().is_none());
-    let k1 = tx.json().get("mem_cache", "k1").unwrap().expect("k1 exists");
+    let k1 = tx
+        .json()
+        .get("mem_cache", "k1")
+        .unwrap()
+        .expect("k1 exists");
     assert_eq!(
         k1.doc.to_json_value(),
         json!({"val": "initial"}),
@@ -374,4 +388,3 @@ fn test_memory_tier_savepoint_rollback() {
 
     tx.commit().expect("commit");
 }
-

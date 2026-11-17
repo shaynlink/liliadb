@@ -100,6 +100,10 @@ pub trait VirtualTableProvider: Send + Sync {
     }
 }
 
+pub trait VirtualTableFactory: Send + Sync {
+    fn create(&self, table_name: &str, args: &[&str]) -> Result<Arc<dyn VirtualTableProvider>>;
+}
+
 #[repr(C)]
 struct LiliaVTab {
     base: ffi::sqlite3_vtab,
@@ -465,10 +469,127 @@ unsafe extern "C" fn vtab_rollback(p_vtab: *mut ffi::sqlite3_vtab) -> c_int {
 
 unsafe extern "C" fn destroy_provider(p_aux: *mut c_void) {
     if !p_aux.is_null() {
-        drop(Box::from_raw(
-            p_aux.cast::<Arc<dyn VirtualTableProvider>>(),
+        drop(Box::from_raw(p_aux.cast::<Arc<dyn VirtualTableProvider>>()));
+    }
+}
+
+unsafe extern "C" fn destroy_factory(p_aux: *mut c_void) {
+    if !p_aux.is_null() {
+        drop(Box::from_raw(p_aux.cast::<Arc<dyn VirtualTableFactory>>()));
+    }
+}
+
+unsafe extern "C" fn vtab_factory_create_or_connect(
+    db: *mut ffi::sqlite3,
+    p_aux: *mut c_void,
+    argc: c_int,
+    argv: *const *const c_char,
+    pp_vtab: *mut *mut ffi::sqlite3_vtab,
+    pz_err: *mut *mut c_char,
+) -> c_int {
+    if p_aux.is_null() || pp_vtab.is_null() {
+        return ffi::SQLITE_ERROR;
+    }
+    let factory = &*p_aux.cast::<Arc<dyn VirtualTableFactory>>();
+    let table_name = if argc >= 3 && !argv.is_null() && !(*argv.add(2)).is_null() {
+        CStr::from_ptr(*argv.add(2)).to_str().unwrap_or("")
+    } else {
+        ""
+    };
+    let mut args = Vec::with_capacity((argc.saturating_sub(3)) as usize);
+    if argc > 3 && !argv.is_null() {
+        for i in 3..argc {
+            let ptr = *argv.add(i as usize);
+            if !ptr.is_null() {
+                if let Ok(s) = CStr::from_ptr(ptr).to_str() {
+                    args.push(s);
+                }
+            }
+        }
+    }
+    let provider = match factory.create(table_name, &args) {
+        Ok(p) => p,
+        Err(err) => {
+            set_out_err(pz_err, &err.to_string());
+            return ffi::SQLITE_ERROR;
+        }
+    };
+    let Ok(c_ddl) = CString::new(provider.schema_ddl()) else {
+        set_out_err(pz_err, "virtual table DDL contains null byte");
+        return ffi::SQLITE_ERROR;
+    };
+    let rc = ffi::sqlite3_declare_vtab(db, c_ddl.as_ptr());
+    if rc != ffi::SQLITE_OK {
+        set_out_err(pz_err, &format!("sqlite3_declare_vtab failed: rc={rc}"));
+        return rc;
+    }
+    let vtab = Box::new(LiliaVTab {
+        base: ffi::sqlite3_vtab {
+            pModule: ptr::null(),
+            nRef: 0,
+            zErrMsg: ptr::null_mut(),
+        },
+        provider,
+    });
+    *pp_vtab = Box::into_raw(vtab).cast::<ffi::sqlite3_vtab>();
+    ffi::SQLITE_OK
+}
+
+static LILIA_FACTORY_MODULE: ffi::sqlite3_module = ffi::sqlite3_module {
+    iVersion: 2,
+    xCreate: Some(vtab_factory_create_or_connect),
+    xConnect: Some(vtab_factory_create_or_connect),
+    xBestIndex: Some(vtab_best_index),
+    xDisconnect: Some(vtab_disconnect),
+    xDestroy: Some(vtab_disconnect),
+    xOpen: Some(vtab_open),
+    xClose: Some(vtab_close),
+    xFilter: Some(vtab_filter),
+    xNext: Some(vtab_next),
+    xEof: Some(vtab_eof),
+    xColumn: Some(vtab_column),
+    xRowid: Some(vtab_rowid),
+    xUpdate: None,
+    xBegin: Some(vtab_begin),
+    xSync: Some(vtab_sync),
+    xCommit: Some(vtab_commit),
+    xRollback: Some(vtab_rollback),
+    xFindFunction: None,
+    xRename: None,
+    xSavepoint: None,
+    xRelease: None,
+    xRollbackTo: None,
+    xShadowName: None,
+    xIntegrity: None,
+};
+
+pub(crate) unsafe fn register_module_factory(
+    db: *mut ffi::sqlite3,
+    name: &str,
+    factory: Arc<dyn VirtualTableFactory>,
+) -> Result<()> {
+    let c_name = CString::new(name).map_err(|e| {
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("null byte in vtab factory module name: {e}"),
+            false,
+        )
+    })?;
+    let client_ptr = Box::into_raw(Box::new(factory));
+    let rc = ffi::sqlite3_create_module_v2(
+        db,
+        c_name.as_ptr(),
+        &LILIA_FACTORY_MODULE,
+        client_ptr.cast::<c_void>(),
+        Some(destroy_factory),
+    );
+    if rc != ffi::SQLITE_OK {
+        return Err(ffi::sqlite_code_to_lilia(
+            rc,
+            format!("sqlite3_create_module_v2({name}) failed: rc={rc}"),
         ));
     }
+    Ok(())
 }
 
 static LILIA_EPONYMOUS_MODULE: ffi::sqlite3_module = ffi::sqlite3_module {

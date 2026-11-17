@@ -49,10 +49,19 @@ impl BlobDescriptor {
     #[must_use]
     pub fn to_json_value(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();
-        map.insert("$blob".to_string(), serde_json::Value::String(self.hash.clone()));
-        map.insert("size_bytes".to_string(), serde_json::Value::Number(self.size_bytes.into()));
+        map.insert(
+            "$blob".to_string(),
+            serde_json::Value::String(self.hash.clone()),
+        );
+        map.insert(
+            "size_bytes".to_string(),
+            serde_json::Value::Number(self.size_bytes.into()),
+        );
         if let Some(ref mime) = self.mime_type {
-            map.insert("mime_type".to_string(), serde_json::Value::String(mime.clone()));
+            map.insert(
+                "mime_type".to_string(),
+                serde_json::Value::String(mime.clone()),
+            );
         }
         serde_json::Value::Object(map)
     }
@@ -69,7 +78,7 @@ pub struct CasOptions {
     pub hash_algorithm: CasHashAlgorithm,
     /// Explicit directory path for sealed blob storage (defaults to `<db_path>.blobs`).
     pub blobs_dir: Option<PathBuf>,
-    /// Whether orphaned blobs (ref_count = 0) are automatically purged during WAL checkpoints.
+    /// Whether orphaned blobs (`ref_count` = 0) are automatically purged during WAL checkpoints.
     pub auto_purge_on_checkpoint: bool,
 }
 
@@ -296,14 +305,14 @@ mod tests {
     #[test]
     fn test_encode_decode_kv_pointer() {
         let (_, raw) = compute_hash(CasHashAlgorithm::Sha256, b"test content");
-        let ptr = encode_kv_pointer(CasHashAlgorithm::Sha256, &raw, 123456);
+        let ptr = encode_kv_pointer(CasHashAlgorithm::Sha256, &raw, 123_456);
         assert_eq!(ptr.len(), CAS_KV_POINTER_LEN);
         assert!(is_kv_pointer(&ptr));
 
         let (algo, hash_hex, size) = decode_kv_pointer(&ptr).unwrap();
         assert_eq!(algo, CasHashAlgorithm::Sha256);
         assert_eq!(hash_hex, hex::encode(raw));
-        assert_eq!(size, 123456);
+        assert_eq!(size, 123_456);
     }
 
     #[test]
@@ -326,7 +335,11 @@ mod tests {
 
         let hashes = extract_blob_hashes_from_value(&val);
         assert_eq!(hashes.len(), 2);
-        assert!(hashes.contains(&"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()));
-        assert!(hashes.contains(&"b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9".to_string()));
+        assert!(hashes.contains(
+            &"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()
+        ));
+        assert!(hashes.contains(
+            &"b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9".to_string()
+        ));
     }
 }

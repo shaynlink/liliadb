@@ -1,12 +1,12 @@
-use lilia_core::{
-    BatchOperation, CollectionOptions, ErrorCode, KeyMapping, RefAction, Reference,
-};
+use lilia_core::{BatchOperation, CollectionOptions, ErrorCode, KeyMapping, RefAction, Reference};
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::tempdir()?;
-    let db = Database::open(DatabaseOptions::durable(temp_dir.path().join("integrity.lilia")))?;
+    let db = Database::open(DatabaseOptions::durable(
+        temp_dir.path().join("integrity.lilia"),
+    ))?;
 
     println!("[1] Declarative CHECK on a JSON collection");
     db.json().create_collection(
@@ -66,6 +66,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if_version: None,
         expires_at_ms: None,
     }]);
-    println!("  orphan session rejected: {}", orphan.expect_err("parent is missing").message);
+    println!(
+        "  orphan session rejected: {}",
+        orphan.expect_err("parent is missing").message
+    );
     Ok(())
 }

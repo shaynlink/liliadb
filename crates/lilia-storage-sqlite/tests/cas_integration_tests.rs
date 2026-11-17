@@ -125,7 +125,10 @@ fn test_kv_cas_transparent_offload_and_deduplication() {
 
     // Trigger WAL checkpoint: Atomic GC purges the orphaned file
     db.checkpoint().unwrap();
-    assert!(!path1.is_file(), "orphaned blob file must be purged after checkpoint");
+    assert!(
+        !path1.is_file(),
+        "orphaned blob file must be purged after checkpoint"
+    );
 
     // Verify record in _lilia_blobs is deleted
     {
@@ -172,12 +175,16 @@ fn test_json_cas_reference_sharing_and_garbage_collection() {
     // Check ref_count is 2 and 2 references exist in _lilia_blob_refs
     {
         let conn = db.lock_writer().unwrap();
-        let mut stmt_ref = conn.prepare("SELECT ref_count FROM _lilia_blobs WHERE hash = ?1;").unwrap();
+        let mut stmt_ref = conn
+            .prepare("SELECT ref_count FROM _lilia_blobs WHERE hash = ?1;")
+            .unwrap();
         stmt_ref.bind_text_static(1, &blob_desc.hash).unwrap();
         assert!(stmt_ref.step().unwrap());
         assert_eq!(stmt_ref.column_int64(0), 2);
 
-        let mut stmt_count = conn.prepare("SELECT count(*) FROM _lilia_blob_refs WHERE blob_hash = ?1;").unwrap();
+        let mut stmt_count = conn
+            .prepare("SELECT count(*) FROM _lilia_blob_refs WHERE blob_hash = ?1;")
+            .unwrap();
         stmt_count.bind_text_static(1, &blob_desc.hash).unwrap();
         assert!(stmt_count.step().unwrap());
         assert_eq!(stmt_count.column_int64(0), 2);
@@ -187,13 +194,18 @@ fn test_json_cas_reference_sharing_and_garbage_collection() {
     json_col.delete("alice").unwrap();
     assert!(blob_path.is_file());
     db.checkpoint().unwrap();
-    assert!(blob_path.is_file(), "file must not be purged while Bob still references it");
+    assert!(
+        blob_path.is_file(),
+        "file must not be purged while Bob still references it"
+    );
 
     // Delete Bob: ref_count becomes 0
     json_col.delete("bob").unwrap();
     {
         let conn = db.lock_writer().unwrap();
-        let mut stmt_ref = conn.prepare("SELECT ref_count FROM _lilia_blobs WHERE hash = ?1;").unwrap();
+        let mut stmt_ref = conn
+            .prepare("SELECT ref_count FROM _lilia_blobs WHERE hash = ?1;")
+            .unwrap();
         stmt_ref.bind_text_static(1, &blob_desc.hash).unwrap();
         assert!(stmt_ref.step().unwrap());
         assert_eq!(stmt_ref.column_int64(0), 0);
@@ -203,7 +215,10 @@ fn test_json_cas_reference_sharing_and_garbage_collection() {
     let gc_stats = db.blob_gc().unwrap();
     assert_eq!(gc_stats.orphans_purged, 1);
     assert_eq!(gc_stats.bytes_reclaimed, 90 * 1024);
-    assert!(!blob_path.is_file(), "orphaned blob must be purged from disk");
+    assert!(
+        !blob_path.is_file(),
+        "orphaned blob must be purged from disk"
+    );
 }
 
 #[test]
@@ -223,13 +238,17 @@ fn test_transaction_rollback_preserves_cas_references() {
     let blob_path = db.blob_path(&blob_desc.hash);
     assert!(blob_path.is_file());
 
-    json_col.put("doc1", json!({ "file": blob_desc.to_json_value() })).unwrap();
+    json_col
+        .put("doc1", json!({ "file": blob_desc.to_json_value() }))
+        .unwrap();
 
     // Rollback a deletion attempt
     {
         let mut writer = db.lock_writer().unwrap();
         let mut tx = writer.transaction().unwrap();
-        let _ = lilia_core::cas::extract_blob_hashes_from_value(&json!({ "file": blob_desc.to_json_value() }));
+        let _ = lilia_core::cas::extract_blob_hashes_from_value(
+            &json!({ "file": blob_desc.to_json_value() }),
+        );
         // Manually delete references inside transaction then rollback
         lilia_storage_sqlite::cas::delete_json_blob_refs(&mut tx, "docs", "doc1").unwrap();
         tx.rollback().unwrap();
@@ -237,11 +256,16 @@ fn test_transaction_rollback_preserves_cas_references() {
 
     // Checkpoint must NOT purge the file because transaction rolled back
     db.checkpoint().unwrap();
-    assert!(blob_path.is_file(), "file must not be purged after transaction rollback");
+    assert!(
+        blob_path.is_file(),
+        "file must not be purged after transaction rollback"
+    );
 
     {
         let conn = db.lock_writer().unwrap();
-        let mut stmt = conn.prepare("SELECT ref_count FROM _lilia_blobs WHERE hash = ?1;").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT ref_count FROM _lilia_blobs WHERE hash = ?1;")
+            .unwrap();
         stmt.bind_text_static(1, &blob_desc.hash).unwrap();
         assert!(stmt.step().unwrap());
         assert_eq!(stmt.column_int64(0), 1);

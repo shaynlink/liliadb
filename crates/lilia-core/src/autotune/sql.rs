@@ -77,10 +77,9 @@ pub fn normalize_sql(sql: &str) -> String {
             c if c.is_whitespace() => pending_space = true,
             c if c.is_ascii_digit()
                 && (pending_space
-                    || !out
-                        .chars()
-                        .next_back()
-                        .is_some_and(|prev| prev.is_alphanumeric() || prev == '_' || prev == '$')) =>
+                    || !out.chars().next_back().is_some_and(|prev| {
+                        prev.is_alphanumeric() || prev == '_' || prev == '$'
+                    })) =>
             {
                 while chars
                     .peek()

@@ -102,7 +102,8 @@ impl<V> ShardedMemTable<V> {
         let mut h = DefaultHasher::new();
         space.hash(&mut h);
         key.hash(&mut h);
-        (h.finish() as usize) & (NUM_SHARDS - 1)
+        // The low bits of the hash pick the shard: the mask keeps the value below `NUM_SHARDS`.
+        usize::try_from(h.finish() & (NUM_SHARDS as u64 - 1)).unwrap_or_default()
     }
 
     fn space_counter(&self, space: &str) -> Arc<AtomicUsize> {
@@ -226,20 +227,18 @@ impl<V: Clone> ShardedMemTable<V> {
             let guard = self.shards[shard_idx]
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match guard.map.get(&lookup_key) {
-                None => return None,
-                Some(entry) => {
-                    if entry.expires_at_ms.is_some_and(|exp| exp <= now) {
-                        true
-                    } else if !track_lru {
-                        return Some(MemSnapshot {
-                            value: entry.value.clone(),
-                            version: entry.version,
-                            expires_at_ms: entry.expires_at_ms,
-                        });
-                    } else {
-                        false
-                    }
+            {
+                let entry = guard.map.get(&lookup_key)?;
+                if entry.expires_at_ms.is_some_and(|exp| exp <= now) {
+                    true
+                } else if !track_lru {
+                    return Some(MemSnapshot {
+                        value: entry.value.clone(),
+                        version: entry.version,
+                        expires_at_ms: entry.expires_at_ms,
+                    });
+                } else {
+                    false
                 }
             }
         };
@@ -329,20 +328,17 @@ impl<V: Clone> ShardedMemTable<V> {
                 last_access_seq: seq,
                 payload_bytes: new_bytes,
             };
-            match guard.map.insert(lookup_key, entry) {
-                Some(old) => {
-                    self.estimated_bytes
-                        .fetch_sub(old.payload_bytes, Ordering::Relaxed);
-                    self.estimated_bytes.fetch_add(new_bytes, Ordering::Relaxed);
-                    if old.expires_at_ms.is_some_and(|exp| exp <= now) {
-                        self.ttl_evictions.fetch_add(1, Ordering::Relaxed);
-                    }
+            if let Some(old) = guard.map.insert(lookup_key, entry) {
+                self.estimated_bytes
+                    .fetch_sub(old.payload_bytes, Ordering::Relaxed);
+                self.estimated_bytes.fetch_add(new_bytes, Ordering::Relaxed);
+                if old.expires_at_ms.is_some_and(|exp| exp <= now) {
+                    self.ttl_evictions.fetch_add(1, Ordering::Relaxed);
                 }
-                None => {
-                    self.total_entries.fetch_add(1, Ordering::Relaxed);
-                    self.estimated_bytes.fetch_add(new_bytes, Ordering::Relaxed);
-                    self.space_counter(space).fetch_add(1, Ordering::Relaxed);
-                }
+            } else {
+                self.total_entries.fetch_add(1, Ordering::Relaxed);
+                self.estimated_bytes.fetch_add(new_bytes, Ordering::Relaxed);
+                self.space_counter(space).fetch_add(1, Ordering::Relaxed);
             }
             next_ver
         };
@@ -393,35 +389,34 @@ impl<V: Clone> ShardedMemTable<V> {
         let lookup_key = (space.to_owned(), key.to_vec());
         if let Some(existing) = shard.map.get_mut(&lookup_key) {
             let old_bytes = existing.payload_bytes;
-            match f(Some(existing))? {
-                Some(replacement) => {
-                    table.estimated_bytes.fetch_sub(old_bytes, Ordering::Relaxed);
-                    table
-                        .estimated_bytes
-                        .fetch_add(replacement.payload_bytes, Ordering::Relaxed);
-                    shard.map.insert(lookup_key, replacement);
-                }
-                None => {
-                    if let Some(updated) = shard.map.get(&lookup_key) {
-                        let new_bytes = updated.payload_bytes;
-                        if new_bytes >= old_bytes {
-                            table
-                                .estimated_bytes
-                                .fetch_add(new_bytes - old_bytes, Ordering::Relaxed);
-                        } else {
-                            table
-                                .estimated_bytes
-                                .fetch_sub(old_bytes - new_bytes, Ordering::Relaxed);
-                        }
+            if let Some(replacement) = f(Some(existing))? {
+                table
+                    .estimated_bytes
+                    .fetch_sub(old_bytes, Ordering::Relaxed);
+                table
+                    .estimated_bytes
+                    .fetch_add(replacement.payload_bytes, Ordering::Relaxed);
+                shard.map.insert(lookup_key, replacement);
+            } else {
+                if let Some(updated) = shard.map.get(&lookup_key) {
+                    let new_bytes = updated.payload_bytes;
+                    if new_bytes >= old_bytes {
+                        table
+                            .estimated_bytes
+                            .fetch_add(new_bytes - old_bytes, Ordering::Relaxed);
+                    } else {
+                        table
+                            .estimated_bytes
+                            .fetch_sub(old_bytes - new_bytes, Ordering::Relaxed);
                     }
-                    if updated_expired(&shard.map.get(&lookup_key), now) {
-                        if let Some(old) = shard.map.remove(&lookup_key) {
-                            table.total_entries.fetch_sub(1, Ordering::Relaxed);
-                            table
-                                .estimated_bytes
-                                .fetch_sub(old.payload_bytes, Ordering::Relaxed);
-                            table.space_counter(space).fetch_sub(1, Ordering::Relaxed);
-                        }
+                }
+                if updated_expired(shard.map.get(&lookup_key), now) {
+                    if let Some(old) = shard.map.remove(&lookup_key) {
+                        table.total_entries.fetch_sub(1, Ordering::Relaxed);
+                        table
+                            .estimated_bytes
+                            .fetch_sub(old.payload_bytes, Ordering::Relaxed);
+                        table.space_counter(space).fetch_sub(1, Ordering::Relaxed);
                     }
                 }
             }
@@ -562,7 +557,7 @@ impl<V: Clone> ShardedMemTable<V> {
     }
 }
 
-fn updated_expired<V>(entry: &Option<&MemEntry<V>>, now: i64) -> bool {
+fn updated_expired<V>(entry: Option<&MemEntry<V>>, now: i64) -> bool {
     entry
         .and_then(|e| e.expires_at_ms)
         .is_some_and(|exp| exp <= now)
@@ -603,7 +598,7 @@ pub(crate) struct MemIndexInfo {
     pub filter: Option<String>,
 }
 
-/// Pure-RAM sharded storage engine supporting zero-disk KV, JSON, TimeSeries, Graph, Vectors, and CRDTs.
+/// Pure-RAM sharded storage engine supporting zero-disk KV, JSON, `TimeSeries`, Graph, Vectors, and CRDTs.
 #[derive(Debug)]
 pub struct MemEngine {
     pub(crate) kv: ShardedMemTable<Vec<u8>>,
@@ -656,12 +651,10 @@ impl MemEngine {
             + self.crdt_orsets.estimated_bytes()
             + self.crdt_json.estimated_bytes();
 
-        let ttl_evictions = self.kv.ttl_evictions()
-            + self.json.ttl_evictions()
-            + self.timeseries.ttl_evictions();
-        let lru_evictions = self.kv.lru_evictions()
-            + self.json.lru_evictions()
-            + self.timeseries.lru_evictions();
+        let ttl_evictions =
+            self.kv.ttl_evictions() + self.json.ttl_evictions() + self.timeseries.ttl_evictions();
+        let lru_evictions =
+            self.kv.lru_evictions() + self.json.lru_evictions() + self.timeseries.lru_evictions();
 
         MemoryTierStats {
             kv_entries: self.kv.len(),
@@ -677,6 +670,8 @@ impl MemEngine {
         }
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn kv_put_direct(
         &self,
         namespace: &str,
@@ -687,8 +682,10 @@ impl MemEngine {
     ) -> Result<u64> {
         let now = now_ms();
         let spec = self.catalog.spec_for(CollectionKind::Kv, namespace);
-        let expires = explicit_expires_at_ms
-            .or_else(|| spec.ttl_ms.map(|ttl| now.saturating_add(i64::try_from(ttl).unwrap_or(i64::MAX))));
+        let expires = explicit_expires_at_ms.or_else(|| {
+            spec.ttl_ms
+                .map(|ttl| now.saturating_add(i64::try_from(ttl).unwrap_or(i64::MAX)))
+        });
         let bytes = stored_value.len();
         self.kv.put(
             namespace,
@@ -702,6 +699,8 @@ impl MemEngine {
         )
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn kv_delete_direct(
         &self,
         namespace: &str,
@@ -711,6 +710,8 @@ impl MemEngine {
         self.kv.delete(namespace, key, if_version, now_ms())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn json_put_direct(
         &self,
         space: &str,
@@ -723,7 +724,7 @@ impl MemEngine {
         let expires = spec
             .ttl_ms
             .map(|ttl| now.saturating_add(i64::try_from(ttl).unwrap_or(i64::MAX)));
-        let bytes = serde_json::to_vec(&value).map(|v| v.len()).unwrap_or(64);
+        let bytes = serde_json::to_vec(&value).map_or(64, |v| v.len());
         self.json.put(
             space,
             id.as_bytes(),
@@ -736,6 +737,8 @@ impl MemEngine {
         )
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn ts_append_direct(
         &self,
         series_id: &str,
@@ -792,7 +795,9 @@ impl MemEngine {
             },
         );
         if existing_len == 0 {
-            self.timeseries.total_entries.fetch_add(1, Ordering::Relaxed);
+            self.timeseries
+                .total_entries
+                .fetch_add(1, Ordering::Relaxed);
         }
         let new_bytes = series_id.len() + key.len() + payload_bytes;
         if new_bytes >= old_bytes {
@@ -1043,9 +1048,10 @@ impl MemEngine {
         F: FnOnce(&mut LwwJsonDocument),
     {
         let key = id.as_bytes();
-        let shard_idx = ShardedMemTable::<(LwwJsonDocument, serde_json::Value, Option<Hlc>)>::shard_index(
-            space, key,
-        );
+        let shard_idx =
+            ShardedMemTable::<(LwwJsonDocument, serde_json::Value, Option<Hlc>)>::shard_index(
+                space, key,
+            );
         let lookup = (space.to_owned(), key.to_vec());
         let mut guard = self.crdt_json.shards_write_at(shard_idx);
         let seq = self.crdt_json.next_seq();
@@ -1064,14 +1070,14 @@ impl MemEngine {
         entry.last_access_seq = seq;
         if new_entry {
             new_entry = false;
-            self.crdt_json
-                .total_entries
-                .fetch_add(1, Ordering::Relaxed);
+            self.crdt_json.total_entries.fetch_add(1, Ordering::Relaxed);
         }
         let _ = new_entry;
         entry.version
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn graph_set_node(&self, node: GraphNode) -> Result<u64> {
         let now = now_ms();
         let spec = self.catalog.spec_for(CollectionKind::Graph, &node.graph);
@@ -1113,6 +1119,8 @@ impl MemEngine {
         self.graph_nodes.remove_exact(graph, id.as_bytes())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn graph_add_edge(&self, edge: GraphEdge) -> Result<u64> {
         let now = now_ms();
         let spec = self.catalog.spec_for(CollectionKind::Graph, &edge.graph);
@@ -1138,6 +1146,8 @@ impl MemEngine {
         self.graph_edges.remove_exact(graph, &ek)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn vector_set(
         &self,
         collection: &str,
@@ -1195,6 +1205,9 @@ impl MemEngine {
     }
 
     /// Validates CAS preconditions for a slice of memory KV/JSON operations without mutating state.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn preflight_ops(&self, ops: &[&BatchOperation], now: i64) -> Result<()> {
         for op in ops {
             match op {
@@ -1246,6 +1259,11 @@ impl MemEngine {
     }
 
     /// Applies one non-FTS operation against pure-RAM structures and returns its [`MutationResult`].
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` or `Storage` errors detected here, and propagates errors from the
+    /// operations it performs.
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn apply_op(
         &self,
         op: &BatchOperation,
@@ -1291,8 +1309,7 @@ impl MemEngine {
             } => {
                 let mut buf = data.clone();
                 let bin_doc = lilia_core::json::parse_json_bytes_to_binary(&mut buf)?;
-                let ver =
-                    self.json_put_direct(space, id, bin_doc.to_json_value(), *if_version)?;
+                let ver = self.json_put_direct(space, id, bin_doc.to_json_value(), *if_version)?;
                 Ok(mem_result(Some(ver), false))
             }
             BatchOperation::JsonDelete {
@@ -1466,20 +1483,17 @@ impl MemEngine {
                 let ver = self.crdt_json_merge(space, id, &remote);
                 Ok(mem_result(Some(ver), false))
             }
-            BatchOperation::FtsIndex { .. } | BatchOperation::FtsDelete { .. } => Err(
-                LiliaError::new(
+            BatchOperation::FtsIndex { .. } | BatchOperation::FtsDelete { .. } => {
+                Err(LiliaError::new(
                     ErrorCode::InvalidInput,
                     "memory FTS operations route to _lilia_mem SQLite engine",
                     false,
-                ),
-            ),
+                ))
+            }
         }
     }
 
-    pub(crate) fn lock_kv_json_shards<'a>(
-        &'a self,
-        ops: &[&BatchOperation],
-    ) -> MemShardGuards<'a> {
+    pub(crate) fn lock_kv_json_shards<'a>(&'a self, ops: &[&BatchOperation]) -> MemShardGuards<'a> {
         let mut kv_keys: Vec<(&str, &[u8])> = Vec::new();
         let mut json_keys: Vec<(&str, &[u8])> = Vec::new();
         for op in ops {
@@ -1506,7 +1520,6 @@ impl MemEngine {
     }
 
     pub(crate) fn preflight_with_guards(
-        &self,
         ops: &[&BatchOperation],
         guards: &MemShardGuards<'_>,
         now: i64,
@@ -1544,8 +1557,7 @@ impl MemEngine {
                     if_version: Some(exp),
                 } => {
                     let key_bytes = id.as_bytes();
-                    let s_idx =
-                        ShardedMemTable::<serde_json::Value>::shard_index(space, key_bytes);
+                    let s_idx = ShardedMemTable::<serde_json::Value>::shard_index(space, key_bytes);
                     let bucket = guards.json_bucket(s_idx);
                     let active_ver = bucket
                         .get(&(space.to_owned(), key_bytes.to_vec()))
@@ -1579,6 +1591,7 @@ impl MemEngine {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub(crate) fn apply_op_with_guards(
         &self,
         op: &BatchOperation,
@@ -1624,22 +1637,21 @@ impl MemEngine {
                         payload_bytes: new_bytes,
                     },
                 );
-                match old {
-                    Some(o) => {
-                        self.kv
-                            .estimated_bytes
-                            .fetch_sub(o.payload_bytes, Ordering::Relaxed);
-                        self.kv
-                            .estimated_bytes
-                            .fetch_add(new_bytes, Ordering::Relaxed);
-                    }
-                    None => {
-                        self.kv.total_entries.fetch_add(1, Ordering::Relaxed);
-                        self.kv
-                            .estimated_bytes
-                            .fetch_add(new_bytes, Ordering::Relaxed);
-                        self.kv.space_counter(namespace).fetch_add(1, Ordering::Relaxed);
-                    }
+                if let Some(o) = old {
+                    self.kv
+                        .estimated_bytes
+                        .fetch_sub(o.payload_bytes, Ordering::Relaxed);
+                    self.kv
+                        .estimated_bytes
+                        .fetch_add(new_bytes, Ordering::Relaxed);
+                } else {
+                    self.kv.total_entries.fetch_add(1, Ordering::Relaxed);
+                    self.kv
+                        .estimated_bytes
+                        .fetch_add(new_bytes, Ordering::Relaxed);
+                    self.kv
+                        .space_counter(namespace)
+                        .fetch_add(1, Ordering::Relaxed);
                 }
                 if !matches!(spec.eviction, EvictionPolicy::None) {
                     guards.evict_kv.push((namespace.clone(), spec.eviction));
@@ -1664,7 +1676,9 @@ impl MemEngine {
                     self.kv
                         .estimated_bytes
                         .fetch_sub(old.payload_bytes, Ordering::Relaxed);
-                    self.kv.space_counter(namespace).fetch_sub(1, Ordering::Relaxed);
+                    self.kv
+                        .space_counter(namespace)
+                        .fetch_sub(1, Ordering::Relaxed);
                     old.expires_at_ms.is_none_or(|x| x > now)
                 } else {
                     false
@@ -1732,7 +1746,9 @@ impl MemEngine {
                     self.json
                         .estimated_bytes
                         .fetch_sub(old.payload_bytes, Ordering::Relaxed);
-                    self.json.space_counter(space).fetch_sub(1, Ordering::Relaxed);
+                    self.json
+                        .space_counter(space)
+                        .fetch_sub(1, Ordering::Relaxed);
                     old.expires_at_ms.is_none_or(|x| x > now)
                 } else {
                     false
@@ -1762,7 +1778,7 @@ impl MemEngine {
         let s_idx = ShardedMemTable::<serde_json::Value>::shard_index(space, key);
         let bucket = guards.json_bucket_mut(s_idx);
         let seq = self.json.next_seq();
-        let payload_len = serde_json::to_vec(&value).map(|v| v.len()).unwrap_or(64);
+        let payload_len = serde_json::to_vec(&value).map_or(64, |v| v.len());
         let new_bytes = space.len() + key.len() + payload_len;
         let lookup = (space.to_owned(), key.to_vec());
         let active_ver = bucket
@@ -1782,22 +1798,21 @@ impl MemEngine {
                 payload_bytes: new_bytes,
             },
         );
-        match old {
-            Some(o) => {
-                self.json
-                    .estimated_bytes
-                    .fetch_sub(o.payload_bytes, Ordering::Relaxed);
-                self.json
-                    .estimated_bytes
-                    .fetch_add(new_bytes, Ordering::Relaxed);
-            }
-            None => {
-                self.json.total_entries.fetch_add(1, Ordering::Relaxed);
-                self.json
-                    .estimated_bytes
-                    .fetch_add(new_bytes, Ordering::Relaxed);
-                self.json.space_counter(space).fetch_add(1, Ordering::Relaxed);
-            }
+        if let Some(o) = old {
+            self.json
+                .estimated_bytes
+                .fetch_sub(o.payload_bytes, Ordering::Relaxed);
+            self.json
+                .estimated_bytes
+                .fetch_add(new_bytes, Ordering::Relaxed);
+        } else {
+            self.json.total_entries.fetch_add(1, Ordering::Relaxed);
+            self.json
+                .estimated_bytes
+                .fetch_add(new_bytes, Ordering::Relaxed);
+            self.json
+                .space_counter(space)
+                .fetch_add(1, Ordering::Relaxed);
         }
         if !matches!(spec.eviction, EvictionPolicy::None) {
             guards.evict_json.push((space.to_owned(), spec.eviction));
@@ -1836,9 +1851,13 @@ pub(crate) struct MemShardGuards<'a> {
     evict_json: Vec<(String, EvictionPolicy)>,
 }
 
-impl<'a> MemShardGuards<'a> {
+impl MemShardGuards<'_> {
     fn kv_bucket(&self, idx: usize) -> &ShardBucket<Vec<u8>> {
-        &self.kv[self.kv.binary_search_by_key(&idx, |(i, _)| *i).expect("locked kv shard")].1
+        &self.kv[self
+            .kv
+            .binary_search_by_key(&idx, |(i, _)| *i)
+            .expect("locked kv shard")]
+        .1
     }
 
     fn kv_bucket_mut(&mut self, idx: usize) -> &mut ShardBucket<Vec<u8>> {
@@ -1850,7 +1869,11 @@ impl<'a> MemShardGuards<'a> {
     }
 
     fn json_bucket(&self, idx: usize) -> &ShardBucket<serde_json::Value> {
-        &self.json[self.json.binary_search_by_key(&idx, |(i, _)| *i).expect("locked json shard")].1
+        &self.json[self
+            .json
+            .binary_search_by_key(&idx, |(i, _)| *i)
+            .expect("locked json shard")]
+        .1
     }
 
     fn json_bucket_mut(&mut self, idx: usize) -> &mut ShardBucket<serde_json::Value> {
@@ -1889,12 +1912,15 @@ pub(crate) use vtab_tables::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod vtab_tables {
-    use super::*;
+    use super::{
+        now_ms, Arc, CollectionCatalog, ConstraintOp, IndexConstraint, IndexPlan, MemEngine,
+        Result, VTabValue, ValueCodec, VirtualCursor, VirtualTableProvider,
+    };
     use lilia_core::{compress_timeseries, CollectionSpec};
 
     type RowFetcher<R> = Arc<dyn Fn(Option<&str>, Option<&[u8]>) -> Vec<R> + Send + Sync>;
 
-    /// Generic VirtualTableProvider backed by an in-memory closure and column-0/column-1 filter pushdown.
+    /// Generic `VirtualTableProvider` backed by an in-memory closure and column-0/column-1 filter pushdown.
     pub(crate) struct SliceVTab<R: Send + Sync + 'static> {
         ddl: &'static str,
         fetcher: RowFetcher<R>,
@@ -1926,114 +1952,119 @@ mod vtab_tables {
         pos: usize,
     }
 
-impl<R: Send + Sync + 'static> VirtualCursor for SliceCursor<R> {
-    fn filter(&mut self, idx_num: i32, _idx_str: Option<&str>, args: &[VTabValue]) -> Result<()> {
-        let col0 = if (idx_num & 1) != 0 {
-            match args.first() {
-                Some(VTabValue::Text(s)) => Some(s.as_str()),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let col1_owned = if (idx_num & 2) != 0 {
-            let arg_idx = usize::from((idx_num & 1) != 0);
-            match args.get(arg_idx) {
-                Some(VTabValue::Blob(b)) => Some(b.clone()),
-                Some(VTabValue::Text(s)) => Some(s.as_bytes().to_vec()),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        self.rows = (self.fetcher)(col0, col1_owned.as_deref());
-        self.pos = 0;
-        Ok(())
+    impl<R: Send + Sync + 'static> VirtualCursor for SliceCursor<R> {
+        fn filter(
+            &mut self,
+            idx_num: i32,
+            _idx_str: Option<&str>,
+            args: &[VTabValue],
+        ) -> Result<()> {
+            let col0 = if (idx_num & 1) != 0 {
+                match args.first() {
+                    Some(VTabValue::Text(s)) => Some(s.as_str()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let col1_owned = if (idx_num & 2) != 0 {
+                let arg_idx = usize::from((idx_num & 1) != 0);
+                match args.get(arg_idx) {
+                    Some(VTabValue::Blob(b)) => Some(b.clone()),
+                    Some(VTabValue::Text(s)) => Some(s.as_bytes().to_vec()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            self.rows = (self.fetcher)(col0, col1_owned.as_deref());
+            self.pos = 0;
+            Ok(())
+        }
+
+        fn next(&mut self) -> Result<()> {
+            self.pos += 1;
+            Ok(())
+        }
+
+        fn eof(&self) -> bool {
+            self.pos >= self.rows.len()
+        }
+
+        fn column(&self, col: i32) -> Result<VTabValue> {
+            Ok((self.col_mapper)(&self.rows[self.pos], col))
+        }
+
+        fn rowid(&self) -> i64 {
+            i64::try_from(self.pos).unwrap_or(0)
+        }
     }
 
-    fn next(&mut self) -> Result<()> {
-        self.pos += 1;
-        Ok(())
-    }
+    impl<R: Send + Sync + 'static> VirtualTableProvider for SliceVTab<R> {
+        fn schema_ddl(&self) -> &str {
+            self.ddl
+        }
 
-    fn eof(&self) -> bool {
-        self.pos >= self.rows.len()
-    }
+        fn best_index(&self, constraints: &[IndexConstraint]) -> IndexPlan {
+            let mut idx_num = 0;
+            let mut usage = Vec::new();
+            let mut next_arg = 1;
+            let mut col0_idx = None;
+            let mut col1_idx = None;
 
-    fn column(&self, col: i32) -> Result<VTabValue> {
-        Ok((self.col_mapper)(&self.rows[self.pos], col))
-    }
-
-    fn rowid(&self) -> i64 {
-        i64::try_from(self.pos).unwrap_or(0)
-    }
-}
-
-impl<R: Send + Sync + 'static> VirtualTableProvider for SliceVTab<R> {
-    fn schema_ddl(&self) -> &str {
-        self.ddl
-    }
-
-    fn best_index(&self, constraints: &[IndexConstraint]) -> IndexPlan {
-        let mut idx_num = 0;
-        let mut usage = Vec::new();
-        let mut next_arg = 1;
-        let mut col0_idx = None;
-        let mut col1_idx = None;
-
-        for (i, c) in constraints.iter().enumerate() {
-            if c.usable && c.op == ConstraintOp::Eq {
-                if c.column == 0 && col0_idx.is_none() {
-                    col0_idx = Some(i);
-                } else if self.has_key_pushdown && c.column == 1 && col1_idx.is_none() {
-                    col1_idx = Some(i);
+            for (i, c) in constraints.iter().enumerate() {
+                if c.usable && c.op == ConstraintOp::Eq {
+                    if c.column == 0 && col0_idx.is_none() {
+                        col0_idx = Some(i);
+                    } else if self.has_key_pushdown && c.column == 1 && col1_idx.is_none() {
+                        col1_idx = Some(i);
+                    }
                 }
             }
+
+            if let Some(i) = col0_idx {
+                idx_num |= 1;
+                usage.push((i, next_arg, false));
+                next_arg += 1;
+            }
+            if let Some(i) = col1_idx {
+                idx_num |= 2;
+                usage.push((i, next_arg, false));
+            }
+
+            let (estimated_cost, estimated_rows, unique_scan) = match idx_num {
+                3 => (1.0, 1, true),
+                1 => (20.0, 50, false),
+                _ => (1000.0, 1000, false),
+            };
+
+            IndexPlan {
+                idx_num,
+                idx_str: None,
+                constraint_usage: usage,
+                estimated_cost,
+                estimated_rows,
+                unique_scan,
+            }
         }
 
-        if let Some(i) = col0_idx {
-            idx_num |= 1;
-            usage.push((i, next_arg, false));
-            next_arg += 1;
-        }
-        if let Some(i) = col1_idx {
-            idx_num |= 2;
-            usage.push((i, next_arg, false));
-        }
-
-        let (estimated_cost, estimated_rows, unique_scan) = match idx_num {
-            3 => (1.0, 1, true),
-            1 => (20.0, 50, false),
-            _ => (1000.0, 1000, false),
-        };
-
-        IndexPlan {
-            idx_num,
-            idx_str: None,
-            constraint_usage: usage,
-            estimated_cost,
-            estimated_rows,
-            unique_scan,
+        fn open_cursor(&self) -> Result<Box<dyn VirtualCursor>> {
+            Ok(Box::new(SliceCursor {
+                fetcher: Arc::clone(&self.fetcher),
+                col_mapper: self.col_mapper,
+                rows: Vec::new(),
+                pos: 0,
+            }))
         }
     }
 
-    fn open_cursor(&self) -> Result<Box<dyn VirtualCursor>> {
-        Ok(Box::new(SliceCursor {
-            fetcher: Arc::clone(&self.fetcher),
-            col_mapper: self.col_mapper,
-            rows: Vec::new(),
-            pos: 0,
-        }))
-    }
-}
-
-pub(crate) fn build_mem_kv_vtab(
-    mem: &Arc<MemEngine>,
-    codec: &Arc<dyn ValueCodec>,
-) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    let codec = Arc::clone(codec);
-    SliceVTab::new(
+    pub(crate) fn build_mem_kv_vtab(
+        mem: &Arc<MemEngine>,
+        codec: &Arc<dyn ValueCodec>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        let codec = Arc::clone(codec);
+        SliceVTab::new(
         "CREATE TABLE x(namespace TEXT, key BLOB, value BLOB, version INTEGER, expires_at_ms INTEGER)",
         true,
         move |ns, key| {
@@ -2067,70 +2098,71 @@ pub(crate) fn build_mem_kv_vtab(
             _ => VTabValue::Null,
         },
     )
-}
+    }
 
-pub(crate) fn build_mem_json_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
-        "CREATE TABLE x(space TEXT, id TEXT, value TEXT, version INTEGER)",
-        true,
-        move |space, id| {
-            let now = now_ms();
-            if let (Some(s), Some(i)) = (space, id) {
-                return mem
-                    .json
-                    .get(s, i, now, false)
+    pub(crate) fn build_mem_json_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
+            "CREATE TABLE x(space TEXT, id TEXT, value TEXT, version INTEGER)",
+            true,
+            move |space, id| {
+                let now = now_ms();
+                if let (Some(s), Some(i)) = (space, id) {
+                    return mem
+                        .json
+                        .get(s, i, now, false)
+                        .into_iter()
+                        .map(|snap| {
+                            (
+                                s.to_owned(),
+                                String::from_utf8_lossy(i).into_owned(),
+                                serde_json::to_string(&snap.value)
+                                    .unwrap_or_else(|_| "null".into()),
+                                snap.version,
+                            )
+                        })
+                        .collect();
+                }
+                mem.json
+                    .scan(space, None, usize::MAX, now)
                     .into_iter()
-                    .map(|snap| {
+                    .map(|(s, i, snap)| {
                         (
-                            s.to_owned(),
-                            String::from_utf8_lossy(i).into_owned(),
+                            s,
+                            String::from_utf8_lossy(&i).into_owned(),
                             serde_json::to_string(&snap.value).unwrap_or_else(|_| "null".into()),
                             snap.version,
                         )
                     })
-                    .collect();
-            }
-            mem.json
-                .scan(space, None, usize::MAX, now)
-                .into_iter()
-                .map(|(s, i, snap)| {
-                    (
-                        s,
-                        String::from_utf8_lossy(&i).into_owned(),
-                        serde_json::to_string(&snap.value).unwrap_or_else(|_| "null".into()),
-                        snap.version,
-                    )
-                })
-                .collect()
-        },
-        |r, col| match col {
-            0 => VTabValue::Text(r.0.clone()),
-            1 => VTabValue::Text(r.1.clone()),
-            2 => VTabValue::Text(r.2.clone()),
-            3 => VTabValue::Int(i64::try_from(r.3).unwrap_or(i64::MAX)),
-            _ => VTabValue::Null,
-        },
-    )
-}
+                    .collect()
+            },
+            |r, col| match col {
+                0 => VTabValue::Text(r.0.clone()),
+                1 => VTabValue::Text(r.1.clone()),
+                2 => VTabValue::Text(r.2.clone()),
+                3 => VTabValue::Int(i64::try_from(r.3).unwrap_or(i64::MAX)),
+                _ => VTabValue::Null,
+            },
+        )
+    }
 
-#[derive(Clone)]
-pub(crate) struct TsVTabRow {
-    series_id: String,
-    resolution_ms: i64,
-    start_time: i64,
-    end_time: i64,
-    point_count: i64,
-    min_val: f64,
-    max_val: f64,
-    sum_val: f64,
-    avg_val: f64,
-    compressed_bytes: i64,
-}
+    #[derive(Clone)]
+    pub(crate) struct TsVTabRow {
+        series_id: String,
+        resolution_ms: i64,
+        start_time: i64,
+        end_time: i64,
+        point_count: i64,
+        min_val: f64,
+        max_val: f64,
+        sum_val: f64,
+        avg_val: f64,
+        compressed_bytes: i64,
+    }
 
-pub(crate) fn build_mem_ts_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
+    pub(crate) fn build_mem_ts_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
         "CREATE TABLE x(series_id TEXT, resolution_ms INTEGER, start_time INTEGER, end_time INTEGER, point_count INTEGER, min_val REAL, max_val REAL, sum_val REAL, avg_val REAL, compressed_bytes INTEGER)",
         false,
         move |series_id, _| {
@@ -2159,8 +2191,7 @@ pub(crate) fn build_mem_ts_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTablePro
                 #[allow(clippy::cast_precision_loss)]
                 let avg_val = sum_val / (pts.len() as f64);
                 let compressed_bytes = compress_timeseries(pts)
-                    .map(|c| i64::try_from(c.len()).unwrap_or(0))
-                    .unwrap_or(0);
+                    .map_or(0, |c| i64::try_from(c.len()).unwrap_or(0));
                 rows.push(TsVTabRow {
                     series_id: sid,
                     resolution_ms: res_ms,
@@ -2190,11 +2221,13 @@ pub(crate) fn build_mem_ts_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTablePro
             _ => VTabValue::Null,
         },
     )
-}
+    }
 
-pub(crate) fn build_mem_graph_nodes_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
+    pub(crate) fn build_mem_graph_nodes_vtab(
+        mem: &Arc<MemEngine>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
         "CREATE TABLE x(graph TEXT, id TEXT, kind TEXT, metadata TEXT, doc_space TEXT, doc_id TEXT)",
         true,
         move |graph, id| {
@@ -2223,34 +2256,36 @@ pub(crate) fn build_mem_graph_nodes_vtab(mem: &Arc<MemEngine>) -> Arc<dyn Virtua
             _ => VTabValue::Null,
         },
     )
-}
+    }
 
-pub(crate) fn build_mem_graph_edges_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
-        "CREATE TABLE x(graph TEXT, source TEXT, target TEXT, kind TEXT, weight REAL)",
-        false,
-        move |graph, _| {
-            mem.graph_edges
-                .scan(graph, None, usize::MAX, now_ms())
-                .into_iter()
-                .map(|(_, _, s)| s.value)
-                .collect()
-        },
-        |e, col| match col {
-            0 => VTabValue::Text(e.graph.clone()),
-            1 => VTabValue::Text(e.source.clone()),
-            2 => VTabValue::Text(e.target.clone()),
-            3 => VTabValue::Text(e.kind.clone()),
-            4 => VTabValue::Float(e.weight),
-            _ => VTabValue::Null,
-        },
-    )
-}
+    pub(crate) fn build_mem_graph_edges_vtab(
+        mem: &Arc<MemEngine>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
+            "CREATE TABLE x(graph TEXT, source TEXT, target TEXT, kind TEXT, weight REAL)",
+            false,
+            move |graph, _| {
+                mem.graph_edges
+                    .scan(graph, None, usize::MAX, now_ms())
+                    .into_iter()
+                    .map(|(_, _, s)| s.value)
+                    .collect()
+            },
+            |e, col| match col {
+                0 => VTabValue::Text(e.graph.clone()),
+                1 => VTabValue::Text(e.source.clone()),
+                2 => VTabValue::Text(e.target.clone()),
+                3 => VTabValue::Text(e.kind.clone()),
+                4 => VTabValue::Float(e.weight),
+                _ => VTabValue::Null,
+            },
+        )
+    }
 
-pub(crate) fn build_mem_vectors_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
+    pub(crate) fn build_mem_vectors_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
         "CREATE TABLE x(collection TEXT, id TEXT, dim INTEGER, element_type INTEGER, vector BLOB)",
         true,
         move |coll, id| {
@@ -2294,11 +2329,13 @@ pub(crate) fn build_mem_vectors_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTab
             _ => VTabValue::Null,
         },
     )
-}
+    }
 
-pub(crate) fn build_mem_vector_indexes_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
+    pub(crate) fn build_mem_vector_indexes_vtab(
+        mem: &Arc<MemEngine>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
         "CREATE TABLE x(collection TEXT, entry_id TEXT, max_level INTEGER, m INTEGER, ef_construction INTEGER, ef_search INTEGER, metric TEXT, element_type INTEGER, dim INTEGER)",
         false,
         move |coll, _| {
@@ -2318,7 +2355,6 @@ pub(crate) fn build_mem_vector_indexes_vtab(mem: &Arc<MemEngine>) -> Arc<dyn Vir
         },
         |(c, cfg), col| match col {
             0 => VTabValue::Text(c.clone()),
-            1 | 2 => VTabValue::Null,
             3 => VTabValue::Int(i64::try_from(cfg.m).unwrap_or(0)),
             4 => VTabValue::Int(i64::try_from(cfg.ef_construction).unwrap_or(0)),
             5 => VTabValue::Int(i64::try_from(cfg.ef_search).unwrap_or(0)),
@@ -2328,114 +2364,126 @@ pub(crate) fn build_mem_vector_indexes_vtab(mem: &Arc<MemEngine>) -> Arc<dyn Vir
             _ => VTabValue::Null,
         },
     )
-}
+    }
 
-pub(crate) fn build_mem_crdt_counters_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
-        "CREATE TABLE x(space TEXT, id TEXT, value INTEGER)",
-        true,
-        move |space, id| {
-            mem.crdt_counters
-                .scan(space, None, usize::MAX, now_ms())
-                .into_iter()
-                .filter(|(_, k, _)| id.is_none_or(|target| k.as_slice() == target))
-                .map(|(s, i, snap)| (s, String::from_utf8_lossy(&i).into_owned(), snap.value.value()))
-                .collect()
-        },
-        |r, col| match col {
-            0 => VTabValue::Text(r.0.clone()),
-            1 => VTabValue::Text(r.1.clone()),
-            2 => VTabValue::Int(r.2),
-            _ => VTabValue::Null,
-        },
-    )
-}
+    pub(crate) fn build_mem_crdt_counters_vtab(
+        mem: &Arc<MemEngine>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
+            "CREATE TABLE x(space TEXT, id TEXT, value INTEGER)",
+            true,
+            move |space, id| {
+                mem.crdt_counters
+                    .scan(space, None, usize::MAX, now_ms())
+                    .into_iter()
+                    .filter(|(_, k, _)| id.is_none_or(|target| k.as_slice() == target))
+                    .map(|(s, i, snap)| {
+                        (
+                            s,
+                            String::from_utf8_lossy(&i).into_owned(),
+                            snap.value.value(),
+                        )
+                    })
+                    .collect()
+            },
+            |r, col| match col {
+                0 => VTabValue::Text(r.0.clone()),
+                1 => VTabValue::Text(r.1.clone()),
+                2 => VTabValue::Int(r.2),
+                _ => VTabValue::Null,
+            },
+        )
+    }
 
-pub(crate) fn build_mem_crdt_orsets_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
-        "CREATE TABLE x(space TEXT, id TEXT, element TEXT)",
-        true,
-        move |space, id| {
-            let mut out = Vec::new();
-            for (s, i_bytes, snap) in mem.crdt_orsets.scan(space, None, usize::MAX, now_ms()) {
-                if id.is_some_and(|target| i_bytes.as_slice() != target) {
-                    continue;
-                }
-                let id_str = String::from_utf8_lossy(&i_bytes).into_owned();
-                for (elem, tags) in snap.value.entries {
-                    if tags.iter().any(|t| !snap.value.tombstones.contains_key(t)) {
-                        out.push((s.clone(), id_str.clone(), elem));
+    pub(crate) fn build_mem_crdt_orsets_vtab(
+        mem: &Arc<MemEngine>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
+            "CREATE TABLE x(space TEXT, id TEXT, element TEXT)",
+            true,
+            move |space, id| {
+                let mut out = Vec::new();
+                for (s, i_bytes, snap) in mem.crdt_orsets.scan(space, None, usize::MAX, now_ms()) {
+                    if id.is_some_and(|target| i_bytes.as_slice() != target) {
+                        continue;
+                    }
+                    let id_str = String::from_utf8_lossy(&i_bytes).into_owned();
+                    for (elem, tags) in snap.value.entries {
+                        if tags.iter().any(|t| !snap.value.tombstones.contains_key(t)) {
+                            out.push((s.clone(), id_str.clone(), elem));
+                        }
                     }
                 }
-            }
-            out
-        },
-        |r, col| match col {
-            0 => VTabValue::Text(r.0.clone()),
-            1 => VTabValue::Text(r.1.clone()),
-            2 => VTabValue::Text(r.2.clone()),
-            _ => VTabValue::Null,
-        },
-    )
-}
+                out
+            },
+            |r, col| match col {
+                0 => VTabValue::Text(r.0.clone()),
+                1 => VTabValue::Text(r.1.clone()),
+                2 => VTabValue::Text(r.2.clone()),
+                _ => VTabValue::Null,
+            },
+        )
+    }
 
-pub(crate) fn build_mem_crdt_json_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
-    let mem = Arc::clone(mem);
-    SliceVTab::new(
-        "CREATE TABLE x(space TEXT, id TEXT, value TEXT, version INTEGER)",
-        true,
-        move |space, id| {
-            mem.crdt_json
-                .scan(space, None, usize::MAX, now_ms())
-                .into_iter()
-                .filter(|(_, k, _)| id.is_none_or(|target| k.as_slice() == target))
-                .map(|(s, i, snap)| {
-                    (
-                        s,
-                        String::from_utf8_lossy(&i).into_owned(),
-                        serde_json::to_string(&snap.value.1).unwrap_or_else(|_| "{}".into()),
-                        snap.version,
-                    )
-                })
-                .collect()
-        },
-        |r, col| match col {
-            0 => VTabValue::Text(r.0.clone()),
-            1 => VTabValue::Text(r.1.clone()),
-            2 => VTabValue::Text(r.2.clone()),
-            3 => VTabValue::Int(i64::try_from(r.3).unwrap_or(i64::MAX)),
-            _ => VTabValue::Null,
-        },
-    )
-}
+    pub(crate) fn build_mem_crdt_json_vtab(mem: &Arc<MemEngine>) -> Arc<dyn VirtualTableProvider> {
+        let mem = Arc::clone(mem);
+        SliceVTab::new(
+            "CREATE TABLE x(space TEXT, id TEXT, value TEXT, version INTEGER)",
+            true,
+            move |space, id| {
+                mem.crdt_json
+                    .scan(space, None, usize::MAX, now_ms())
+                    .into_iter()
+                    .filter(|(_, k, _)| id.is_none_or(|target| k.as_slice() == target))
+                    .map(|(s, i, snap)| {
+                        (
+                            s,
+                            String::from_utf8_lossy(&i).into_owned(),
+                            serde_json::to_string(&snap.value.1).unwrap_or_else(|_| "{}".into()),
+                            snap.version,
+                        )
+                    })
+                    .collect()
+            },
+            |r, col| match col {
+                0 => VTabValue::Text(r.0.clone()),
+                1 => VTabValue::Text(r.1.clone()),
+                2 => VTabValue::Text(r.2.clone()),
+                3 => VTabValue::Int(i64::try_from(r.3).unwrap_or(i64::MAX)),
+                _ => VTabValue::Null,
+            },
+        )
+    }
 
-pub(crate) fn build_catalog_vtab(catalog: &Arc<CollectionCatalog>) -> Arc<dyn VirtualTableProvider> {
-    let catalog = Arc::clone(catalog);
-    SliceVTab::new(
-        "CREATE TABLE x(kind TEXT, name TEXT, tier TEXT, ttl_ms INTEGER, eviction TEXT)",
-        true,
-        move |kind_filter, name_filter| {
-            catalog
-                .list_specs()
-                .into_iter()
-                .filter(|s| {
-                    kind_filter.is_none_or(|k| s.kind.as_str() == k)
-                        && name_filter.is_none_or(|n| s.name.as_bytes() == n)
-                })
-                .collect::<Vec<CollectionSpec>>()
-        },
-        |s, col| match col {
-            0 => VTabValue::Text(s.kind.as_str().to_owned()),
-            1 => VTabValue::Text(s.name.clone()),
-            2 => VTabValue::Text(s.tier.as_str().to_owned()),
-            3 => s
-                .ttl_ms
-                .map_or(VTabValue::Null, |t| VTabValue::Int(i64::try_from(t).unwrap_or(i64::MAX))),
-            4 => VTabValue::Text(serde_json::to_string(&s.eviction).unwrap_or_default()),
-            _ => VTabValue::Null,
-        },
-    )
-}
+    pub(crate) fn build_catalog_vtab(
+        catalog: &Arc<CollectionCatalog>,
+    ) -> Arc<dyn VirtualTableProvider> {
+        let catalog = Arc::clone(catalog);
+        SliceVTab::new(
+            "CREATE TABLE x(kind TEXT, name TEXT, tier TEXT, ttl_ms INTEGER, eviction TEXT)",
+            true,
+            move |kind_filter, name_filter| {
+                catalog
+                    .list_specs()
+                    .into_iter()
+                    .filter(|s| {
+                        kind_filter.is_none_or(|k| s.kind.as_str() == k)
+                            && name_filter.is_none_or(|n| s.name.as_bytes() == n)
+                    })
+                    .collect::<Vec<CollectionSpec>>()
+            },
+            |s, col| match col {
+                0 => VTabValue::Text(s.kind.as_str().to_owned()),
+                1 => VTabValue::Text(s.name.clone()),
+                2 => VTabValue::Text(s.tier.as_str().to_owned()),
+                3 => s.ttl_ms.map_or(VTabValue::Null, |t| {
+                    VTabValue::Int(i64::try_from(t).unwrap_or(i64::MAX))
+                }),
+                4 => VTabValue::Text(serde_json::to_string(&s.eviction).unwrap_or_default()),
+                _ => VTabValue::Null,
+            },
+        )
+    }
 }

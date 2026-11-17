@@ -33,12 +33,7 @@ impl KeyMaterial {
     #[must_use]
     pub fn from_32_bytes(key: [u8; 32]) -> Self {
         let mut siv_key = [0u8; 64];
-        pbkdf2::pbkdf2_hmac::<Sha256>(
-            &key,
-            KEY_EXPANSION_INFO,
-            1,
-            &mut siv_key,
-        );
+        pbkdf2::pbkdf2_hmac::<Sha256>(&key, KEY_EXPANSION_INFO, 1, &mut siv_key);
         Self {
             gcm_key: key,
             siv_key,
@@ -52,7 +47,10 @@ impl KeyMaterial {
     pub fn from_64_bytes(key: [u8; 64]) -> Self {
         let mut gcm_key = [0u8; 32];
         gcm_key.copy_from_slice(&key[..32]);
-        Self { gcm_key, siv_key: key }
+        Self {
+            gcm_key,
+            siv_key: key,
+        }
     }
 
     /// Constructs `KeyMaterial` from arbitrary bytes (if 32 or 64 bytes).
@@ -81,12 +79,7 @@ impl KeyMaterial {
     #[must_use]
     pub fn from_passphrase(passphrase: &str, salt: &[u8]) -> Self {
         let mut key32 = [0u8; 32];
-        pbkdf2::pbkdf2_hmac::<Sha256>(
-            passphrase.as_bytes(),
-            salt,
-            100_000,
-            &mut key32,
-        );
+        pbkdf2::pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), salt, 100_000, &mut key32);
         Self::from_32_bytes(key32)
     }
 

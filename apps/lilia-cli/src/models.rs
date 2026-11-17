@@ -255,7 +255,9 @@ fn integrity_model(database: &Database, command: IntegrityCommand) -> anyhow::Re
                 "cascade" => lilia_core::RefAction::Cascade,
                 "restrict" => lilia_core::RefAction::Restrict,
                 "set_null" => lilia_core::RefAction::SetNull,
-                other => anyhow::bail!("unknown on-delete action '{other}': expected cascade, restrict, or set_null"),
+                other => anyhow::bail!(
+                    "unknown on-delete action '{other}': expected cascade, restrict, or set_null"
+                ),
             };
             let mut reference = lilia_core::Reference::graph_nodes(graph, target)
                 .on_delete(action)
@@ -276,10 +278,11 @@ fn integrity_model(database: &Database, command: IntegrityCommand) -> anyhow::Re
             let action = match on_delete.to_lowercase().as_str() {
                 "cascade" => lilia_core::RefAction::Cascade,
                 "restrict" => lilia_core::RefAction::Restrict,
-                other => anyhow::bail!("unknown on-delete action '{other}': expected cascade or restrict"),
+                other => anyhow::bail!(
+                    "unknown on-delete action '{other}': expected cascade or restrict"
+                ),
             };
-            let mut reference = lilia_core::Reference::kv(namespace, target)
-                .on_delete(action);
+            let mut reference = lilia_core::Reference::kv(namespace, target).on_delete(action);
             if let Some(sep) = prefix_separator {
                 reference = reference.key(lilia_core::KeyMapping::Prefix { separator: sep });
             }
@@ -475,93 +478,96 @@ fn parse_element_type(raw: &str) -> anyhow::Result<VectorElementType> {
 
 fn parse_vector_data(raw: &str, element_type: VectorElementType) -> anyhow::Result<(Vec<u8>, u32)> {
     let trimmed = raw.trim();
-    // 1. Try JSON array
+
+    // 1. JSON array
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
         if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(trimmed) {
-            match element_type {
-                VectorElementType::Float32 => {
-                    let mut bytes = Vec::with_capacity(arr.len() * 4);
-                    for item in &arr {
-                        let f = item
-                            .as_f64()
-                            .ok_or_else(|| anyhow::anyhow!("vector element not a number"))?
-                            as f32;
-                        bytes.extend_from_slice(&f.to_le_bytes());
-                    }
-                    return Ok((bytes, arr.len() as u32));
-                }
-                VectorElementType::Int8 => {
-                    let mut bytes = Vec::with_capacity(arr.len());
-                    for item in &arr {
-                        let i = item
-                            .as_i64()
-                            .ok_or_else(|| anyhow::anyhow!("vector element not an int"))?
-                            as i8;
-                        bytes.push(i as u8);
-                    }
-                    return Ok((bytes, arr.len() as u32));
-                }
-                VectorElementType::Bit => {
-                    let mut bytes = Vec::with_capacity(arr.len());
-                    for item in &arr {
-                        let u = item
-                            .as_u64()
-                            .ok_or_else(|| anyhow::anyhow!("vector element not a u8"))?
-                            as u8;
-                        bytes.push(u);
-                    }
-                    return Ok((bytes, (arr.len() * 8) as u32));
-                }
-            }
+            let numbers = arr
+                .iter()
+                .map(|item| {
+                    item.as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("vector element `{item}` is not a number"))
+                })
+                .collect::<anyhow::Result<Vec<f64>>>()?;
+            return encode_vector(&numbers, element_type);
         }
     }
 
-    // 2. Try Base64
+    // 2. Base64
     if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(trimmed) {
-        let dim = match element_type {
-            VectorElementType::Float32 => (bytes.len() / 4) as u32,
-            VectorElementType::Int8 => bytes.len() as u32,
-            VectorElementType::Bit => (bytes.len() * 8) as u32,
-        };
+        let dim = vector_dimension(bytes.len(), element_type)?;
         return Ok((bytes, dim));
     }
 
-    // 3. Try comma-separated numbers
-    let parts: std::result::Result<Vec<f32>, _> = trimmed
+    // 3. Comma-separated numbers
+    let parts: std::result::Result<Vec<f64>, _> = trimmed
         .split(',')
-        .map(|s| s.trim().parse::<f32>())
+        .map(|s| s.trim().parse::<f64>())
         .collect();
-    if let Ok(floats) = parts {
-        if !floats.is_empty() {
-            match element_type {
-                VectorElementType::Float32 => {
-                    let mut bytes = Vec::with_capacity(floats.len() * 4);
-                    for f in &floats {
-                        bytes.extend_from_slice(&f.to_le_bytes());
-                    }
-                    return Ok((bytes, floats.len() as u32));
-                }
-                VectorElementType::Int8 => {
-                    let mut bytes = Vec::with_capacity(floats.len());
-                    for f in &floats {
-                        bytes.push(*f as i8 as u8);
-                    }
-                    return Ok((bytes, floats.len() as u32));
-                }
-                VectorElementType::Bit => {
-                    let mut bytes = Vec::with_capacity(floats.len());
-                    for f in &floats {
-                        bytes.push(*f as u8);
-                    }
-                    return Ok((bytes, (floats.len() * 8) as u32));
-                }
-            }
+    if let Ok(numbers) = parts {
+        if !numbers.is_empty() {
+            return encode_vector(&numbers, element_type);
         }
     }
 
     anyhow::bail!("unable to parse vector input: must be JSON array (e.g. `[1.0, 2.0]`), comma-separated numbers, or base64")
 }
 
+/// Encodes `numbers` as `element_type` bytes: little-endian `f32`, one `i8` per element, or one
+/// byte of eight bits per element. Integer element types reject non-integral or out-of-range values.
+fn encode_vector(
+    numbers: &[f64],
+    element_type: VectorElementType,
+) -> anyhow::Result<(Vec<u8>, u32)> {
+    let bytes = match element_type {
+        VectorElementType::Float32 => numbers
+            .iter()
+            .flat_map(|&n| nearest_f32(n).to_le_bytes())
+            .collect(),
+        VectorElementType::Int8 => numbers
+            .iter()
+            .map(|&n| {
+                lilia_core::json::binary::exact_int(n)
+                    .and_then(|i| i8::try_from(i).ok())
+                    .map(i8::cast_unsigned)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("int8 vector element {n} is not an integer in -128..=127")
+                    })
+            })
+            .collect::<anyhow::Result<Vec<u8>>>()?,
+        VectorElementType::Bit => numbers
+            .iter()
+            .map(|&n| {
+                lilia_core::json::binary::exact_int(n)
+                    .and_then(|i| u8::try_from(i).ok())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("bit vector byte {n} is not an integer in 0..=255")
+                    })
+            })
+            .collect::<anyhow::Result<Vec<u8>>>()?,
+    };
+    let dim = vector_dimension(bytes.len(), element_type)?;
+    Ok((bytes, dim))
+}
+
+/// Number of dimensions held by `byte_len` bytes of `element_type`.
+fn vector_dimension(byte_len: usize, element_type: VectorElementType) -> anyhow::Result<u32> {
+    let dimensions = match element_type {
+        VectorElementType::Float32 => Some(byte_len / 4),
+        VectorElementType::Int8 => Some(byte_len),
+        VectorElementType::Bit => byte_len.checked_mul(8),
+    };
+    dimensions
+        .and_then(|d| u32::try_from(d).ok())
+        .ok_or_else(|| anyhow::anyhow!("vector of {byte_len} bytes has too many dimensions"))
+}
+
+#[allow(clippy::cast_possible_truncation)] // f32 vectors store the nearest representable value
+fn nearest_f32(value: f64) -> f32 {
+    value as f32
+}
+
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn vector(database: &Database, command: VectorCommand) -> anyhow::Result<Value> {
     match command {
         VectorCommand::CreateIndex {
@@ -628,13 +634,15 @@ fn vector(database: &Database, command: VectorCommand) -> anyhow::Result<Value> 
                     let values: Value = match elem_type {
                         VectorElementType::Float32 => {
                             let floats: Vec<f32> = bytes
-                                .chunks_exact(4)
-                                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|c| f32::from_le_bytes(*c))
                                 .collect();
                             json!(floats)
                         }
                         VectorElementType::Int8 => {
-                            let ints: Vec<i8> = bytes.into_iter().map(|b| b as i8).collect();
+                            let ints: Vec<i8> = bytes.into_iter().map(u8::cast_signed).collect();
                             json!(ints)
                         }
                         VectorElementType::Bit => {
@@ -715,7 +723,8 @@ fn vector(database: &Database, command: VectorCommand) -> anyhow::Result<Value> 
     }
 }
 
-fn hybrid(database: &Database, command: HybridCommand) -> anyhow::Result<Value> {    match command {
+fn hybrid(database: &Database, command: HybridCommand) -> anyhow::Result<Value> {
+    match command {
         HybridCommand::Search {
             collection,
             query,
@@ -762,7 +771,13 @@ fn crdt(database: &Database, command: CrdtCommand) -> anyhow::Result<Value> {
             Ok(json!({ "ok": true, "space": space, "id": id, "value": value }))
         }
         CrdtCommand::Counter {
-            command: CrdtCounterCommand::Inc { space, id, actor_id, amount },
+            command:
+                CrdtCounterCommand::Inc {
+                    space,
+                    id,
+                    actor_id,
+                    amount,
+                },
         } => mutate(lilia_core::BatchOperation::CrdtPnCounterIncrement {
             space,
             id,
@@ -770,7 +785,13 @@ fn crdt(database: &Database, command: CrdtCommand) -> anyhow::Result<Value> {
             amount,
         }),
         CrdtCommand::Counter {
-            command: CrdtCounterCommand::Dec { space, id, actor_id, amount },
+            command:
+                CrdtCounterCommand::Dec {
+                    space,
+                    id,
+                    actor_id,
+                    amount,
+                },
         } => mutate(lilia_core::BatchOperation::CrdtPnCounterDecrement {
             space,
             id,
@@ -789,10 +810,18 @@ fn crdt(database: &Database, command: CrdtCommand) -> anyhow::Result<Value> {
             command: CrdtSetCommand::Contains { space, id, element },
         } => {
             let contains = database.crdt().set(&space, &id).contains(&element)?;
-            Ok(json!({ "ok": true, "space": space, "id": id, "element": element, "contains": contains }))
+            Ok(
+                json!({ "ok": true, "space": space, "id": id, "element": element, "contains": contains }),
+            )
         }
         CrdtCommand::Set {
-            command: CrdtSetCommand::Add { space, id, actor_id, element },
+            command:
+                CrdtSetCommand::Add {
+                    space,
+                    id,
+                    actor_id,
+                    element,
+                },
         } => mutate(lilia_core::BatchOperation::CrdtOrSetAdd {
             space,
             id,
@@ -808,7 +837,12 @@ fn crdt(database: &Database, command: CrdtCommand) -> anyhow::Result<Value> {
             timestamp_ms: None,
         }),
         CrdtCommand::Set {
-            command: CrdtSetCommand::Prune { space, id, cutoff_ms },
+            command:
+                CrdtSetCommand::Prune {
+                    space,
+                    id,
+                    cutoff_ms,
+                },
         } => {
             database.crdt().set(&space, &id).prune(cutoff_ms)?;
             Ok(json!({ "ok": true, "space": space, "id": id, "pruned_before_ms": cutoff_ms }))
@@ -822,7 +856,14 @@ fn crdt(database: &Database, command: CrdtCommand) -> anyhow::Result<Value> {
             Ok(json!({ "ok": true, "space": space, "id": id, "document": doc }))
         }
         CrdtCommand::Json {
-            command: CrdtJsonCommand::SetField { space, id, actor_id, path, value },
+            command:
+                CrdtJsonCommand::SetField {
+                    space,
+                    id,
+                    actor_id,
+                    path,
+                    value,
+                },
         } => {
             let json_value: serde_json::Value = serde_json::from_str(&value)
                 .map_err(|e| anyhow::anyhow!("invalid JSON value: {e}"))?;
@@ -836,7 +877,13 @@ fn crdt(database: &Database, command: CrdtCommand) -> anyhow::Result<Value> {
             })
         }
         CrdtCommand::Json {
-            command: CrdtJsonCommand::DeleteField { space, id, actor_id, path },
+            command:
+                CrdtJsonCommand::DeleteField {
+                    space,
+                    id,
+                    actor_id,
+                    path,
+                },
         } => mutate(lilia_core::BatchOperation::CrdtJsonDeleteField {
             space,
             id,
@@ -857,7 +904,7 @@ fn blob(database: &Database, command: BlobCommand) -> anyhow::Result<Value> {
         BlobCommand::Get { hash, output } => {
             let bytes = database
                 .blob_get(&hash)?
-                .ok_or_else(|| anyhow::anyhow!("blob with hash '{}' not found", hash))?;
+                .ok_or_else(|| anyhow::anyhow!("blob with hash '{hash}' not found"))?;
             if let Some(dest) = output {
                 fs::write(&dest, &bytes)?;
                 Ok(json!({ "hash": hash, "written_to": dest, "bytes": bytes.len() }))
@@ -1015,6 +1062,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     fn graph_and_fts_command_execution() {
         use crate::args::DirectionArg;
 
@@ -1187,7 +1235,7 @@ mod tests {
         assert_eq!(vhits[0]["id"], "doc1");
 
         // Hybrid search
-        let hsearch = execute(
+        let hybrid_results = execute(
             Command::Hybrid {
                 command: HybridCommand::Search {
                     collection: "docs".into(),
@@ -1205,8 +1253,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let hhits = hsearch.as_array().unwrap();
-        assert_eq!(hhits.len(), 2);
+        assert_eq!(hybrid_results.as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -1234,6 +1281,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     fn crdt_cli_command_lifecycle() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("crdt_cli.lilia");
@@ -1476,9 +1524,7 @@ mod tests {
         // 2. Exists
         let exists_res = execute(
             Command::Blob {
-                command: BlobCommand::Exists {
-                    hash: hash.clone(),
-                },
+                command: BlobCommand::Exists { hash: hash.clone() },
             },
             &db_path,
             None,
@@ -1489,9 +1535,7 @@ mod tests {
         // 3. Path
         let path_res = execute(
             Command::Blob {
-                command: BlobCommand::Path {
-                    hash: hash.clone(),
-                },
+                command: BlobCommand::Path { hash: hash.clone() },
             },
             &db_path,
             None,
@@ -1530,9 +1574,7 @@ mod tests {
         // 6. Exists after GC
         let exists_after = execute(
             Command::Blob {
-                command: BlobCommand::Exists {
-                    hash,
-                },
+                command: BlobCommand::Exists { hash },
             },
             &db_path,
             None,
@@ -1542,6 +1584,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     fn integrity_cli_command_execution() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("cli_integrity.lilia");
@@ -1593,7 +1636,9 @@ mod tests {
             None,
         );
         let err = invalid_put.expect_err("violating CHECK must be rejected");
-        let lilia_err = err.downcast_ref::<lilia_core::LiliaError>().expect("LiliaError");
+        let lilia_err = err
+            .downcast_ref::<lilia_core::LiliaError>()
+            .expect("LiliaError");
         assert_eq!(lilia_err.code, lilia_core::ErrorCode::ConstraintViolation);
 
         // 4. Add graph reference (CASCADE) and KV reference (RESTRICT)
@@ -1681,7 +1726,9 @@ mod tests {
             None,
         );
         let err = orphan_kv.expect_err("orphan KV must be rejected");
-        let lilia_err = err.downcast_ref::<lilia_core::LiliaError>().expect("LiliaError");
+        let lilia_err = err
+            .downcast_ref::<lilia_core::LiliaError>()
+            .expect("LiliaError");
         assert_eq!(lilia_err.code, lilia_core::ErrorCode::ConstraintViolation);
 
         // 8. Valid child KV key
@@ -1716,7 +1763,9 @@ mod tests {
             None,
         );
         let err = delete_parent_blocked.expect_err("deletion blocked by RESTRICT");
-        let lilia_err = err.downcast_ref::<lilia_core::LiliaError>().expect("LiliaError");
+        let lilia_err = err
+            .downcast_ref::<lilia_core::LiliaError>()
+            .expect("LiliaError");
         assert_eq!(lilia_err.code, lilia_core::ErrorCode::ConstraintViolation);
 
         // 10. Delete child KV, then delete parent -> succeeds

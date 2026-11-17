@@ -1046,7 +1046,9 @@ impl LiliaDatabase {
         max_distance: u8,
         limit: u32,
     ) -> Result<Vec<FfiFtsSuggestion>, LiliaFfiError> {
-        let items = self.inner.fts_suggest(&collection, &prefix, max_distance, limit)?;
+        let items = self
+            .inner
+            .fts_suggest(&collection, &prefix, max_distance, limit)?;
         Ok(items
             .into_iter()
             .map(|s| FfiFtsSuggestion {
@@ -1089,7 +1091,9 @@ impl LiliaDatabase {
         max_distance: u8,
         limit: u32,
     ) -> Result<Vec<FfiFtsFuzzyHit>, LiliaFfiError> {
-        let hits = self.inner.fts_fuzzy_search(&collection, &query, max_distance, limit)?;
+        let hits = self
+            .inner
+            .fts_fuzzy_search(&collection, &query, max_distance, limit)?;
         Ok(hits
             .into_iter()
             .map(|h| FfiFtsFuzzyHit {
@@ -1205,6 +1209,42 @@ impl LiliaDatabase {
         })
         .await
         .map_err(|e| LiliaFfiError::Generic(e.to_string()))?
+    }
+
+    /// Register a sandboxed WebAssembly User-Defined Function (UDF).
+    pub fn register_wasm_udf(
+        &self,
+        name: String,
+        bytecode: Vec<u8>,
+        memory_limit_bytes: Option<u64>,
+        fuel_limit: Option<u64>,
+        persistent: Option<bool>,
+    ) -> Result<(), LiliaFfiError> {
+        let mut config = lilia_storage_sqlite::WasmUdfConfig::default();
+        if let Some(mem) = memory_limit_bytes {
+            if mem > 0 {
+                config.memory_limit_bytes = mem as usize;
+            }
+        }
+        if let Some(fuel) = fuel_limit {
+            if fuel > 0 {
+                config.fuel_limit = fuel;
+            }
+        }
+        self.inner
+            .register_wasm_udf_with_config(&name, &bytecode, config, persistent.unwrap_or(true))
+            .map_err(Into::into)
+    }
+
+    /// Unregister a WebAssembly User-Defined Function (UDF).
+    pub fn unregister_wasm_udf(&self, name: String) -> Result<bool, LiliaFfiError> {
+        self.inner.unregister_wasm_udf(&name).map_err(Into::into)
+    }
+
+    /// List all registered WebAssembly User-Defined Functions as a JSON string.
+    pub fn list_wasm_udfs_json(&self) -> Result<String, LiliaFfiError> {
+        let list = self.inner.list_wasm_udfs();
+        serde_json::to_string(&list).map_err(|e| LiliaFfiError::Storage(e.to_string()))
     }
 
     // ==========================================

@@ -330,8 +330,7 @@ mod tests {
         drop(db);
 
         // Verify SQLite raw database contains encrypted bytes and envelopes
-        let raw_conn =
-            lilia_sqlite_native::NativeConnection::open_file(&db_path).unwrap();
+        let raw_conn = lilia_sqlite_native::NativeConnection::open_file(&db_path).unwrap();
         let mut stmt = raw_conn
             .prepare("SELECT value FROM _lilia_kv WHERE namespace = 'vault' AND key = ?1")
             .unwrap();

@@ -3,8 +3,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use lilia_core::cas::{
-    compute_hash, decode_kv_pointer, extract_blob_hashes_from_value, is_kv_pointer,
-    BlobDescriptor, BlobGcStats, CasOptions,
+    compute_hash, decode_kv_pointer, extract_blob_hashes_from_value, is_kv_pointer, BlobDescriptor,
+    BlobGcStats, CasOptions,
 };
 use lilia_core::{ErrorCode, LiliaError, Result};
 use lilia_sqlite_native::{NativeConnection, NativeTransaction};
@@ -39,10 +39,19 @@ impl CasEngine {
     }
 
     /// Ensure that the root directory and the temporary upload directory exist.
+    ///
+    /// # Errors
+    /// Returns `Io` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn ensure_dirs(&self) -> Result<()> {
         let tmp_dir = self.root_dir.join(".tmp");
-        fs::create_dir_all(&tmp_dir)
-            .map_err(|e| LiliaError::new(ErrorCode::Io, format!("failed to create CAS dir: {e}"), false))?;
+        fs::create_dir_all(&tmp_dir).map_err(|e| {
+            LiliaError::new(
+                ErrorCode::Io,
+                format!("failed to create CAS dir: {e}"),
+                false,
+            )
+        })?;
         Ok(())
     }
 
@@ -73,6 +82,10 @@ impl CasEngine {
     ///
     /// If the blob already exists (identical content hash), it is deduplicated:
     /// no extra physical file is created and the descriptor of the existing file is returned.
+    ///
+    /// # Errors
+    /// Returns `Io` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn store(&self, data: &[u8], mime_type: Option<String>) -> Result<BlobDescriptor> {
         let (hash_hex, _) = compute_hash(self.options.hash_algorithm, data);
         let dest_path = self.path_for_hash(&hash_hex);
@@ -148,6 +161,10 @@ impl CasEngine {
     }
 
     /// Store a stream from a reader into sealed CAS storage with chunked hashing.
+    ///
+    /// # Errors
+    /// Returns `Io` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn store_reader<R: Read>(
         &self,
         reader: &mut R,
@@ -167,7 +184,7 @@ impl CasEngine {
                 )
             })?;
 
-            let mut buf = [0u8; 64 * 1024];
+            let mut buf = vec![0u8; 64 * 1024];
             let mut hasher = lilia_core::cas::CasHasher::new(self.options.hash_algorithm);
             loop {
                 let n = reader.read(&mut buf).map_err(|e| {
@@ -243,6 +260,10 @@ impl CasEngine {
     }
 
     /// Read the full contents of a blob by its content hash.
+    ///
+    /// # Errors
+    /// Returns `Io` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn get(&self, hash: &str) -> Result<Option<Vec<u8>>> {
         let path = self.path_for_hash(hash);
         if !path.is_file() {
@@ -259,6 +280,10 @@ impl CasEngine {
     }
 
     /// Open a read-only `File` handle to stream a blob directly without allocating in memory.
+    ///
+    /// # Errors
+    /// Returns `Io` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn open(&self, hash: &str) -> Result<Option<File>> {
         let path = self.path_for_hash(hash);
         if !path.is_file() {
@@ -277,12 +302,16 @@ impl CasEngine {
     /// Remove a physical blob file from sealed storage (used by Garbage Collector).
     ///
     /// Returns the number of bytes deleted if the file was found.
+    ///
+    /// # Errors
+    /// Returns `Io` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn remove_blob_file(&self, hash: &str) -> Result<u64> {
         let path = self.path_for_hash(hash);
         if !path.is_file() {
             return Ok(0);
         }
-        let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let size = fs::metadata(&path).map_or(0, |m| m.len());
         let _ = prepare_for_delete(&path);
         fs::remove_file(&path).map_err(|e| {
             LiliaError::new(
@@ -314,6 +343,7 @@ fn set_sealed_permissions(_path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // same signature as the Windows variant, which can fail
 fn prepare_for_delete(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
@@ -389,9 +419,8 @@ pub(crate) fn increment_blob_ref(
     drop(ref_stmt);
 
     if tx.conn().changes() > 0 {
-        let mut upd_stmt = tx.prepare(
-            "UPDATE _lilia_blobs SET ref_count = ref_count + 1 WHERE hash = ?1;",
-        )?;
+        let mut upd_stmt =
+            tx.prepare("UPDATE _lilia_blobs SET ref_count = ref_count + 1 WHERE hash = ?1;")?;
         upd_stmt.bind_text_static(1, blob_hash)?;
         upd_stmt.step()?;
     }
@@ -436,9 +465,7 @@ pub fn sync_json_blob_refs(
     now_ms: i64,
 ) -> Result<()> {
     let new_hashes = extract_blob_hashes_from_value(new_val);
-    let old_hashes = prev_val
-        .map(extract_blob_hashes_from_value)
-        .unwrap_or_default();
+    let old_hashes = prev_val.map_or_default(extract_blob_hashes_from_value);
 
     for h in &old_hashes {
         if !new_hashes.contains(h) {
@@ -454,11 +481,7 @@ pub fn sync_json_blob_refs(
 }
 
 #[doc(hidden)]
-pub fn delete_json_blob_refs(
-    tx: &mut NativeTransaction<'_>,
-    space: &str,
-    id: &str,
-) -> Result<()> {
+pub fn delete_json_blob_refs(tx: &mut NativeTransaction<'_>, space: &str, id: &str) -> Result<()> {
     let mut stmt = tx.prepare(
         "SELECT blob_hash FROM _lilia_blob_refs \
          WHERE source_kind = 'json' AND source_space = ?1 AND source_id = ?2;",
@@ -530,13 +553,9 @@ pub fn delete_kv_blob_ref(
 
 /// Atomic Garbage Collector pass: purges orphaned blobs (`ref_count = 0`) from sealed storage and DB.
 #[doc(hidden)]
-pub fn purge_orphan_blobs(
-    conn: &NativeConnection,
-    cas: &CasEngine,
-) -> Result<BlobGcStats> {
-    let mut stmt = match conn.prepare("SELECT hash FROM _lilia_blobs WHERE ref_count = 0;") {
-        Ok(s) => s,
-        Err(_) => return Ok(BlobGcStats::default()),
+pub fn purge_orphan_blobs(conn: &NativeConnection, cas: &CasEngine) -> Result<BlobGcStats> {
+    let Ok(mut stmt) = conn.prepare("SELECT hash FROM _lilia_blobs WHERE ref_count = 0;") else {
+        return Ok(BlobGcStats::default());
     };
 
     let mut orphans = Vec::new();
@@ -558,7 +577,8 @@ pub fn purge_orphan_blobs(
         if check_stmt.step()? && check_stmt.column_int64(0) == 0 {
             drop(check_stmt);
             let bytes = cas.remove_blob_file(&hash).unwrap_or(0);
-            let mut del_stmt = conn.prepare("DELETE FROM _lilia_blobs WHERE hash = ?1 AND ref_count = 0;")?;
+            let mut del_stmt =
+                conn.prepare("DELETE FROM _lilia_blobs WHERE hash = ?1 AND ref_count = 0;")?;
             del_stmt.bind_text_static(1, &hash)?;
             del_stmt.step()?;
             stats.orphans_purged += 1;

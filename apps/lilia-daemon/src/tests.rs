@@ -605,7 +605,7 @@ async fn http_gateway_kv_json_sql_lifecycle() {
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(body["ok"], true);
     let suggs = body["suggestions"].as_array().unwrap();
-    assert!(!suggs.is_empty());
+    assert_ne!(*suggs, Vec::<serde_json::Value>::new());
     assert_eq!(suggs[0]["term"], "liliadb");
 
     // FTS Fuzzy Search (typo: "liliad" finds "doc1")
@@ -1235,7 +1235,10 @@ async fn test_ipc_extended_multimodel_dispatch() {
         ResponseValue::CypherResult(res) if res.row_count() == 2
     ));
 
-    let v0 = [1.0_f32, 0.0].iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
+    let v0 = [1.0_f32, 0.0]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect::<Vec<u8>>();
     exchange(
         &mut client,
         TOKEN,

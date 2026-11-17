@@ -289,8 +289,7 @@ impl CollectionCatalog {
         kind: CollectionKind,
         name: &str,
     ) -> Result<()> {
-        let mut stmt =
-            conn.prepare("DELETE FROM _lilia_catalog WHERE kind = ?1 AND name = ?2;")?;
+        let mut stmt = conn.prepare("DELETE FROM _lilia_catalog WHERE kind = ?1 AND name = ?2;")?;
         stmt.bind_text_static(1, kind.as_str())?;
         stmt.bind_text_static(2, name)?;
         stmt.step()?;

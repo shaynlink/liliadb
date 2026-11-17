@@ -216,13 +216,20 @@ fn plan_creations(
     recommendations
 }
 
-fn plan_drops(options: &AutotuneOptions, indexes: &[TrackedIndex], now_ms: i64) -> Vec<Recommendation> {
+fn plan_drops(
+    options: &AutotuneOptions,
+    indexes: &[TrackedIndex],
+    now_ms: i64,
+) -> Vec<Recommendation> {
     let mut zombies: Vec<(i64, &TrackedIndex)> = indexes
         .iter()
         .filter(|index| index.phase == IndexPhase::Ready)
         .filter(|index| options.prune_scope == PruneScope::All || index.origin == IndexOrigin::Auto)
         .filter_map(|index| {
-            let reference = index.last_used_ms.unwrap_or(i64::MIN).max(index.first_seen_ms);
+            let reference = index
+                .last_used_ms
+                .unwrap_or(i64::MIN)
+                .max(index.first_seen_ms);
             let idle = now_ms.saturating_sub(reference);
             (idle >= millis(options.prune_idle_ms)).then_some((idle, index))
         })
@@ -287,7 +294,12 @@ mod tests {
 
     #[test]
     fn synthesizes_the_composite_index_of_the_motivating_query() {
-        let plan = plan(&options(), &[scanning(&["store_id", "status"], 25, 5_000)], &[], 0);
+        let plan = plan(
+            &options(),
+            &[scanning(&["store_id", "status"], 25, 5_000)],
+            &[],
+            0,
+        );
         assert_eq!(
             plan,
             vec![Recommendation::CreateIndex {
@@ -314,7 +326,7 @@ mod tests {
     fn thresholds_must_be_reached() {
         let few = scanning(&["status"], 9, 5_000);
         let small = scanning(&["store_id"], 50, 10);
-        assert!(plan(&options(), &[few, small], &[], 0).is_empty());
+        assert_eq!(plan(&options(), &[few, small], &[], 0), []);
     }
 
     #[test]
@@ -326,11 +338,21 @@ mod tests {
 
     #[test]
     fn already_covered_shapes_are_skipped_regardless_of_column_order() {
-        let existing = index("my_idx", "composite($.store_id, $.status)", IndexOrigin::Manual);
+        let existing = index(
+            "my_idx",
+            "composite($.store_id, $.status)",
+            IndexOrigin::Manual,
+        );
         let queries = [scanning(&["status", "store_id"], 50, 5_000)];
-        assert!(plan(&options(), &queries, std::slice::from_ref(&existing), 0).is_empty());
+        assert_eq!(
+            plan(&options(), &queries, std::slice::from_ref(&existing), 0),
+            []
+        );
 
-        let partial = TrackedIndex { partial: true, ..existing };
+        let partial = TrackedIndex {
+            partial: true,
+            ..existing
+        };
         assert_eq!(plan(&options(), &queries, &[partial], 0).len(), 1);
     }
 
@@ -340,7 +362,7 @@ mod tests {
             scanning(&["lower($.email)"], 50, 5_000),
             scanning(&["a", "b", "c", "d", "e"], 50, 5_000),
         ];
-        assert!(plan(&options(), &queries, &[], 0).is_empty());
+        assert_eq!(plan(&options(), &queries, &[], 0), []);
     }
 
     #[test]
@@ -350,7 +372,10 @@ mod tests {
             scanning(&["costly"], 20, 9_000),
             scanning(&["middle"], 20, 2_000),
         ];
-        let limited = AutotuneOptions { max_actions_per_cycle: 2, ..options() };
+        let limited = AutotuneOptions {
+            max_actions_per_cycle: 2,
+            ..options()
+        };
         let names: Vec<_> = plan(&limited, &queries, &[], 0)
             .into_iter()
             .map(|r| match r {
@@ -363,17 +388,36 @@ mod tests {
 
     #[test]
     fn per_space_quota_counts_existing_auto_indexes() {
-        let limited = AutotuneOptions { max_auto_indexes_per_space: 1, ..options() };
+        let limited = AutotuneOptions {
+            max_auto_indexes_per_space: 1,
+            ..options()
+        };
         let existing = index("idx_orders_other", "$.other", IndexOrigin::Auto);
-        assert!(plan(&limited, &[scanning(&["status"], 50, 5_000)], &[existing], 0).is_empty());
+        assert_eq!(
+            plan(
+                &limited,
+                &[scanning(&["status"], 50, 5_000)],
+                &[existing],
+                0
+            ),
+            []
+        );
         let manual = index("idx_orders_other", "$.other", IndexOrigin::Manual);
-        assert_eq!(plan(&limited, &[scanning(&["status"], 50, 5_000)], &[manual], 0).len(), 1);
+        assert_eq!(
+            plan(&limited, &[scanning(&["status"], 50, 5_000)], &[manual], 0).len(),
+            1
+        );
     }
 
     #[test]
     fn name_collisions_never_overwrite_an_unrelated_index() {
         let squatter = index("idx_orders_status", "lower($.status)", IndexOrigin::Manual);
-        let plan = plan(&options(), &[scanning(&["status"], 50, 5_000)], &[squatter], 0);
+        let plan = plan(
+            &options(),
+            &[scanning(&["status"], 50, 5_000)],
+            &[squatter],
+            0,
+        );
         let Recommendation::CreateIndex { index_name, .. } = &plan[0] else {
             panic!("expected a creation");
         };
@@ -391,7 +435,10 @@ mod tests {
         };
         let options = options();
         let during = 10 * DAY_MS + millis(options.recreate_cooldown_ms) - 1;
-        assert!(plan(&options, &queries, std::slice::from_ref(&tombstone), during).is_empty());
+        assert_eq!(
+            plan(&options, &queries, std::slice::from_ref(&tombstone), during),
+            []
+        );
         assert_eq!(plan(&options, &queries, &[tombstone], during + 1).len(), 1);
     }
 
@@ -400,7 +447,10 @@ mod tests {
         let options = options();
         let idle = millis(options.prune_idle_ms);
         let unused = index("idx_orders_a", "$.a", IndexOrigin::Auto);
-        assert!(plan(&options, &[], std::slice::from_ref(&unused), idle - 1).is_empty());
+        assert_eq!(
+            plan(&options, &[], std::slice::from_ref(&unused), idle - 1),
+            []
+        );
         assert_eq!(
             plan(&options, &[], std::slice::from_ref(&unused), idle),
             vec![Recommendation::DropIndex {
@@ -411,25 +461,41 @@ mod tests {
             }]
         );
 
-        let used = TrackedIndex { last_used_ms: Some(idle), lookups: 7, ..unused };
-        assert!(plan(&options, &[], &[used], idle + 1).is_empty());
+        let used = TrackedIndex {
+            last_used_ms: Some(idle),
+            lookups: 7,
+            ..unused
+        };
+        assert_eq!(plan(&options, &[], &[used], idle + 1), []);
     }
 
     #[test]
     fn manual_indexes_are_only_pruned_with_the_all_scope() {
         let manual = index("mine", "$.a", IndexOrigin::Manual);
         let now = millis(options().prune_idle_ms) * 2;
-        assert!(plan(&options(), &[], std::slice::from_ref(&manual), now).is_empty());
-        let all = AutotuneOptions { prune_scope: PruneScope::All, ..options() };
+        assert_eq!(
+            plan(&options(), &[], std::slice::from_ref(&manual), now),
+            []
+        );
+        let all = AutotuneOptions {
+            prune_scope: PruneScope::All,
+            ..options()
+        };
         assert_eq!(plan(&all, &[], &[manual], now).len(), 1);
     }
 
     #[test]
     fn building_and_dropped_indexes_are_never_pruned() {
         let now = millis(options().prune_idle_ms) * 2;
-        let building = TrackedIndex { phase: IndexPhase::Building, ..index("b", "$.a", IndexOrigin::Auto) };
-        let dropped = TrackedIndex { phase: IndexPhase::Dropped, ..index("d", "$.a", IndexOrigin::Auto) };
-        assert!(plan(&options(), &[], &[building, dropped], now).is_empty());
+        let building = TrackedIndex {
+            phase: IndexPhase::Building,
+            ..index("b", "$.a", IndexOrigin::Auto)
+        };
+        let dropped = TrackedIndex {
+            phase: IndexPhase::Dropped,
+            ..index("d", "$.a", IndexOrigin::Auto)
+        };
+        assert_eq!(plan(&options(), &[], &[building, dropped], now), []);
     }
 
     #[test]

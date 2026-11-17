@@ -52,7 +52,7 @@ impl fmt::Display for StorageTier {
     }
 }
 
-/// Logical LiliaDB data model / collection category.
+/// Logical `LiliaDB` data model / collection category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollectionKind {

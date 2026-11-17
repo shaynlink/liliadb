@@ -1,4 +1,5 @@
 use lilia_core::rules::{Action, Rule, SlidingWindow, TriggerMode, WindowCondition};
+use lilia_core::{ErrorCode, LiliaError};
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 use tempfile::tempdir;
@@ -78,12 +79,12 @@ fn test_in_transaction_reactive_heartrate_alert() {
     assert_eq!(alert["level"], "critical");
     assert_eq!(alert["patient"], "patient_critical");
     assert_eq!(alert["rate"], 152);
-    assert!(alert["created_at"].as_str().unwrap().contains("T"));
+    assert!(alert["created_at"].as_str().unwrap().contains('T'));
     let alert = &critical_alerts[0];
     assert_eq!(alert["level"], "critical");
     assert_eq!(alert["patient"], "patient_critical");
     assert_eq!(alert["rate"], 152);
-    assert!(alert["created_at"].as_str().unwrap().contains("T"));
+    assert!(alert["created_at"].as_str().unwrap().contains('T'));
 }
 
 #[test]
@@ -100,26 +101,34 @@ fn test_in_transaction_acid_rollback() {
         )
         .unwrap();
 
-    // Perform an aborted transaction
-    let outcome = db.transaction(|tx| {
-        tx.json_put(
-            "orders",
-            "order_999",
-            json!({ "total": 999 }),
-            None,
-        );
-        // Abort the transaction explicitly
-        tx.set_rollback_only();
-        Ok(())
+    // A transaction aborted by its closure rolls back the write and the rule action it fired.
+    let outcome: lilia_core::Result<()> = db.with_transaction(|tx| {
+        tx.json()
+            .put("orders", "order_999", &json!({ "total": 999 }))?;
+        Err(LiliaError::new(ErrorCode::Conflict, "abort order", false))
     });
-    assert!(outcome.is_err());
+    assert_eq!(outcome.unwrap_err().code, ErrorCode::Conflict);
 
-    // Both initial mutation and triggered action must not exist
     let orders = db.collection("orders").json().unwrap();
     assert!(orders.get("order_999").unwrap().is_none());
-
     let vip = db.collection("vip_orders").json().unwrap();
-    assert!(vip.get("order_999").unwrap().is_none());
+    assert_eq!(
+        vip.aggregate().execute().unwrap(),
+        [] as [serde_json::Value; 0]
+    );
+
+    // The same write committed through a transaction does fire the rule.
+    db.with_transaction(|tx| {
+        tx.json()
+            .put("orders", "order_999", &json!({ "total": 999 }))?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(orders.get("order_999").unwrap().is_some());
+    let flagged = vip.aggregate().execute().unwrap();
+    assert_eq!(flagged.len(), 1);
+    assert_eq!(flagged[0]["status"], "flagged");
+    assert_eq!(flagged[0]["id"], "order_999");
 }
 
 #[test]
@@ -169,7 +178,10 @@ fn test_sliding_window_cep_kv_lockout() {
     logins.set(b"alice", b"failed").unwrap();
 
     // Alice account status is locked immediately and atomically!
-    let alice_status = status.get(b"alice").unwrap().expect("alice status should be set");
+    let alice_status = status
+        .get(b"alice")
+        .unwrap()
+        .expect("alice status should be set");
     assert_eq!(alice_status.value, b"locked");
 
     // Bob still not locked

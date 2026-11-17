@@ -1,15 +1,11 @@
-use lilia_core::{
-    CausalRelation, ConflictResolutionStrategy, DatabaseEvent, Hlc,
-};
+use lilia_core::{CausalRelation, ConflictResolutionStrategy, DatabaseEvent, Hlc};
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
 fn create_test_db(name: &str, node_id: &str) -> (tempfile::TempDir, Database) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db = Database::open(
-        DatabaseOptions::durable(dir.path().join(name)).with_node_id(node_id),
-    )
-    .expect("open db");
+    let db = Database::open(DatabaseOptions::durable(dir.path().join(name)).with_node_id(node_id))
+        .expect("open db");
     (dir, db)
 }
 
@@ -263,7 +259,10 @@ fn test_hlc_last_write_wins_resolution_and_conflict_audit() {
     // But the conflict is fully recorded!
     let conflicts = db.list_conflicts(Some("items")).unwrap();
     assert_eq!(conflicts.len(), 1);
-    assert_eq!(conflicts[0].resolved_value, Some(json!({"name": "Remote Winner"})));
+    assert_eq!(
+        conflicts[0].resolved_value,
+        Some(json!({"name": "Remote Winner"}))
+    );
 }
 
 #[test]

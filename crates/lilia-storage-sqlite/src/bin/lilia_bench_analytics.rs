@@ -17,7 +17,6 @@ use serde::Serialize;
 use serde_json::json;
 
 const CITY_COUNT: usize = 16;
-const CHECKPOINT_EVERY_ROWS: usize = 20_000;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -106,12 +105,6 @@ fn load(db: &Database, rows: usize) -> Result<(), Box<dyn std::error::Error>> {
         if batch.len() == batch.capacity() {
             db.batch(&batch)?;
             batch.clear();
-            // Under a sustained bulk load the background checkpointer never catches up
-            // and the WAL grows to several times the data; checkpointing from the
-            // writer between batches lets it be reused instead.
-            if (index + 1) % CHECKPOINT_EVERY_ROWS == 0 {
-                db.checkpoint()?;
-            }
         }
     }
     if !batch.is_empty() {

@@ -68,7 +68,7 @@ impl<'a> Parser<'a> {
         let limit = if self.peek() == Some(&Token::Limit) {
             self.next();
             match self.next() {
-                Some(Token::NumberLiteral(n)) => Some(*n as usize),
+                Some(Token::NumberLiteral(n)) => Some(literal_count(*n, "LIMIT")?),
                 Some(other) => {
                     return Err(LiliaError::new(
                         ErrorCode::InvalidInput,
@@ -112,7 +112,7 @@ impl<'a> Parser<'a> {
     }
 
     fn is_edge_start(&self) -> bool {
-        matches!(self.peek(), Some(Token::Dash) | Some(Token::ArrowLeft))
+        matches!(self.peek(), Some(Token::Dash | Token::ArrowLeft))
     }
 
     fn parse_node_pattern(&mut self) -> Result<NodePattern> {
@@ -212,12 +212,12 @@ impl<'a> Parser<'a> {
             if self.peek() == Some(&Token::Star) {
                 self.next();
                 if let Some(Token::NumberLiteral(min_h)) = self.peek() {
-                    min_hops = *min_h as usize;
+                    min_hops = literal_count(*min_h, "minimum hop count")?;
                     self.next();
                     if self.peek() == Some(&Token::DotDot) {
                         self.next();
                         if let Some(Token::NumberLiteral(max_h)) = self.next() {
-                            max_hops = *max_h as usize;
+                            max_hops = literal_count(*max_h, "maximum hop count")?;
                         } else {
                             max_hops = 10;
                         }
@@ -363,13 +363,11 @@ impl<'a> Parser<'a> {
     fn parse_literal_value(&mut self) -> Result<serde_json::Value> {
         match self.next() {
             Some(Token::StringLiteral(s)) => Ok(serde_json::Value::String(s.clone())),
-            Some(Token::NumberLiteral(n)) => {
-                if n.fract() == 0.0 {
-                    Ok(serde_json::json!(*n as i64))
-                } else {
-                    Ok(serde_json::json!(*n))
-                }
-            }
+            Some(Token::NumberLiteral(n)) => Ok(lilia_core::json::binary::exact_int(*n)
+                .map_or_else(
+                    || serde_json::json!(*n),
+                    |integer| serde_json::json!(integer),
+                )),
             Some(Token::True) => Ok(serde_json::Value::Bool(true)),
             Some(Token::False) => Ok(serde_json::Value::Bool(false)),
             Some(Token::Null) => Ok(serde_json::Value::Null),
@@ -385,4 +383,17 @@ impl<'a> Parser<'a> {
             )),
         }
     }
+}
+
+/// A count written in the query (`LIMIT`, hop bounds): a non-negative integer.
+fn literal_count(value: f64, clause: &str) -> Result<usize> {
+    lilia_core::json::binary::exact_int(value)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("{clause} must be a non-negative integer, got {value}"),
+                false,
+            )
+        })
 }

@@ -48,7 +48,13 @@ impl EncryptedEnvelope {
     #[must_use]
     pub fn encode(&self) -> String {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&self.ciphertext);
-        format!("{}{}:{}:{}", ENC_PREFIX, self.algorithm.as_str(), self.key_id, b64)
+        format!(
+            "{}{}:{}:{}",
+            ENC_PREFIX,
+            self.algorithm.as_str(),
+            self.key_id,
+            b64
+        )
     }
 
     /// Parses an envelope scalar string if it matches `ENC:<algo>:<kid>:<base64>`.
@@ -60,10 +66,9 @@ impl EncryptedEnvelope {
         let rest = &s[ENC_PREFIX.len()..];
         let (algorithm, after_algo) = if let Some(stripped) = rest.strip_prefix("gcm:") {
             (FieldCipherAlgorithm::RandomizedGcm, stripped)
-        } else if let Some(stripped) = rest.strip_prefix("siv:") {
-            (FieldCipherAlgorithm::DeterministicSiv, stripped)
         } else {
-            return None;
+            let stripped = rest.strip_prefix("siv:")?;
+            (FieldCipherAlgorithm::DeterministicSiv, stripped)
         };
 
         // Key ID can contain colons (e.g. "vault:team"), so split at the last colon for base64 payload
@@ -109,11 +114,11 @@ fn get_field_mut<'a>(val: &'a mut Value, path: &str) -> Option<&'a mut Value> {
 ///
 /// Plaintext field values are encrypted according to `policy` and replaced with
 /// `ENC:<algo>:<kid>:<base64>` scalar strings.
-pub fn encrypt_json_fields(
-    doc: &mut Value,
-    policy: &FlePolicy,
-    keys: &KeyRegistry,
-) -> Result<()> {
+///
+/// # Errors
+/// `Unauthorized` when the key a field needs is missing from `keys`, `InvalidInput` when a
+/// field cannot be encrypted, and the cipher errors of [`super::cipher`].
+pub fn encrypt_json_fields(doc: &mut Value, policy: &FlePolicy, keys: &KeyRegistry) -> Result<()> {
     for rule in &policy.rules {
         let norm_path = rule.path.trim_start_matches("$.").trim_start_matches('/');
         if let Some(target) = get_field_mut(doc, norm_path) {
@@ -158,7 +163,8 @@ pub fn encrypt_json_fields(
                 }
             };
 
-            let envelope_str = EncryptedEnvelope::new(rule.algorithm, &rule.key_id, cipher_bytes).encode();
+            let envelope_str =
+                EncryptedEnvelope::new(rule.algorithm, &rule.key_id, cipher_bytes).encode();
             *target = Value::String(envelope_str);
         }
     }
@@ -166,6 +172,9 @@ pub fn encrypt_json_fields(
 }
 
 /// Recursively decrypts all `ENC:...` sealed fields in a JSON document.
+///
+/// # Errors
+/// The key and authentication errors of [`super::cipher`], according to `mode`.
 pub fn decrypt_json_fields(
     doc: &mut Value,
     keys: &KeyRegistry,
@@ -225,16 +234,18 @@ fn decrypt_value_recursive(
                 FieldCipherAlgorithm::RandomizedGcm => {
                     // Try with field name AD first, then without AD if failed
                     if let Some(ad) = ad_cand {
-                        decrypt_gcm(&env.ciphertext, key_material.gcm_key(), Some(ad))
-                            .or_else(|_| decrypt_gcm(&env.ciphertext, key_material.gcm_key(), None))?
+                        decrypt_gcm(&env.ciphertext, key_material.gcm_key(), Some(ad)).or_else(
+                            |_| decrypt_gcm(&env.ciphertext, key_material.gcm_key(), None),
+                        )?
                     } else {
                         decrypt_gcm(&env.ciphertext, key_material.gcm_key(), None)?
                     }
                 }
                 FieldCipherAlgorithm::DeterministicSiv => {
                     if let Some(ad) = ad_cand {
-                        decrypt_siv(&env.ciphertext, key_material.siv_key(), Some(ad))
-                            .or_else(|_| decrypt_siv(&env.ciphertext, key_material.siv_key(), None))?
+                        decrypt_siv(&env.ciphertext, key_material.siv_key(), Some(ad)).or_else(
+                            |_| decrypt_siv(&env.ciphertext, key_material.siv_key(), None),
+                        )?
                     } else {
                         decrypt_siv(&env.ciphertext, key_material.siv_key(), None)?
                     }
@@ -282,12 +293,20 @@ mod tests {
         keys.register_key("vault:private", KeyMaterial::from_32_bytes([2u8; 32]));
 
         let policy = FlePolicy::new()
-            .field("email", FieldCipherAlgorithm::DeterministicSiv, "vault:team")
-            .field("medical_record", FieldCipherAlgorithm::RandomizedGcm, "vault:private");
+            .field(
+                "email",
+                FieldCipherAlgorithm::DeterministicSiv,
+                "vault:team",
+            )
+            .field(
+                "medical_record",
+                FieldCipherAlgorithm::RandomizedGcm,
+                "vault:private",
+            );
 
         let mut doc = json!({
             "id": "pat_123",
-            "created_at": 1715000000,
+            "created_at": 1_715_000_000,
             "status": "admitted",
             "email": "alice@example.com",
             "medical_record": {
@@ -301,7 +320,7 @@ mod tests {
 
         // Metadata in cleartext
         assert_eq!(doc["id"], "pat_123");
-        assert_eq!(doc["created_at"], 1715000000);
+        assert_eq!(doc["created_at"], 1_715_000_000);
         assert_eq!(doc["status"], "admitted");
 
         // Sensitive fields are now ENC strings
@@ -319,7 +338,10 @@ mod tests {
         // Email was decrypted because vault:team is unlocked!
         assert_eq!(partially_decrypted["email"], "alice@example.com");
         // Medical record remains sealed!
-        assert!(partially_decrypted["medical_record"].as_str().unwrap().starts_with("ENC:gcm:vault:private:"));
+        assert!(partially_decrypted["medical_record"]
+            .as_str()
+            .unwrap()
+            .starts_with("ENC:gcm:vault:private:"));
 
         // 3. Unlock private vault, verify full decryption
         keys.register_key("vault:private", KeyMaterial::from_32_bytes([2u8; 32]));

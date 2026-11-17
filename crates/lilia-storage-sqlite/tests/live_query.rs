@@ -5,6 +5,7 @@ use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
 #[test]
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn test_live_query_differential_events_on_sql_mutations() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db = Database::open(DatabaseOptions::durable(
@@ -38,7 +39,7 @@ fn test_live_query_differential_events_on_sql_mutations() {
         let diffs = received_diffs.lock().unwrap();
         assert_eq!(diffs.len(), 1);
         assert!(diffs[0].is_initial);
-        assert!(diffs[0].added.is_empty());
+        assert_eq!(diffs[0].added, [] as [serde_json::Value; 0]);
     }
 
     // 3. INSERT matching row T3 (status = 'pending')
@@ -56,8 +57,8 @@ fn test_live_query_differential_events_on_sql_mutations() {
         assert_eq!(d.added.len(), 1);
         assert_eq!(d.added[0]["id"], "T3");
         assert_eq!(d.added[0]["status"], "pending");
-        assert!(d.updated.is_empty());
-        assert!(d.removed.is_empty());
+        assert_eq!(d.updated, [] as [serde_json::Value; 0]);
+        assert_eq!(d.removed, [] as [serde_json::Value; 0]);
     }
 
     // 4. INSERT non-matching row T4 (status = 'completed') -> must NOT emit any diff!
@@ -69,7 +70,11 @@ fn test_live_query_differential_events_on_sql_mutations() {
 
     {
         let diffs = received_diffs.lock().unwrap();
-        assert_eq!(diffs.len(), 2, "no event should be emitted for non-matching row");
+        assert_eq!(
+            diffs.len(),
+            2,
+            "no event should be emitted for non-matching row"
+        );
     }
 
     // 5. UPDATE T3 to status = 'completed' -> transitions OUT of query view -> removed!
@@ -83,18 +88,15 @@ fn test_live_query_differential_events_on_sql_mutations() {
         let diffs = received_diffs.lock().unwrap();
         assert_eq!(diffs.len(), 3);
         let d = &diffs[2];
-        assert!(d.added.is_empty());
-        assert!(d.updated.is_empty());
+        assert_eq!(d.added, [] as [serde_json::Value; 0]);
+        assert_eq!(d.updated, [] as [serde_json::Value; 0]);
         assert_eq!(d.removed.len(), 1);
         assert_eq!(d.removed[0]["id"], "T3");
     }
 
     // 6. UPDATE T4 to status = 'pending' -> transitions INTO query view -> added!
-    db.sql_query(
-        "UPDATE tasks SET status = 'pending' WHERE id = 'T4';",
-        &[],
-    )
-    .unwrap();
+    db.sql_query("UPDATE tasks SET status = 'pending' WHERE id = 'T4';", &[])
+        .unwrap();
 
     {
         let diffs = received_diffs.lock().unwrap();
@@ -102,8 +104,8 @@ fn test_live_query_differential_events_on_sql_mutations() {
         let d = &diffs[3];
         assert_eq!(d.added.len(), 1);
         assert_eq!(d.added[0]["id"], "T4");
-        assert!(d.updated.is_empty());
-        assert!(d.removed.is_empty());
+        assert_eq!(d.updated, [] as [serde_json::Value; 0]);
+        assert_eq!(d.removed, [] as [serde_json::Value; 0]);
     }
 
     // 7. UPDATE T4 priority (remains status = 'pending') -> updated!
@@ -117,12 +119,12 @@ fn test_live_query_differential_events_on_sql_mutations() {
         let diffs = received_diffs.lock().unwrap();
         assert_eq!(diffs.len(), 5);
         let d = &diffs[4];
-        assert!(d.added.is_empty());
+        assert_eq!(d.added, [] as [serde_json::Value; 0]);
         assert_eq!(d.updated.len(), 1);
         assert_eq!(d.updated[0]["id"], "T4");
         assert_eq!(d.updated[0]["priority"], 10);
         assert_eq!(d.updated[0]["title"], "Documentation Urgent");
-        assert!(d.removed.is_empty());
+        assert_eq!(d.removed, [] as [serde_json::Value; 0]);
     }
 
     // 8. DELETE T4 -> removed!
@@ -133,8 +135,8 @@ fn test_live_query_differential_events_on_sql_mutations() {
         let diffs = received_diffs.lock().unwrap();
         assert_eq!(diffs.len(), 6);
         let d = &diffs[5];
-        assert!(d.added.is_empty());
-        assert!(d.updated.is_empty());
+        assert_eq!(d.added, [] as [serde_json::Value; 0]);
+        assert_eq!(d.updated, [] as [serde_json::Value; 0]);
         assert_eq!(d.removed.len(), 1);
         assert_eq!(d.removed[0]["id"], "T4");
     }

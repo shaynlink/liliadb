@@ -7,6 +7,7 @@ use lilia_sqlite_native::NativeConnection;
 
 use lilia_core::{ErrorCode, LiliaError, Result};
 
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 pub(crate) fn migrate(connection: &NativeConnection) -> Result<()> {
     connection.exec(
         "BEGIN IMMEDIATE;
@@ -63,6 +64,21 @@ pub(crate) fn migrate(connection: &NativeConnection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS _lilia_graph_edges_target ON _lilia_graph_edges(graph,target);
          CREATE INDEX IF NOT EXISTS _lilia_graph_nodes_doc ON _lilia_graph_nodes(doc_space, doc_id)
            WHERE doc_space IS NOT NULL;
+         CREATE TABLE IF NOT EXISTS _lilia_security_policies(
+           name TEXT PRIMARY KEY NOT NULL,
+           table_name TEXT NOT NULL,
+           condition TEXT NOT NULL,
+           action TEXT NOT NULL DEFAULT 'all',
+           created_at_ms INTEGER NOT NULL
+         ) STRICT, WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS _lilia_masking_rules(
+           id TEXT PRIMARY KEY NOT NULL,
+           table_name TEXT NOT NULL,
+           path TEXT NOT NULL,
+           mask_type TEXT NOT NULL,
+           exempt_condition TEXT,
+           created_at_ms INTEGER NOT NULL
+         ) STRICT, WITHOUT ROWID;
          CREATE TABLE IF NOT EXISTS _lilia_references(
            name TEXT PRIMARY KEY NOT NULL,
            source_kind TEXT NOT NULL,
@@ -561,20 +577,20 @@ pub(crate) fn init_unified_temp_views(
 
     let json_sql = if include_vtabs {
         "CREATE TEMP VIEW IF NOT EXISTS temp.lilia_json AS
-           SELECT space, id, lilia_decode_json(value) AS value, version, 'disk' AS tier
+           SELECT space, id, lilia_decode_json(value) AS value, lilia_decode_json(value) AS data, version, 'disk' AS tier
            FROM main._lilia_json j
            WHERE NOT EXISTS (
              SELECT 1 FROM _vtab_buffered_json o WHERE o.space = j.space AND o.id = j.id
            )
            UNION ALL
-           SELECT space, id, value, version, 'buffered' AS tier
+           SELECT space, id, value, value AS data, version, 'buffered' AS tier
            FROM _vtab_buffered_json WHERE deleted = 0
            UNION ALL
-           SELECT space, id, value, version, 'memory' AS tier
+           SELECT space, id, value, value AS data, version, 'memory' AS tier
            FROM _vtab_mem_json;"
     } else {
         "CREATE TEMP VIEW IF NOT EXISTS temp.lilia_json AS
-           SELECT space, id, lilia_decode_json(value) AS value, version, 'disk' AS tier
+           SELECT space, id, lilia_decode_json(value) AS value, lilia_decode_json(value) AS data, version, 'disk' AS tier
            FROM main._lilia_json;"
     };
 
@@ -748,6 +764,7 @@ fn take_ascii_word(s: &str) -> Option<(&str, &str)> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 pub(crate) fn rewrite_ephemeral_create_sql(sql: &str) -> Result<(String, String)> {
     let trimmed = sql.trim();
     let (kw_create, rest) = take_ascii_word(trimmed).ok_or_else(|| {
@@ -834,7 +851,11 @@ pub(crate) fn rewrite_ephemeral_create_sql(sql: &str) -> Result<(String, String)
         (inner[..end].replace("\"\"", "\""), &inner[end + 1..])
     } else {
         let (w, r) = take_ascii_word(ident_start).ok_or_else(|| {
-            LiliaError::new(ErrorCode::InvalidInput, "missing ephemeral table name", false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                "missing ephemeral table name",
+                false,
+            )
         })?;
         (w.to_owned(), r)
     };
@@ -931,6 +952,16 @@ pub(crate) fn validate_name(field: &str, value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// SQLite integer for a count, size or position: saturates at `i64::MAX`.
+pub(crate) fn sql_int(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+/// Count, size or position read from a non-negative SQLite integer; a negative value reads as 0.
+pub(crate) fn sql_count(value: i64) -> usize {
+    usize::try_from(value).unwrap_or_default()
 }
 
 pub(crate) fn normalize_limit(limit: u32) -> i64 {

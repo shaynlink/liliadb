@@ -33,25 +33,19 @@ fn test_incremental_materialized_view_grouped() {
     assert_eq!(list[0].source_table, "tasks");
 
     // 3. Insert rows into tasks
-    db.sql_query(
-        "INSERT INTO tasks VALUES ('T1', 'pending', 10);",
-        &[],
-    )
-    .unwrap();
-    db.sql_query(
-        "INSERT INTO tasks VALUES ('T2', 'pending', 20);",
-        &[],
-    )
-    .unwrap();
-    db.sql_query(
-        "INSERT INTO tasks VALUES ('T3', 'completed', 50);",
-        &[],
-    )
-    .unwrap();
+    db.sql_query("INSERT INTO tasks VALUES ('T1', 'pending', 10);", &[])
+        .unwrap();
+    db.sql_query("INSERT INTO tasks VALUES ('T2', 'pending', 20);", &[])
+        .unwrap();
+    db.sql_query("INSERT INTO tasks VALUES ('T3', 'completed', 50);", &[])
+        .unwrap();
 
     // 4. Query the materialized view directly in O(1)
     let res = db
-        .sql_query("SELECT status, total_tasks, total_points FROM task_stats ORDER BY status ASC;", &[])
+        .sql_query(
+            "SELECT status, total_tasks, total_points FROM task_stats ORDER BY status ASC;",
+            &[],
+        )
         .unwrap();
 
     assert_eq!(res.rows.len(), 2);
@@ -68,12 +62,18 @@ fn test_incremental_materialized_view_grouped() {
     .unwrap();
 
     let res2 = db
-        .sql_query("SELECT status, total_tasks, total_points FROM task_stats ORDER BY status ASC;", &[])
+        .sql_query(
+            "SELECT status, total_tasks, total_points FROM task_stats ORDER BY status ASC;",
+            &[],
+        )
         .unwrap();
 
     assert_eq!(res2.rows.len(), 2);
     // completed: was 1 -> now 2, points: 50 + 15 = 65
-    assert_eq!(res2.rows[0], vec![json!("completed"), json!(2), json!(65.0)]);
+    assert_eq!(
+        res2.rows[0],
+        vec![json!("completed"), json!(2), json!(65.0)]
+    );
     // pending: was 2 -> now 1, points: 30 - 10 = 20
     assert_eq!(res2.rows[1], vec![json!("pending"), json!(1), json!(20.0)]);
 
@@ -82,12 +82,18 @@ fn test_incremental_materialized_view_grouped() {
         .unwrap();
 
     let res3 = db
-        .sql_query("SELECT status, total_tasks, total_points FROM task_stats ORDER BY status ASC;", &[])
+        .sql_query(
+            "SELECT status, total_tasks, total_points FROM task_stats ORDER BY status ASC;",
+            &[],
+        )
         .unwrap();
 
     // 'pending' row should be cleaned up automatically since total_tasks dropped to 0
     assert_eq!(res3.rows.len(), 1);
-    assert_eq!(res3.rows[0], vec![json!("completed"), json!(2), json!(65.0)]);
+    assert_eq!(
+        res3.rows[0],
+        vec![json!("completed"), json!(2), json!(65.0)]
+    );
 }
 
 #[test]
@@ -116,7 +122,10 @@ fn test_incremental_materialized_view_global_and_ddl_syntax() {
 
     // Initial check: count = 0, revenue = 0
     let initial = db
-        .sql_query("SELECT order_count, total_revenue, avg_ticket FROM order_metrics;", &[])
+        .sql_query(
+            "SELECT order_count, total_revenue, avg_ticket FROM order_metrics;",
+            &[],
+        )
         .unwrap();
     assert_eq!(initial.rows.len(), 1);
     assert_eq!(initial.rows[0][0], json!(0));
@@ -129,7 +138,10 @@ fn test_incremental_materialized_view_global_and_ddl_syntax() {
         .unwrap();
 
     let after_inserts = db
-        .sql_query("SELECT order_count, total_revenue, avg_ticket FROM order_metrics;", &[])
+        .sql_query(
+            "SELECT order_count, total_revenue, avg_ticket FROM order_metrics;",
+            &[],
+        )
         .unwrap();
     assert_eq!(after_inserts.rows[0][0], json!(2));
     assert_eq!(after_inserts.rows[0][1], json!(300.0));
@@ -140,7 +152,10 @@ fn test_incremental_materialized_view_global_and_ddl_syntax() {
         .unwrap();
 
     let after_update = db
-        .sql_query("SELECT order_count, total_revenue, avg_ticket FROM order_metrics;", &[])
+        .sql_query(
+            "SELECT order_count, total_revenue, avg_ticket FROM order_metrics;",
+            &[],
+        )
         .unwrap();
     assert_eq!(after_update.rows[0][0], json!(2));
     assert_eq!(after_update.rows[0][1], json!(350.0));
@@ -151,7 +166,10 @@ fn test_incremental_materialized_view_global_and_ddl_syntax() {
         .unwrap();
 
     let after_delete = db
-        .sql_query("SELECT order_count, total_revenue, avg_ticket FROM order_metrics;", &[])
+        .sql_query(
+            "SELECT order_count, total_revenue, avg_ticket FROM order_metrics;",
+            &[],
+        )
         .unwrap();
     assert_eq!(after_delete.rows[0][0], json!(1));
     assert_eq!(after_delete.rows[0][1], json!(150.0));
@@ -162,7 +180,7 @@ fn test_incremental_materialized_view_global_and_ddl_syntax() {
         .unwrap();
 
     let list = db.list_materialized_views().unwrap();
-    assert!(list.is_empty());
+    assert_eq!(list, [] as [lilia_core::MaterializedViewInfo; 0]);
 }
 
 #[test]

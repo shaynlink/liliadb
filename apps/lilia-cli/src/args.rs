@@ -260,9 +260,7 @@ pub(crate) enum LedgerCommand {
         version: Option<u64>,
     },
     /// Export a cryptographic Inclusion Proof for a commit sequence number
-    ProveCommit {
-        commit_seq: u64,
-    },
+    ProveCommit { commit_seq: u64 },
     /// Mathematically verify a JSON inclusion proof against the current root or an expected root
     VerifyProof {
         proof_file: PathBuf,
@@ -680,13 +678,9 @@ pub(crate) enum BlobCommand {
         output: Option<PathBuf>,
     },
     /// Print the local physical file path of a stored blob
-    Path {
-        hash: String,
-    },
+    Path { hash: String },
     /// Check whether a blob exists in the CAS store
-    Exists {
-        hash: String,
-    },
+    Exists { hash: String },
     /// Trigger atomic garbage collection of orphaned blobs
     Gc,
 }

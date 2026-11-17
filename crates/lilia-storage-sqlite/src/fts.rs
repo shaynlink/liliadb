@@ -8,6 +8,48 @@ use lilia_core::{
 };
 
 impl Database {
+    pub(crate) fn is_fts_doc_authorized(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        snippet: &str,
+    ) -> bool {
+        let policies = self.security_registry.policies_for_table(collection);
+        if policies.is_empty() {
+            return true;
+        }
+        // 1. If it corresponds to a JSON document in the same space, check json doc authorization
+        if let Ok(Some(entry)) = self.read_json_entry(collection, doc_id) {
+            return self.is_json_doc_authorized(
+                collection,
+                &entry.value(),
+                lilia_core::security::PolicyAction::Select,
+            );
+        }
+        // 2. Otherwise check condition against synthetic document
+        let sec_ctx = crate::security::get_active_context();
+        let synthetic = serde_json::json!({
+            "collection": collection,
+            "doc_id": doc_id,
+            "snippet": snippet,
+        });
+        for np in policies {
+            if !np.policy.action.applies_to_read() {
+                continue;
+            }
+            if let Ok(expr) = lilia_core::parse_expr(&np.policy.condition) {
+                if !lilia_core::security::eval_security_condition(
+                    &expr,
+                    &synthetic,
+                    sec_ctx.as_ref(),
+                ) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub fn fts_index(&self, collection: &str, doc_id: &str, content: &str) -> Result<()> {
         validate_name("collection", collection)?;
         validate_name("doc_id", doc_id)?;
@@ -113,11 +155,17 @@ impl Database {
 
         let mut hits = Vec::new();
         while stmt.step()? {
+            let doc_id = stmt.column_text(0).to_string();
+            let snippet = stmt.column_text(1).to_string();
+            let rank = stmt.column_double(2);
+            if !self.is_fts_doc_authorized(collection, &doc_id, &snippet) {
+                continue;
+            }
             hits.push(FtsHit {
                 collection: collection.to_owned(),
-                doc_id: stmt.column_text(0).to_string(),
-                snippet: stmt.column_text(1).to_string(),
-                rank: stmt.column_double(2),
+                doc_id,
+                snippet,
+                rank,
             });
         }
         Ok(hits)
@@ -130,10 +178,9 @@ impl Database {
     ) -> Result<std::sync::Arc<std::sync::RwLock<lilia_core::TermTrie>>> {
         validate_name("collection", collection)?;
         {
-            let cache = self
-                .fts_trie_cache
-                .read()
-                .map_err(|_| LiliaError::new(ErrorCode::Storage, "fts trie lock poisoned", false))?;
+            let cache = self.fts_trie_cache.read().map_err(|_| {
+                LiliaError::new(ErrorCode::Storage, "fts trie lock poisoned", false)
+            })?;
             if let Some(trie) = cache.get(collection) {
                 return Ok(std::sync::Arc::clone(trie));
             }
@@ -222,7 +269,8 @@ impl Database {
             .map_err(|_| LiliaError::new(ErrorCode::Storage, "fts trie lock poisoned", false))?;
 
         let auto = lilia_core::LevenshteinAutomaton::for_prefix(&clean_prefix, effective_dist);
-        let suggestions = trie.search_automaton(&auto, normalize_limit(limit) as usize);
+        let suggestions =
+            trie.search_automaton(&auto, crate::storage::sql_count(normalize_limit(limit)));
         Ok(suggestions)
     }
 
@@ -230,6 +278,7 @@ impl Database {
     ///
     /// Expands misspelled query words with candidate dictionary terms, queries SQLite FTS5,
     /// and ranks results combining BM25 and Levenshtein edit distance.
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn fts_fuzzy_search(
         &self,
         collection: &str,
@@ -255,7 +304,10 @@ impl Database {
         // Extract words from query
         let query_words: Vec<String> = query
             .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+            .map(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
             .filter(|w| !w.is_empty())
             .collect();
 
@@ -265,7 +317,8 @@ impl Database {
 
         let effective_dist = max_distance.min(2);
         let mut expanded_clauses = Vec::new();
-        let mut term_distances: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
+        let mut term_distances: std::collections::HashMap<String, u8> =
+            std::collections::HashMap::new();
 
         for word in &query_words {
             if trie.contains(word) {
@@ -323,6 +376,10 @@ impl Database {
             let snippet = stmt.column_text(1).to_string();
             let base_rank = stmt.column_double(2);
 
+            if !self.is_fts_doc_authorized(collection, &doc_id, &snippet) {
+                continue;
+            }
+
             let mut matched_terms = Vec::new();
             let mut min_dist = u8::MAX;
 
@@ -333,11 +390,7 @@ impl Database {
                 }
             }
 
-            let effective_doc_dist = if min_dist == u8::MAX {
-                0
-            } else {
-                min_dist
-            };
+            let effective_doc_dist = if min_dist == u8::MAX { 0 } else { min_dist };
 
             let adjusted_rank = if base_rank < 0.0 {
                 base_rank / (1.0 + f64::from(effective_doc_dist) * 0.5)
@@ -356,9 +409,11 @@ impl Database {
         }
 
         hits.sort_by(|a, b| {
-            a.edit_distance
-                .cmp(&b.edit_distance)
-                .then_with(|| a.rank.partial_cmp(&b.rank).unwrap_or(std::cmp::Ordering::Equal))
+            a.edit_distance.cmp(&b.edit_distance).then_with(|| {
+                a.rank
+                    .partial_cmp(&b.rank)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         });
 
         Ok(hits)

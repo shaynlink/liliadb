@@ -289,6 +289,18 @@ impl NativeConnection {
         })
     }
 
+    /// Ends the read of every cached slot statement.
+    ///
+    /// A statement stepped but not reset keeps its read transaction open, even after the
+    /// enclosing transaction commits. That pins a WAL snapshot: checkpoints still copy frames but
+    /// the WAL can never restart from its beginning, so it grows without bound.
+    pub fn reset_statements(&mut self) {
+        self.slots.reset_all();
+        for slots in self.schema_slots.values_mut() {
+            slots.reset_all();
+        }
+    }
+
     /// Retrieve or lazily prepare a statement from a pre-defined slot.
     #[inline]
     pub fn slot(&mut self, slot: StmtSlot) -> Result<&mut NativeStatement> {
@@ -513,6 +525,20 @@ impl NativeConnection {
         unsafe { ffi::sqlite3_changes64(self.raw) }
     }
 
+    /// Whether no transaction is open on this connection (SQLite autocommit mode).
+    #[inline]
+    #[must_use]
+    pub fn is_autocommit(&self) -> bool {
+        unsafe { ffi::sqlite3_get_autocommit(self.raw) != 0 }
+    }
+
+    /// Rows inserted, updated or deleted through this connection since it was opened.
+    #[inline]
+    #[must_use]
+    pub fn total_changes(&self) -> i64 {
+        unsafe { ffi::sqlite3_total_changes64(self.raw) }
+    }
+
     #[inline]
     pub fn last_insert_rowid(&self) -> i64 {
         unsafe { ffi::sqlite3_last_insert_rowid(self.raw) }
@@ -520,11 +546,7 @@ impl NativeConnection {
 
     /// Attach an auxiliary SQLite database (such as shared-cache `_lilia_mem`) under `alias`.
     pub fn attach_database(&self, alias: &str, uri: &str) -> Result<()> {
-        if alias.is_empty()
-            || !alias
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+        if alias.is_empty() || !alias.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(LiliaError::new(
                 ErrorCode::InvalidInput,
                 "invalid attach database alias",
@@ -537,11 +559,7 @@ impl NativeConnection {
 
     /// Detach an auxiliary SQLite database previously attached under `alias`.
     pub fn detach_database(&self, alias: &str) -> Result<()> {
-        if alias.is_empty()
-            || !alias
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+        if alias.is_empty() || !alias.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(LiliaError::new(
                 ErrorCode::InvalidInput,
                 "invalid detach database alias",
@@ -558,6 +576,15 @@ impl NativeConnection {
         provider: std::sync::Arc<dyn crate::vtab::VirtualTableProvider>,
     ) -> Result<()> {
         unsafe { crate::vtab::register_eponymous_module(self.raw, name, provider) }
+    }
+
+    /// Register a virtual table factory supporting dynamic construction and arguments (`CREATE VIRTUAL TABLE ... USING`).
+    pub fn register_vtab_factory(
+        &self,
+        name: &str,
+        factory: std::sync::Arc<dyn crate::vtab::VirtualTableFactory>,
+    ) -> Result<()> {
+        unsafe { crate::vtab::register_module_factory(self.raw, name, factory) }
     }
 }
 
@@ -630,9 +657,7 @@ pub(crate) fn wait_for_unlock_notify(db: *mut ffi::sqlite3) -> Result<()> {
 fn validate_savepoint_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > 255
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     {
         return Err(LiliaError::new(
             ErrorCode::InvalidInput,
@@ -642,7 +667,6 @@ fn validate_savepoint_name(name: &str) -> Result<()> {
     }
     Ok(())
 }
-
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn wait_for_unlock_notify(_db: *mut ffi::sqlite3) -> Result<()> {

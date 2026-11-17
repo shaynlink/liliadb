@@ -119,8 +119,14 @@ impl StmtSlot {
         let sql = self.sql();
         match self.sharded_table() {
             Some(table) => sql
-                .replace(&format!("INTO {table}("), &format!("INTO {schema}.{table}("))
-                .replace(&format!("FROM {table} "), &format!("FROM {schema}.{table} ")),
+                .replace(
+                    &format!("INTO {table}("),
+                    &format!("INTO {schema}.{table}("),
+                )
+                .replace(
+                    &format!("FROM {table} "),
+                    &format!("FROM {schema}.{table} "),
+                ),
             None => sql.to_owned(),
         }
     }
@@ -292,5 +298,13 @@ impl StatementSlots {
     #[inline]
     pub fn set(&mut self, slot: StmtSlot, stmt: NativeStatement) {
         self.slots[slot as usize] = Some(stmt);
+    }
+
+    /// Resets every prepared statement, ending the reads they keep open.
+    pub fn reset_all(&mut self) {
+        for stmt in self.slots.iter_mut().flatten() {
+            // `sqlite3_reset` only repeats the error of the last step, already reported to its caller.
+            let _ = stmt.reset();
+        }
     }
 }

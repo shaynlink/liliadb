@@ -242,8 +242,11 @@ impl TDigest {
         }
         self.buffer.clear();
 
-        all_points
-            .sort_unstable_by(|a, b| a.mean.partial_cmp(&b.mean).unwrap_or(std::cmp::Ordering::Equal));
+        all_points.sort_unstable_by(|a, b| {
+            a.mean
+                .partial_cmp(&b.mean)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut new_centroids = Vec::with_capacity(self.compression as usize + 1);
         if let Some(first) = all_points.first() {

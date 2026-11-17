@@ -56,7 +56,10 @@ impl AutotuneCollector {
         }
     }
 
-    fn shard(&self, fingerprint: &QueryFingerprint) -> &Mutex<HashMap<QueryFingerprint, Tracked<QueryStats>>> {
+    fn shard(
+        &self,
+        fingerprint: &QueryFingerprint,
+    ) -> &Mutex<HashMap<QueryFingerprint, Tracked<QueryStats>>> {
         let mut hasher = DefaultHasher::new();
         fingerprint.hash(&mut hasher);
         let index = usize::try_from(hasher.finish() % SHARDS as u64).unwrap_or(0);
@@ -81,7 +84,13 @@ impl AutotuneCollector {
     pub fn seed_query(&self, fingerprint: QueryFingerprint, stats: QueryStats) {
         let mut shard = lock(self.shard(&fingerprint));
         if shard.len() < self.shard_capacity || shard.contains_key(&fingerprint) {
-            shard.insert(fingerprint, Tracked { value: stats, dirty: false });
+            shard.insert(
+                fingerprint,
+                Tracked {
+                    value: stats,
+                    dirty: false,
+                },
+            );
         }
     }
 
@@ -112,7 +121,10 @@ impl AutotuneCollector {
     pub fn seed_index_lookups(&self, space: &str, index: &str, value: IndexLookups) {
         lock(&self.lookups).insert(
             (space.to_owned(), index.to_owned()),
-            Tracked { value, dirty: false },
+            Tracked {
+                value,
+                dirty: false,
+            },
         );
     }
 
@@ -252,7 +264,7 @@ mod tests {
 
         let drained = collector.drain_dirty_queries();
         assert_eq!(drained.len(), 2);
-        assert!(collector.drain_dirty_queries().is_empty());
+        assert_eq!(collector.drain_dirty_queries(), []);
 
         collector.record_query(fingerprint("status"), &scan(10, 4));
         let drained = collector.drain_dirty_queries();
@@ -290,9 +302,14 @@ mod tests {
         let collector = AutotuneCollector::new(16, 5_000);
         collector.seed_query(
             fingerprint("status"),
-            QueryStats { executions: 9, scans: 9, scan_rows_examined: 900, ..QueryStats::default() },
+            QueryStats {
+                executions: 9,
+                scans: 9,
+                scan_rows_examined: 900,
+                ..QueryStats::default()
+            },
         );
-        assert!(collector.drain_dirty_queries().is_empty());
+        assert_eq!(collector.drain_dirty_queries(), []);
         collector.clear_scan_evidence(&fingerprint("status"));
         let snapshot = collector.query_snapshot();
         assert_eq!((snapshot[0].1.executions, snapshot[0].1.scans), (9, 0));
@@ -305,12 +322,16 @@ mod tests {
         for i in 0..10_i64 {
             collector.record_sql(
                 format!("SELECT {i}"),
-                &SqlObservation { duration_us: 1, full_scan_steps: 0, at_ms: i },
+                &SqlObservation {
+                    duration_us: 1,
+                    full_scan_steps: 0,
+                    at_ms: i,
+                },
             );
         }
         assert_eq!(collector.sql_snapshot().len(), 2);
         collector.reset();
-        assert!(collector.sql_snapshot().is_empty());
-        assert!(collector.query_snapshot().is_empty());
+        assert_eq!(collector.sql_snapshot(), []);
+        assert_eq!(collector.query_snapshot(), []);
     }
 }

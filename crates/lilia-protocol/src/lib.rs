@@ -6,8 +6,9 @@ use lilia_core::{
     BatchOperation, CentralityType, CheckpointStats, ComponentType, ConflictRecord,
     ConflictResolutionStrategy, CypherResult, DatabaseEvent, DictStats, Direction, FtsHit,
     GeofenceMatch, GpsPoint, GraphEdge, GraphNode, Hlc, HlcMutationOutcome, HlcRecord, HnswConfig,
-    HybridHit, ImpactAnalysis, JsonEntry, JsonIndexInfo, JsonRevisionInfo, KvEntry, LiliaError,
-    LiveQueryDiff, MaterializedViewInfo, MutationResult, NodeScore, PageRankConfig, RedoResult,
+    HybridHit, ImpactAnalysis, InvertibleBloomFilter, JsonEntry, JsonIndexInfo, JsonRevisionInfo,
+    KvEntry, LiliaError, LiveQueryDiff, MaterializedViewInfo, MutationResult, NodeScore,
+    P2pDocumentPayload, PageRankConfig, ReconciliationSummary, RedoResult, StrataEstimator,
     TableStorageStat, TimeSeriesLifecyclePolicy, TimeSeriesPoint, TimeSeriesRetentionStats,
     TimeSeriesStats, UndoEntry, UndoResult, VectorElementType, VectorHit, VectorIndexInfo,
     VectorMetric, WeightedPath,
@@ -515,6 +516,38 @@ pub enum Operation {
         #[serde(default)]
         params: Vec<serde_json::Value>,
     },
+    P2pSync {
+        message: P2pSyncMessage,
+    },
+}
+
+/// Decentralized P2P Set Reconciliation protocol messages using Strata Estimators and IBFs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum P2pSyncMessage {
+    EstimateRequest {
+        space: Option<String>,
+        strata: StrataEstimator,
+    },
+    FastReconcileResponse {
+        space: Option<String>,
+        changesets: Vec<P2pDocumentPayload>,
+        requested_id_hashes: Vec<u64>,
+    },
+    IbfNegotiation {
+        space: Option<String>,
+        estimated_diff: usize,
+        ibf: InvertibleBloomFilter,
+    },
+    IbfReconcileResponse {
+        space: Option<String>,
+        changesets: Vec<P2pDocumentPayload>,
+        requested_id_hashes: Vec<u64>,
+    },
+    ChangesetDelivery {
+        space: Option<String>,
+        changesets: Vec<P2pDocumentPayload>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -591,6 +624,8 @@ pub enum ResponseValue {
     UndoEntries(Vec<UndoEntry>),
     MaterializedViews(Vec<MaterializedViewInfo>),
     LiveQueryDiff(LiveQueryDiff),
+    P2pSync(P2pSyncMessage),
+    ReconciliationSummary(ReconciliationSummary),
 }
 
 /// Decode one size-prefixed `MessagePack` frame.

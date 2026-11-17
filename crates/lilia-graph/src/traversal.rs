@@ -42,30 +42,26 @@ impl<'a> GraphTraversal<'a> {
 
     pub fn step(mut self, direction: Direction, kind: Option<&str>) -> Result<Self> {
         let mut next_nodes = Vec::new();
-        let mut next_paths = if self.paths.is_some() {
-            Some(Vec::new())
-        } else {
-            None
-        };
-
-        if let Some(ref current_paths) = self.paths {
+        let next_paths = if let Some(current_paths) = &self.paths {
+            let mut next_paths = Vec::new();
             for path in current_paths {
-                if let Some(last_node) = path.last() {
-                    let neighbors = self.store.neighbors_with_kind(last_node, direction, kind)?;
-                    for neighbor in neighbors {
-                        let mut p = path.clone();
-                        p.push(neighbor.clone());
-                        next_nodes.push(neighbor);
-                        next_paths.as_mut().unwrap().push(p);
-                    }
+                let Some(last_node) = path.last() else {
+                    continue;
+                };
+                for neighbor in self.store.neighbors_with_kind(last_node, direction, kind)? {
+                    let mut extended = path.clone();
+                    extended.push(neighbor.clone());
+                    next_nodes.push(neighbor);
+                    next_paths.push(extended);
                 }
             }
+            Some(next_paths)
         } else {
             for node in &self.current {
-                let neighbors = self.store.neighbors_with_kind(node, direction, kind)?;
-                next_nodes.extend(neighbors);
+                next_nodes.extend(self.store.neighbors_with_kind(node, direction, kind)?);
             }
-        }
+            None
+        };
 
         self.current = next_nodes;
         self.paths = next_paths;
@@ -80,26 +76,21 @@ impl<'a> GraphTraversal<'a> {
         kind: Option<&str>,
     ) -> Result<Self> {
         let mut collected = Vec::new();
-        let mut collected_paths = if self.paths.is_some() {
-            Some(Vec::new())
-        } else {
-            None
+        let mut collected_paths = self.paths.as_ref().map(|_| Vec::new());
+        let mut collect = |traversal: &Self| {
+            collected.extend(traversal.current.iter().cloned());
+            if let (Some(all), Some(paths)) = (collected_paths.as_mut(), &traversal.paths) {
+                all.extend(paths.iter().cloned());
+            }
         };
 
         if min == 0 {
-            collected.extend(self.current.clone());
-            if let Some(ref cp) = self.paths {
-                collected_paths.as_mut().unwrap().extend(cp.clone());
-            }
+            collect(&self);
         }
-
         for hop in 1..=max {
             self = self.step(direction, kind)?;
             if hop >= min {
-                collected.extend(self.current.clone());
-                if let Some(ref cp) = self.paths {
-                    collected_paths.as_mut().unwrap().extend(cp.clone());
-                }
+                collect(&self);
             }
         }
 
@@ -115,7 +106,7 @@ impl<'a> GraphTraversal<'a> {
 
         if let Some(paths) = self.paths {
             let mut deduped_paths = Vec::new();
-            for (node, path) in self.current.into_iter().zip(paths.into_iter()) {
+            for (node, path) in self.current.into_iter().zip(paths) {
                 if seen.insert(node.clone()) {
                     deduped.push(node);
                     deduped_paths.push(path);
@@ -150,39 +141,11 @@ impl<'a> GraphTraversal<'a> {
         self.limit(n)
     }
 
-    pub fn filter_node<F>(mut self, predicate: F) -> Result<Self>
+    pub fn filter_node<F>(self, predicate: F) -> Result<Self>
     where
         F: Fn(&GraphNode) -> bool,
     {
-        let mut filtered_nodes = Vec::new();
-        let mut filtered_paths = if self.paths.is_some() {
-            Some(Vec::new())
-        } else {
-            None
-        };
-
-        if let Some(paths) = self.paths {
-            for (node_id, path) in self.current.into_iter().zip(paths.into_iter()) {
-                if let Some(node) = self.store.get_node(&node_id)? {
-                    if predicate(&node) {
-                        filtered_nodes.push(node_id);
-                        filtered_paths.as_mut().unwrap().push(path);
-                    }
-                }
-            }
-            self.paths = filtered_paths;
-        } else {
-            for node_id in self.current {
-                if let Some(node) = self.store.get_node(&node_id)? {
-                    if predicate(&node) {
-                        filtered_nodes.push(node_id);
-                    }
-                }
-            }
-        }
-
-        self.current = filtered_nodes;
-        Ok(self)
+        self.retain(|node| Ok(predicate(node)))
     }
 
     pub fn filter_kind(self, expected_kind: &str) -> Result<Self> {
@@ -190,42 +153,35 @@ impl<'a> GraphTraversal<'a> {
         self.filter_node(move |node| node.kind == expected)
     }
 
-    pub fn filter_doc<F>(mut self, predicate: F) -> Result<Self>
+    pub fn filter_doc<F>(self, predicate: F) -> Result<Self>
     where
         F: Fn(&serde_json::Value) -> bool,
     {
-        let mut filtered_nodes = Vec::new();
-        let mut filtered_paths = if self.paths.is_some() {
-            Some(Vec::new())
-        } else {
-            None
-        };
+        let database = self.store.database();
+        self.retain(|node| {
+            Ok(resolve_node_document(database, node)?.is_some_and(|doc| predicate(&doc)))
+        })
+    }
 
-        if let Some(paths) = self.paths {
-            for (node_id, path) in self.current.into_iter().zip(paths.into_iter()) {
-                if let Some(node) = self.store.get_node(&node_id)? {
-                    if let Some(doc) = resolve_node_document(self.store.database(), &node)? {
-                        if predicate(&doc) {
-                            filtered_nodes.push(node_id);
-                            filtered_paths.as_mut().unwrap().push(path);
-                        }
-                    }
-                }
-            }
-            self.paths = filtered_paths;
-        } else {
-            for node_id in self.current {
-                if let Some(node) = self.store.get_node(&node_id)? {
-                    if let Some(doc) = resolve_node_document(self.store.database(), &node)? {
-                        if predicate(&doc) {
-                            filtered_nodes.push(node_id);
-                        }
-                    }
+    /// Keeps the current nodes, with their tracked paths, that exist and satisfy `keep`.
+    fn retain(mut self, keep: impl Fn(&GraphNode) -> Result<bool>) -> Result<Self> {
+        let mut kept_nodes = Vec::new();
+        let mut kept_paths = self.paths.as_ref().map(|_| Vec::new());
+        let mut paths = self.paths.take().map(Vec::into_iter);
+        for node_id in std::mem::take(&mut self.current) {
+            let path = paths.as_mut().and_then(Iterator::next);
+            let Some(node) = self.store.get_node(&node_id)? else {
+                continue;
+            };
+            if keep(&node)? {
+                kept_nodes.push(node_id);
+                if let (Some(kept), Some(path)) = (kept_paths.as_mut(), path) {
+                    kept.push(path);
                 }
             }
         }
-
-        self.current = filtered_nodes;
+        self.current = kept_nodes;
+        self.paths = kept_paths;
         Ok(self)
     }
 

@@ -9,7 +9,7 @@ const ACCOUNT_CHECK: &str = "$.balance >= 0.0 AND length($.iban) == 27";
 fn outcome(expression: &str, document: &Value) -> CheckOutcome {
     let expr = parse_expr(expression).unwrap();
     validate_check_expr(&expr).unwrap();
-    eval_check(&expr, &BinaryDoc::from_json_value(document)).unwrap()
+    eval_check(&expr, &BinaryDoc::from_json_value(document).unwrap()).unwrap()
 }
 
 fn iban() -> String {

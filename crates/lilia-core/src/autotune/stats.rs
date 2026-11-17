@@ -40,7 +40,9 @@ impl QueryStats {
         self.executions = self.executions.saturating_add(1);
         self.rows_examined = self.rows_examined.saturating_add(observation.rows_examined);
         self.rows_returned = self.rows_returned.saturating_add(observation.rows_returned);
-        self.total_duration_us = self.total_duration_us.saturating_add(observation.duration_us);
+        self.total_duration_us = self
+            .total_duration_us
+            .saturating_add(observation.duration_us);
         self.max_duration_us = self.max_duration_us.max(observation.duration_us);
         self.last_seen_ms = observation.at_ms;
         if !observation.used_index {
@@ -97,7 +99,9 @@ impl SqlQueryStats {
             self.first_seen_ms = observation.at_ms;
         }
         self.executions = self.executions.saturating_add(1);
-        self.total_duration_us = self.total_duration_us.saturating_add(observation.duration_us);
+        self.total_duration_us = self
+            .total_duration_us
+            .saturating_add(observation.duration_us);
         self.max_duration_us = self.max_duration_us.max(observation.duration_us);
         self.last_seen_ms = observation.at_ms;
         if observation.full_scan_steps > 0 {
@@ -140,15 +144,32 @@ mod tests {
         assert_eq!(stats.max_duration_us, 9_000);
         assert_eq!((stats.first_seen_ms, stats.last_seen_ms), (10, 30));
         stats.clear_scan_evidence();
-        assert_eq!((stats.scans, stats.slow_scans, stats.avg_rows_per_scan()), (0, 0, 0));
+        assert_eq!(
+            (stats.scans, stats.slow_scans, stats.avg_rows_per_scan()),
+            (0, 0, 0)
+        );
         assert_eq!(stats.executions, 3);
     }
 
     #[test]
     fn sql_full_scans_are_detected() {
         let mut stats = SqlQueryStats::default();
-        stats.record(&SqlObservation { duration_us: 10, full_scan_steps: 0, at_ms: 1 }, 5_000);
-        stats.record(&SqlObservation { duration_us: 8_000, full_scan_steps: 250, at_ms: 2 }, 5_000);
+        stats.record(
+            &SqlObservation {
+                duration_us: 10,
+                full_scan_steps: 0,
+                at_ms: 1,
+            },
+            5_000,
+        );
+        stats.record(
+            &SqlObservation {
+                duration_us: 8_000,
+                full_scan_steps: 250,
+                at_ms: 2,
+            },
+            5_000,
+        );
         assert_eq!(stats.executions, 2);
         assert_eq!(stats.full_scan_executions, 1);
         assert_eq!(stats.full_scan_steps, 250);

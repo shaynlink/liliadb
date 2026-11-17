@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use lilia_core::{
     BatchOperation, CollectionKind, CollectionSpec, Direction, ErrorCode, HnswConfig,
-    OverflowPolicy, RingBufferConfig, StorageTier, TimeSeriesPoint, VectorElementType, VectorMetric,
+    OverflowPolicy, RingBufferConfig, StorageTier, TimeSeriesPoint, VectorElementType,
+    VectorMetric,
 };
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::{json, Map, Value};
@@ -82,10 +83,16 @@ fn test_memory_tier_zero_disk_and_all_models() {
 
         // JSON + in-memory index
         json_col
-            .put("doc1", json!({ "user": "alice", "role": "admin", "score": 99 }))
+            .put(
+                "doc1",
+                json!({ "user": "alice", "role": "admin", "score": 99 }),
+            )
             .unwrap();
         json_col
-            .put("doc2", json!({ "user": "bob", "role": "viewer", "score": 40 }))
+            .put(
+                "doc2",
+                json!({ "user": "bob", "role": "viewer", "score": 40 }),
+            )
             .unwrap();
         json_col.create_index("by_role", "$.role").unwrap();
         assert_eq!(
@@ -219,7 +226,10 @@ fn test_memory_tier_zero_disk_and_all_models() {
             1
         );
         assert_eq!(
-            scalar_i64(&db, "SELECT COUNT(*) FROM lilia_json WHERE tier = 'memory';"),
+            scalar_i64(
+                &db,
+                "SELECT COUNT(*) FROM lilia_json WHERE tier = 'memory';"
+            ),
             2
         );
         assert_eq!(
@@ -280,22 +290,29 @@ fn test_memory_tier_zero_disk_and_all_models() {
 
     // Reopen DB: 100% of StorageTier::Memory data & ephemeral tables vanished
     let reopened = Database::open(DatabaseOptions::durable(&db_path)).unwrap();
-    assert!(reopened
-        .kv_get("ephem_kv", b"session_1")
-        .unwrap()
-        .is_none());
+    assert!(reopened.kv_get("ephem_kv", b"session_1").unwrap().is_none());
     assert!(reopened.json_get("ephem_json", "doc1").unwrap().is_none());
-    assert!(reopened
-        .ts_query_range("ephem_ts", 0, 5_000)
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        reopened.ts_query_range("ephem_ts", 0, 5_000).unwrap(),
+        [] as [lilia_core::TimeSeriesPoint; 0]
+    );
     assert!(reopened
         .graph_get_node("ephem_graph", "a")
         .unwrap()
         .is_none());
     assert!(reopened.vector_get("ephem_vec", "v1").unwrap().is_none());
-    assert!(reopened.fts_search("ephem_fts", "ephemeral", 10).unwrap().is_empty());
-    assert_eq!(reopened.crdt().counter("ephem_crdt", "online").get().unwrap(), 0);
+    assert!(reopened
+        .fts_search("ephem_fts", "ephemeral", 10)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        reopened
+            .crdt()
+            .counter("ephem_crdt", "online")
+            .get()
+            .unwrap(),
+        0
+    );
     assert!(reopened
         .sql_query("SELECT COUNT(*) FROM live_sessions;", &[])
         .is_err());
@@ -314,7 +331,10 @@ fn test_mem_engine_ttl_and_lru_drop_oldest_eviction() {
     assert_eq!(lru_ns.get(b"k1").unwrap().unwrap().value, b"v1");
     lru_ns.set(b"k4", b"v4").unwrap();
 
-    assert!(lru_ns.get(b"k2").unwrap().is_none(), "k2 should be LRU-evicted");
+    assert!(
+        lru_ns.get(b"k2").unwrap().is_none(),
+        "k2 should be LRU-evicted"
+    );
     assert!(lru_ns.get(b"k1").unwrap().is_some());
     assert!(lru_ns.get(b"k3").unwrap().is_some());
     assert!(lru_ns.get(b"k4").unwrap().is_some());
@@ -376,7 +396,10 @@ fn test_mixed_disk_memory_transactions_and_promote_demote() {
 
         assert_eq!(disk_kv.get(b"ord_1").unwrap().unwrap().value, b"paid");
         assert_eq!(mem_kv.get(b"lock_1").unwrap().unwrap().value, b"released");
-        assert_eq!(mem_json.get("receipt_1").unwrap().unwrap().value()["total"], 42);
+        assert_eq!(
+            mem_json.get("receipt_1").unwrap().unwrap().value()["total"],
+            42
+        );
 
         // Rollback case 1: Memory CAS mismatch must abort Disk write as well!
         let err = db
@@ -419,7 +442,11 @@ fn test_mixed_disk_memory_transactions_and_promote_demote() {
         assert_eq!(db.memory_tier_stats().kv_entries, 0);
 
         // Demote a collection back to Memory and verify removal from SQLite main tables
-        db.collection("orders").kv().unwrap().demote(StorageTier::Memory).unwrap();
+        db.collection("orders")
+            .kv()
+            .unwrap()
+            .demote(StorageTier::Memory)
+            .unwrap();
         assert_eq!(
             scalar_i64(
                 &db,
@@ -427,23 +454,31 @@ fn test_mixed_disk_memory_transactions_and_promote_demote() {
             ),
             0
         );
-        assert_eq!(db.kv_get("orders", b"ord_1").unwrap().unwrap().value, b"paid");
+        assert_eq!(
+            db.kv_get("orders", b"ord_1").unwrap().unwrap().value,
+            b"paid"
+        );
     }
 
     // Promoted hot_state / hot_docs / hot_ts survive DB reopen on disk; demoted `orders` does not
     let reopened = Database::open(DatabaseOptions::durable(&db_path)).unwrap();
     assert_eq!(
-        reopened.kv_get("hot_state", b"lock_1").unwrap().unwrap().value,
+        reopened
+            .kv_get("hot_state", b"lock_1")
+            .unwrap()
+            .unwrap()
+            .value,
         b"released"
     );
     assert_eq!(
-        reopened.json_get("hot_docs", "receipt_1").unwrap().unwrap().value()["total"],
+        reopened
+            .json_get("hot_docs", "receipt_1")
+            .unwrap()
+            .unwrap()
+            .value()["total"],
         42
     );
-    assert_eq!(
-        reopened.ts_query_range("hot_ts", 0, 500).unwrap().len(),
-        2
-    );
+    assert_eq!(reopened.ts_query_range("hot_ts", 0, 500).unwrap().len(), 2);
     assert!(reopened.kv_get("orders", b"ord_1").unwrap().is_none());
 }
 
@@ -482,12 +517,18 @@ fn test_ring_buffer_ryow_overflow_policies_groupsync_and_close_drain() {
         put_json(&db, "buf_docs", "d1", json!({"ok": true})).unwrap();
 
         // RYOW via Rust API
-        assert_eq!(db.kv_get("events", b"k_new").unwrap().unwrap().value, b"v_new");
+        assert_eq!(
+            db.kv_get("events", b"k_new").unwrap().unwrap().value,
+            b"v_new"
+        );
         assert!(db.kv_get("events", b"stale_key").unwrap().is_none());
         let scanned = db.kv_scan("events", None, 10).unwrap();
         assert_eq!(scanned.len(), 1);
         assert_eq!(scanned[0].key, b"k_new");
-        assert_eq!(db.json_get("buf_docs", "d1").unwrap().unwrap().value()["ok"], true);
+        assert_eq!(
+            db.json_get("buf_docs", "d1").unwrap().unwrap().value()["ok"],
+            true
+        );
         assert_eq!(db.json_scan("buf_docs", None, 10).unwrap().len(), 1);
 
         // RYOW via unified SQL views (buffered rows visible, tombstoned disk row hidden!)
@@ -499,7 +540,10 @@ fn test_ring_buffer_ryow_overflow_policies_groupsync_and_close_drain() {
             1
         );
         assert_eq!(
-            scalar_i64(&db, "SELECT COUNT(*) FROM lilia_kv WHERE namespace = 'events';"),
+            scalar_i64(
+                &db,
+                "SELECT COUNT(*) FROM lilia_kv WHERE namespace = 'events';"
+            ),
             1
         );
         assert_eq!(
@@ -519,7 +563,10 @@ fn test_ring_buffer_ryow_overflow_policies_groupsync_and_close_drain() {
             .unwrap();
         }
         // RYOW TS stats & range even before flush
-        let pre_stats = db.ts_query_stats("iot_sensor_1", 0, 100_000).unwrap().unwrap();
+        let pre_stats = db
+            .ts_query_stats("iot_sensor_1", 0, 100_000)
+            .unwrap()
+            .unwrap();
         assert_eq!(pre_stats.count, 2_500);
 
         let flush_stats = db.flush_writes().unwrap();
@@ -585,7 +632,11 @@ fn test_ring_buffer_ryow_overflow_policies_groupsync_and_close_drain() {
 
     let reopened = Database::open(DatabaseOptions::durable(&db_path)).unwrap();
     assert_eq!(
-        reopened.kv_get("events", b"on_close").unwrap().unwrap().value,
+        reopened
+            .kv_get("events", b"on_close")
+            .unwrap()
+            .unwrap()
+            .value,
         b"persisted"
     );
     assert_eq!(
@@ -700,7 +751,7 @@ fn test_ring_buffer_ryow_overflow_policies_groupsync_and_close_drain() {
         disk_handle.join().unwrap();
         let stats = db3.ring_buffer_stats();
         assert_eq!(stats.overlay_entries, 0, "DropOldest must bypass overlay");
-        assert!(stats.rejected_total == 0);
+        assert_eq!(stats.rejected_total, 0);
         assert!(stats.dropped_oldest_total > 0 || stats.committed_total > 0);
     }
 }
@@ -708,7 +759,8 @@ fn test_ring_buffer_ryow_overflow_policies_groupsync_and_close_drain() {
 #[test]
 fn test_extreme_concurrency_vtab_cross_tier_join_and_ddl() {
     let temp = tempfile::tempdir().unwrap();
-    let db = Arc::new(Database::open(DatabaseOptions::durable(temp.path().join("conc.lilia"))).unwrap());
+    let db =
+        Arc::new(Database::open(DatabaseOptions::durable(temp.path().join("conc.lilia"))).unwrap());
 
     // Extended SQL DDL
     db.sql_query(
@@ -722,7 +774,8 @@ fn test_extreme_concurrency_vtab_cross_tier_join_and_ddl() {
     )
     .unwrap();
     assert_eq!(
-        db.get_collection_spec(CollectionKind::Json, "sessions").tier,
+        db.get_collection_spec(CollectionKind::Json, "sessions")
+            .tier,
         StorageTier::Memory
     );
 
@@ -735,10 +788,20 @@ fn test_extreme_concurrency_vtab_cross_tier_join_and_ddl() {
     // Persistent disk profile records to join against in-memory sessions
     put_json(&db, "users", "u1", json!({"name": "Alice"})).unwrap();
     put_json(&db, "users", "u2", json!({"name": "Bob"})).unwrap();
-    put_json(&db, "sessions", "s1", json!({"user_id": "u1", "online": true}))
-        .unwrap();
-    put_json(&db, "sessions", "s2", json!({"user_id": "u2", "online": false}))
-        .unwrap();
+    put_json(
+        &db,
+        "sessions",
+        "s1",
+        json!({"user_id": "u1", "online": true}),
+    )
+    .unwrap();
+    put_json(
+        &db,
+        "sessions",
+        "s2",
+        json!({"user_id": "u2", "online": false}),
+    )
+    .unwrap();
 
     // Cross-tier SQL JOIN (`tier = 'disk'` joined with `tier = 'memory'` via lilia_vtab!)
     let join_res = db
@@ -775,8 +838,7 @@ fn test_extreme_concurrency_vtab_cross_tier_join_and_ddl() {
             for step in 0..100 {
                 let k = format!("w{wid}_{step}");
                 put_kv(&d, "hot_kv", k.as_bytes(), b"val").unwrap();
-                put_json(&d, "sessions", &k, json!({"user_id": "u1", "step": step}))
-                    .unwrap();
+                put_json(&d, "sessions", &k, json!({"user_id": "u1", "step": step})).unwrap();
                 d.sql_query(
                     "INSERT OR REPLACE INTO active_peers(peer, score) VALUES(?1, ?2);",
                     &[json!(k), json!(step)],
@@ -818,9 +880,6 @@ fn test_extreme_concurrency_vtab_cross_tier_join_and_ddl() {
         ),
         800
     );
-    assert_eq!(
-        scalar_i64(&db, "SELECT COUNT(*) FROM active_peers;"),
-        800
-    );
+    assert_eq!(scalar_i64(&db, "SELECT COUNT(*) FROM active_peers;"), 800);
     assert_eq!(scalar_i64(&db, "SELECT COUNT(*) FROM main._lilia_kv;"), 0);
 }

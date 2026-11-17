@@ -117,11 +117,19 @@ fn check_rejects_violating_documents_on_every_write_path() {
     accounts(&database);
 
     database
-        .batch(&[put("accounts", "a", json!({ "balance": 10.0, "iban": iban() }))])
+        .batch(&[put(
+            "accounts",
+            "a",
+            json!({ "balance": 10.0, "iban": iban() }),
+        )])
         .unwrap();
 
     let negative = database
-        .batch(&[put("accounts", "b", json!({ "balance": -1.0, "iban": iban() }))])
+        .batch(&[put(
+            "accounts",
+            "b",
+            json!({ "balance": -1.0, "iban": iban() }),
+        )])
         .unwrap_err();
     violation(&negative, "check");
     let details = negative.details.unwrap();
@@ -161,7 +169,11 @@ fn rejected_operation_rolls_back_the_whole_batch() {
     let error = database
         .batch(&[
             kv_set("audit", "entry"),
-            put("accounts", "bad", json!({ "balance": -1.0, "iban": iban() })),
+            put(
+                "accounts",
+                "bad",
+                json!({ "balance": -1.0, "iban": iban() }),
+            ),
         ])
         .unwrap_err();
     violation(&error, "check");
@@ -210,7 +222,10 @@ fn create_collection_validates_expression_and_existing_documents() {
         )
         .unwrap_err();
     violation(&error, "check");
-    assert_eq!(error.details.unwrap()["existing_violations"], json!(["old"]));
+    assert_eq!(
+        error.details.unwrap()["existing_violations"],
+        json!(["old"])
+    );
 
     let unknown_function = database
         .json()
@@ -236,7 +251,10 @@ fn create_collection_validates_expression_and_existing_documents() {
 fn set_check_replaces_and_drops_the_expression() {
     let (_directory, database) = open();
     accounts(&database);
-    database.json().set_check("accounts", Some("$.balance >= 100")).unwrap();
+    database
+        .json()
+        .set_check("accounts", Some("$.balance >= 100"))
+        .unwrap();
     assert_eq!(
         database.integrity().checks(),
         vec![("accounts".to_owned(), "$.balance >= 100".to_owned())]
@@ -263,7 +281,11 @@ fn check_survives_reopen() {
     let database = open_in(&directory);
     violation(
         &database
-            .batch(&[put("accounts", "b", json!({ "balance": -1.0, "iban": iban() }))])
+            .batch(&[put(
+                "accounts",
+                "b",
+                json!({ "balance": -1.0, "iban": iban() }),
+            )])
             .unwrap_err(),
         "check",
     );
@@ -315,7 +337,11 @@ fn failed_batch_does_not_apply_cascades() {
     let error = database
         .batch(&[
             delete("users", "u"),
-            put("accounts", "bad", json!({ "balance": -1.0, "iban": iban() })),
+            put(
+                "accounts",
+                "bad",
+                json!({ "balance": -1.0, "iban": iban() }),
+            ),
         ])
         .unwrap_err();
     violation(&error, "check");
@@ -330,9 +356,13 @@ fn graph_node_defaults_doc_id_and_requires_existing_parent() {
         .integrity()
         .add_reference(Reference::graph_nodes("social", "users"))
         .unwrap();
-    database.batch(&[put("users", "alice", json!({ "age": 30 }))]).unwrap();
+    database
+        .batch(&[put("users", "alice", json!({ "age": 30 }))])
+        .unwrap();
 
-    database.batch(&[node("social", "alice", "users", None)]).unwrap();
+    database
+        .batch(&[node("social", "alice", "users", None)])
+        .unwrap();
     let stored = database.graph_get_node("social", "alice").unwrap().unwrap();
     assert_eq!(stored.doc_id.as_deref(), Some("alice"));
     assert_eq!(
@@ -344,7 +374,10 @@ fn graph_node_defaults_doc_id_and_requires_existing_parent() {
         .batch(&[node("social", "ghost", "users", Some("ghost"))])
         .unwrap_err();
     violation(&missing, "reference");
-    assert!(database.graph_get_node("social", "ghost").unwrap().is_none());
+    assert!(database
+        .graph_get_node("social", "ghost")
+        .unwrap()
+        .is_none());
 
     let undeclared = database
         .batch(&[node("social", "x", "orders", Some("o1"))])
@@ -352,7 +385,14 @@ fn graph_node_defaults_doc_id_and_requires_existing_parent() {
     violation(&undeclared, "reference");
 
     let direct = database
-        .graph_set_node_doc("social", "y", "person", Some("users"), Some("nobody"), &json!({}))
+        .graph_set_node_doc(
+            "social",
+            "y",
+            "person",
+            Some("users"),
+            Some("nobody"),
+            &json!({}),
+        )
         .unwrap_err();
     violation(&direct, "reference");
     assert!(!database.graph_delete_node("social", "absent").unwrap());
@@ -361,9 +401,14 @@ fn graph_node_defaults_doc_id_and_requires_existing_parent() {
 #[test]
 fn implicit_kind_link_is_gone() {
     let (_directory, database) = open();
-    database.batch(&[put("person", "p", json!({ "n": 1 }))]).unwrap();
+    database
+        .batch(&[put("person", "p", json!({ "n": 1 }))])
+        .unwrap();
     database.batch(&[plain_node("g", "p")]).unwrap();
-    assert!(database.graph_get_node_document("g", "p").unwrap().is_none());
+    assert!(database
+        .graph_get_node_document("g", "p")
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -444,15 +489,22 @@ fn kv_reference_validates_parent_and_honours_actions() {
         .add_reference(Reference::kv("sessions", "users"))
         .unwrap();
     database
-        .batch(&[put("users", "user_42", json!({})), put("users", "user_420", json!({}))])
+        .batch(&[
+            put("users", "user_42", json!({})),
+            put("users", "user_420", json!({})),
+        ])
         .unwrap();
 
     violation(
-        &database.batch(&[kv_set("carts", "user_9:items")]).unwrap_err(),
+        &database
+            .batch(&[kv_set("carts", "user_9:items")])
+            .unwrap_err(),
         "reference",
     );
     violation(
-        &database.batch(&[kv_set("carts", "no-separator")]).unwrap_err(),
+        &database
+            .batch(&[kv_set("carts", "no-separator")])
+            .unwrap_err(),
         "reference",
     );
     database
@@ -466,7 +518,10 @@ fn kv_reference_validates_parent_and_honours_actions() {
 
     let restricted = database.batch(&[delete("users", "user_42")]).unwrap_err();
     violation(&restricted, "restrict");
-    assert!(database.kv_get("carts", b"user_42:items").unwrap().is_some());
+    assert!(database
+        .kv_get("carts", b"user_42:items")
+        .unwrap()
+        .is_some());
 
     database
         .batch(&[BatchOperation::KvDelete {
@@ -476,23 +531,39 @@ fn kv_reference_validates_parent_and_honours_actions() {
         }])
         .unwrap();
     database.batch(&[delete("users", "user_42")]).unwrap();
-    assert!(database.kv_get("carts", b"user_42:items").unwrap().is_none());
-    assert!(database.kv_get("carts", b"user_42:wishlist").unwrap().is_none());
-    assert!(database.kv_get("carts", b"user_420:items").unwrap().is_some());
+    assert!(database
+        .kv_get("carts", b"user_42:items")
+        .unwrap()
+        .is_none());
+    assert!(database
+        .kv_get("carts", b"user_42:wishlist")
+        .unwrap()
+        .is_none());
+    assert!(database
+        .kv_get("carts", b"user_420:items")
+        .unwrap()
+        .is_some());
 }
 
 #[test]
 fn declaring_a_reference_validates_existing_children() {
     let (_directory, database) = open();
-    database.batch(&[node("social", "dangling", "users", Some("nobody"))]).unwrap();
+    database
+        .batch(&[node("social", "dangling", "users", Some("nobody"))])
+        .unwrap();
     let error = database
         .integrity()
         .add_reference(Reference::graph_nodes("social", "users"))
         .unwrap_err();
     violation(&error, "reference");
-    assert_eq!(error.details.unwrap()["existing_violations"], json!(["dangling"]));
+    assert_eq!(
+        error.details.unwrap()["existing_violations"],
+        json!(["dangling"])
+    );
 
-    database.batch(&[put("users", "nobody", json!({}))]).unwrap();
+    database
+        .batch(&[put("users", "nobody", json!({}))])
+        .unwrap();
     database
         .integrity()
         .add_reference(Reference::graph_nodes("social", "users"))
@@ -522,8 +593,14 @@ fn references_survive_reopen_and_can_be_dropped() {
             .unwrap_err(),
         "reference",
     );
-    assert!(database.integrity().drop_reference("fk_graph_social_users").unwrap());
-    assert!(!database.integrity().drop_reference("fk_graph_social_users").unwrap());
+    assert!(database
+        .integrity()
+        .drop_reference("fk_graph_social_users")
+        .unwrap());
+    assert!(!database
+        .integrity()
+        .drop_reference("fk_graph_social_users")
+        .unwrap());
     database
         .batch(&[node("social", "n", "users", Some("missing"))])
         .unwrap();
@@ -541,7 +618,11 @@ fn contracts_require_the_disk_tier() {
 
     accounts(&database);
     let demote = database
-        .demote_collection(lilia_core::CollectionKind::Json, "accounts", StorageTier::Memory)
+        .demote_collection(
+            lilia_core::CollectionKind::Json,
+            "accounts",
+            StorageTier::Memory,
+        )
         .unwrap_err();
     assert_eq!(demote.code, ErrorCode::Unsupported);
     let retier = database.collection("accounts").memory().json();
@@ -589,7 +670,11 @@ fn contracts_hold_with_temporal_sharding() {
         .unwrap();
     violation(
         &database
-            .batch(&[put("accounts", "bad", json!({ "balance": -1.0, "iban": iban() }))])
+            .batch(&[put(
+                "accounts",
+                "bad",
+                json!({ "balance": -1.0, "iban": iban() }),
+            )])
             .unwrap_err(),
         "check",
     );
@@ -606,7 +691,9 @@ fn contracts_hold_with_temporal_sharding() {
 #[test]
 fn raw_sql_cannot_write_governed_tables_once_contracts_exist() {
     let (_directory, database) = open();
-    database.batch(&[put("docs", "a", json!({ "n": 1 }))]).unwrap();
+    database
+        .batch(&[put("docs", "a", json!({ "n": 1 }))])
+        .unwrap();
     accounts(&database);
 
     for statement in [
@@ -623,7 +710,11 @@ fn raw_sql_cannot_write_governed_tables_once_contracts_exist() {
         .sql_query("SELECT count(*) FROM _lilia_json;", &[])
         .unwrap();
     assert_eq!(rows.rows[0][0], json!(1));
-    database.sql_query("CREATE TABLE scratch(x INTEGER);", &[]).unwrap();
-    database.sql_query("INSERT INTO scratch(x) VALUES (1);", &[]).unwrap();
+    database
+        .sql_query("CREATE TABLE scratch(x INTEGER);", &[])
+        .unwrap();
+    database
+        .sql_query("INSERT INTO scratch(x) VALUES (1);", &[])
+        .unwrap();
     database.batch(&[delete("docs", "a")]).unwrap();
 }

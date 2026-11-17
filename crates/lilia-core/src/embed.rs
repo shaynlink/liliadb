@@ -18,7 +18,7 @@ pub enum BuiltinModel {
 
 #[allow(non_upper_case_globals)]
 impl BuiltinModel {
-    /// Alias for MiniLM L6.
+    /// Alias for `MiniLM` L6.
     pub const MiniLM_L6: Self = Self::MiniLmL6V2;
 
     /// Canonical identifier used for catalog storage.
@@ -149,7 +149,7 @@ mod tests {
     use super::*;
 
     fn doc(value: &serde_json::Value) -> BinaryDoc {
-        BinaryDoc::from_json_value(value)
+        BinaryDoc::from_json_value(value).unwrap()
     }
 
     #[test]

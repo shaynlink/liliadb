@@ -78,10 +78,14 @@ impl Database {
         validate_name("series_id", series_id)?;
         self.roll_shard_if_due()?;
         match self.catalog.tier_for(CollectionKind::TimeSeries, series_id) {
-            StorageTier::Memory => self
-                .mem_engine
-                .ts_append_direct(series_id, resolution_ms, points),
-            StorageTier::Buffered => self.ring_core.push_ts_points(series_id, resolution_ms, points.to_vec()),
+            StorageTier::Memory => {
+                self.mem_engine
+                    .ts_append_direct(series_id, resolution_ms, points)
+            }
+            StorageTier::Buffered => {
+                self.ring_core
+                    .push_ts_points(series_id, resolution_ms, points.to_vec())
+            }
             StorageTier::Disk => append_chunk_internal(
                 &self.resources,
                 &self.lifecycle,
@@ -113,12 +117,9 @@ impl Database {
         validate_name("series_id", series_id)?;
         match self.catalog.tier_for(CollectionKind::TimeSeries, series_id) {
             StorageTier::Memory => {
-                let mut pts = self.mem_engine.ts_query_direct(
-                    series_id,
-                    resolution_ms,
-                    start_time,
-                    end_time,
-                );
+                let mut pts =
+                    self.mem_engine
+                        .ts_query_direct(series_id, resolution_ms, start_time, end_time);
                 pts.sort_by_key(|p| p.timestamp);
                 Ok(pts)
             }
@@ -173,12 +174,10 @@ impl Database {
         let mut counts: BTreeMap<i64, u64> = BTreeMap::new();
 
         if tier == StorageTier::Memory {
-            let scanned = self.mem_engine.timeseries.scan(
-                Some(series_id),
-                None,
-                usize::MAX,
-                now_ms(),
-            );
+            let scanned =
+                self.mem_engine
+                    .timeseries
+                    .scan(Some(series_id), None, usize::MAX, now_ms());
             for (_sid, key_bytes, snap) in scanned {
                 if let Ok(arr) = <[u8; 8]>::try_from(key_bytes.as_slice()) {
                     let res = i64::from_be_bytes(arr);
@@ -213,12 +212,11 @@ impl Database {
             drop(conn);
 
             if tier == StorageTier::Buffered {
-                let scanned = self.ring_core.overlay.ts.scan(
-                    Some(series_id),
-                    None,
-                    usize::MAX,
-                    now_ms(),
-                );
+                let scanned =
+                    self.ring_core
+                        .overlay
+                        .ts
+                        .scan(Some(series_id), None, usize::MAX, now_ms());
                 for (_sid, key_bytes, snap) in scanned {
                     if let Ok(arr) = <[u8; 8]>::try_from(key_bytes.as_slice()) {
                         let res = i64::from_be_bytes(arr);
@@ -244,14 +242,12 @@ impl Database {
         let target_res = if max_points == 0 {
             available[0].0
         } else {
-            let mut chosen = available.last().unwrap().0;
-            for (res, count) in &available {
-                if (*count as usize) <= max_points {
-                    chosen = *res;
-                    break;
-                }
-            }
-            chosen
+            // The finest resolution that fits `max_points`, else the coarsest one.
+            available
+                .iter()
+                .find(|(_, count)| usize::try_from(*count).is_ok_and(|count| count <= max_points))
+                .or(available.last())
+                .map_or(available[0].0, |(res, _)| *res)
         };
 
         self.ts_query_range_with_resolution(series_id, target_res, start_time, end_time)
@@ -278,12 +274,9 @@ impl Database {
         validate_name("series_id", series_id)?;
         let tier = self.catalog.tier_for(CollectionKind::TimeSeries, series_id);
         if tier == StorageTier::Memory {
-            let pts = self.mem_engine.ts_query_direct(
-                series_id,
-                resolution_ms,
-                start_time,
-                end_time,
-            );
+            let pts =
+                self.mem_engine
+                    .ts_query_direct(series_id, resolution_ms, start_time, end_time);
             return Ok(compute_ts_stats(None, &pts));
         }
 
@@ -473,7 +466,14 @@ pub(crate) fn append_chunk_in_tx(
         return Ok(());
     }
     let Some(shards) = shards else {
-        return append_chunk_in_schema(tx, None, series_id, resolution_ms, points, coalesce_open_tail);
+        return append_chunk_in_schema(
+            tx,
+            None,
+            series_id,
+            resolution_ms,
+            points,
+            coalesce_open_tail,
+        );
     };
     let mut by_schema: std::collections::BTreeMap<String, Vec<TimeSeriesPoint>> =
         std::collections::BTreeMap::new();
@@ -481,7 +481,7 @@ pub(crate) fn append_chunk_in_tx(
         by_schema
             .entry(shards.resolve_target_shard_alias(Some(point.timestamp)))
             .or_default()
-            .push(point.clone());
+            .push(*point);
     }
     for (schema, group) in &by_schema {
         append_chunk_in_schema(
@@ -595,9 +595,10 @@ fn append_chunk_in_schema(
 /// Schemas holding time-series chunks: one unqualified entry without sharding,
 /// otherwise every attached shard plus the coordinator.
 pub(crate) fn data_schemas(resources: &Resources) -> Vec<Option<String>> {
-    resources
-        .shards()
-        .map_or_else(|| vec![None], |m| m.data_schemas().into_iter().map(Some).collect())
+    resources.shards().map_or_else(
+        || vec![None],
+        |m| m.data_schemas().into_iter().map(Some).collect(),
+    )
 }
 
 pub(crate) fn append_chunk_internal(
@@ -614,7 +615,14 @@ pub(crate) fn append_chunk_internal(
 
     let mut writer = resources.lock_writer(lifecycle, None)?;
     let tx = writer.transaction()?;
-    append_chunk_in_tx(&tx, series_id, resolution_ms, points, false, resources.shards())?;
+    append_chunk_in_tx(
+        &tx,
+        series_id,
+        resolution_ms,
+        points,
+        false,
+        resources.shards(),
+    )?;
     tx.commit()?;
     Ok(())
 }
@@ -639,7 +647,9 @@ pub(crate) fn query_range_internal(
                 .iter()
                 .map(|schema| format!("{schema}._lilia_timeseries_chunks"))
                 .collect::<Vec<_>>()
-                .join(" UNION ALL SELECT series_id, resolution_ms, start_time, end_time, data FROM ")
+                .join(
+                    " UNION ALL SELECT series_id, resolution_ms, start_time, end_time, data FROM "
+                )
         ),
         None => "_lilia_timeseries_chunks".to_string(),
     };
@@ -727,6 +737,7 @@ pub(crate) fn run_retention_pass(
     Ok(total_stats)
 }
 
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 pub(crate) fn run_retention_for_series(
     resources: &Resources,
     lifecycle: &Lifecycle,
@@ -781,23 +792,22 @@ pub(crate) fn run_retention_for_series(
         };
         stmt.reset()?;
 
-        let start_time = match last_downsampled {
-            Some(t) => t,
-            None => {
-                let mut min_stmt = conn.prepare(
-                    "SELECT MIN(start_time) FROM _lilia_timeseries_chunks
-                     WHERE series_id = ?1 AND resolution_ms = ?2;",
-                )?;
-                min_stmt.bind_text_static(1, series_id)?;
-                min_stmt.bind_int64(2, source_res)?;
-                let min_t = if min_stmt.step()? && !min_stmt.column_is_null(0) {
-                    min_stmt.column_int64(0)
-                } else {
-                    now_boundary
-                };
-                min_stmt.reset()?;
-                (min_t / target_res) * target_res
-            }
+        let start_time = if let Some(t) = last_downsampled {
+            t
+        } else {
+            let mut min_stmt = conn.prepare(
+                "SELECT MIN(start_time) FROM _lilia_timeseries_chunks
+                 WHERE series_id = ?1 AND resolution_ms = ?2;",
+            )?;
+            min_stmt.bind_text_static(1, series_id)?;
+            min_stmt.bind_int64(2, source_res)?;
+            let min_t = if min_stmt.step()? && !min_stmt.column_is_null(0) {
+                min_stmt.column_int64(0)
+            } else {
+                now_boundary
+            };
+            min_stmt.reset()?;
+            (min_t / target_res) * target_res
         };
         drop(conn);
 
@@ -876,7 +886,10 @@ pub(crate) fn run_retention_for_series(
 
                 if chunks_to_prune > 0 {
                     for schema in data_schemas(resources) {
-                        let chunks = crate::sharding::qualified(schema.as_deref(), "_lilia_timeseries_chunks");
+                        let chunks = crate::sharding::qualified(
+                            schema.as_deref(),
+                            "_lilia_timeseries_chunks",
+                        );
                         let mut del_stmt = writer.prepare(&format!(
                             "DELETE FROM {chunks}
                              WHERE series_id = ?1 AND resolution_ms = ?2 AND end_time < ?3;"

@@ -177,14 +177,12 @@ pub struct sqlite3_module {
             *mut *mut c_char,
         ) -> c_int,
     >,
-    pub xBestIndex: Option<
-        unsafe extern "C" fn(*mut sqlite3_vtab, *mut sqlite3_index_info) -> c_int,
-    >,
+    pub xBestIndex:
+        Option<unsafe extern "C" fn(*mut sqlite3_vtab, *mut sqlite3_index_info) -> c_int>,
     pub xDisconnect: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
     pub xDestroy: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
-    pub xOpen: Option<
-        unsafe extern "C" fn(*mut sqlite3_vtab, *mut *mut sqlite3_vtab_cursor) -> c_int,
-    >,
+    pub xOpen:
+        Option<unsafe extern "C" fn(*mut sqlite3_vtab, *mut *mut sqlite3_vtab_cursor) -> c_int>,
     pub xClose: Option<unsafe extern "C" fn(*mut sqlite3_vtab_cursor) -> c_int>,
     pub xFilter: Option<
         unsafe extern "C" fn(
@@ -202,12 +200,7 @@ pub struct sqlite3_module {
     >,
     pub xRowid: Option<unsafe extern "C" fn(*mut sqlite3_vtab_cursor, *mut i64) -> c_int>,
     pub xUpdate: Option<
-        unsafe extern "C" fn(
-            *mut sqlite3_vtab,
-            c_int,
-            *mut *mut sqlite3_value,
-            *mut i64,
-        ) -> c_int,
+        unsafe extern "C" fn(*mut sqlite3_vtab, c_int, *mut *mut sqlite3_value, *mut i64) -> c_int,
     >,
     pub xBegin: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
     pub xSync: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
@@ -337,6 +330,8 @@ extern "C" {
     // Metadata & Execution stats
     pub fn sqlite3_changes(db: *mut sqlite3) -> c_int;
     pub fn sqlite3_changes64(db: *mut sqlite3) -> i64;
+    pub fn sqlite3_get_autocommit(db: *mut sqlite3) -> c_int;
+    pub fn sqlite3_total_changes64(db: *mut sqlite3) -> i64;
     pub fn sqlite3_last_insert_rowid(db: *mut sqlite3) -> i64;
     pub fn sqlite3_interrupt(db: *mut sqlite3);
     pub fn sqlite3_db_cacheflush(db: *mut sqlite3) -> c_int;
@@ -379,6 +374,13 @@ extern "C" {
 
     // Values for scalar functions
     pub fn sqlite3_user_data(pCtx: *mut sqlite3_context) -> *mut c_void;
+    pub fn sqlite3_get_auxdata(pCtx: *mut sqlite3_context, n: c_int) -> *mut c_void;
+    pub fn sqlite3_set_auxdata(
+        pCtx: *mut sqlite3_context,
+        n: c_int,
+        p: *mut c_void,
+        xDel: Option<unsafe extern "C" fn(*mut c_void)>,
+    );
     pub fn sqlite3_value_type(pVal: *mut sqlite3_value) -> c_int;
     pub fn sqlite3_value_blob(pVal: *mut sqlite3_value) -> *const c_void;
     pub fn sqlite3_value_bytes(pVal: *mut sqlite3_value) -> c_int;

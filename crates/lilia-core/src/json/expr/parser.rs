@@ -15,323 +15,222 @@ enum Token {
     CloseParen,
     Comma,
     // Binary & comparison operators
-    Eq,      // == or =
-    NotEq,   // != or <>
-    Lt,      // <
-    Lte,     // <=
-    Gt,      // >
-    Gte,     // >=
-    And,     // AND or &&
-    Or,      // OR or ||
-    Not,     // NOT or !
-    Plus,    // +
-    Minus,   // -
-    Star,    // *
-    Slash,   // /
-    Is,      // IS
+    Eq,    // == or =
+    NotEq, // != or <>
+    Lt,    // <
+    Lte,   // <=
+    Gt,    // >
+    Gte,   // >=
+    And,   // AND or &&
+    Or,    // OR or ||
+    Not,   // NOT or !
+    Plus,  // +
+    Minus, // -
+    Star,  // *
+    Slash, // /
+    Is,    // IS
 }
 
 fn tokenize(input: &str) -> Result<Vec<Token>> {
+    let mut lexer = Lexer {
+        chars: input.chars().collect(),
+        pos: 0,
+    };
     let mut tokens = Vec::new();
-    let chars: Vec<char> = input.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-
-    while i < len {
-        let ch = chars[i];
-
+    while let Some(ch) = lexer.peek() {
         if ch.is_whitespace() {
-            i += 1;
+            lexer.pos += 1;
             continue;
         }
+        let token = if let Some(symbol) = lexer.symbol(ch)? {
+            symbol
+        } else if ch == '\'' || ch == '"' {
+            lexer.string_literal(ch)?
+        } else if ch == '$' {
+            // JSON path starting with '$'
+            Token::Path(lexer.take_while(|c| {
+                c.is_alphanumeric() || matches!(c, '$' | '.' | '_' | '[' | ']' | '-')
+            }))
+        } else if ch.is_ascii_digit() {
+            lexer.number()?
+        } else if ch.is_alphabetic() || ch == '_' {
+            lexer.word()
+        } else {
+            return Err(LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("unexpected character '{ch}' at position {}", lexer.pos),
+                false,
+            ));
+        };
+        tokens.push(token);
+    }
+    Ok(tokens)
+}
 
-        // Parentheses and punctuation
-        match ch {
-            '(' => {
-                tokens.push(Token::OpenParen);
-                i += 1;
-                continue;
-            }
-            ')' => {
-                tokens.push(Token::CloseParen);
-                i += 1;
-                continue;
-            }
-            ',' => {
-                tokens.push(Token::Comma);
-                i += 1;
-                continue;
-            }
-            '+' => {
-                tokens.push(Token::Plus);
-                i += 1;
-                continue;
-            }
-            '-' => {
-                tokens.push(Token::Minus);
-                i += 1;
-                continue;
-            }
-            '*' => {
-                tokens.push(Token::Star);
-                i += 1;
-                continue;
-            }
-            '/' => {
-                // If it's a JSON pointer like `/user/name`, tokenize as path
-                if i + 1 < len && (chars[i + 1].is_alphanumeric() || chars[i + 1] == '_') {
-                    let mut path = String::new();
-                    while i < len
-                        && (chars[i].is_alphanumeric()
-                            || chars[i] == '_'
-                            || chars[i] == '/'
-                            || chars[i] == '.'
-                            || chars[i] == '['
-                            || chars[i] == ']')
-                    {
-                        path.push(chars[i]);
-                        i += 1;
-                    }
-                    tokens.push(Token::Path(path));
-                    continue;
-                }
-                tokens.push(Token::Slash);
-                i += 1;
-                continue;
-            }
-            '!' => {
-                if i + 1 < len && chars[i + 1] == '=' {
-                    tokens.push(Token::NotEq);
-                    i += 2;
-                } else {
-                    tokens.push(Token::Not);
-                    i += 1;
-                }
-                continue;
-            }
-            '=' => {
-                if i + 1 < len && chars[i + 1] == '=' {
-                    tokens.push(Token::Eq);
-                    i += 2;
-                } else {
-                    tokens.push(Token::Eq);
-                    i += 1;
-                }
-                continue;
-            }
-            '<' => {
-                if i + 1 < len && chars[i + 1] == '=' {
-                    tokens.push(Token::Lte);
-                    i += 2;
-                } else if i + 1 < len && chars[i + 1] == '>' {
-                    tokens.push(Token::NotEq);
-                    i += 2;
-                } else {
-                    tokens.push(Token::Lt);
-                    i += 1;
-                }
-                continue;
-            }
-            '>' => {
-                if i + 1 < len && chars[i + 1] == '=' {
-                    tokens.push(Token::Gte);
-                    i += 2;
-                } else {
-                    tokens.push(Token::Gt);
-                    i += 1;
-                }
-                continue;
-            }
-            '&' => {
-                if i + 1 < len && chars[i + 1] == '&' {
-                    tokens.push(Token::And);
-                    i += 2;
-                    continue;
-                }
-                return Err(LiliaError::new(
-                    ErrorCode::InvalidInput,
-                    format!("unexpected character '&' at pos {i}"),
-                    false,
-                ));
-            }
-            '|' => {
-                if i + 1 < len && chars[i + 1] == '|' {
-                    tokens.push(Token::Or);
-                    i += 2;
-                    continue;
-                }
-                return Err(LiliaError::new(
-                    ErrorCode::InvalidInput,
-                    format!("unexpected character '|' at pos {i}"),
-                    false,
-                ));
-            }
-            _ => {}
-        }
+struct Lexer {
+    chars: Vec<char>,
+    pos: usize,
+}
 
-        // String literals: 'single' or "double"
-        if ch == '\'' || ch == '"' {
-            let quote = ch;
-            i += 1;
-            let mut s = String::new();
-            let mut escaped = false;
-            let mut closed = false;
-            while i < len {
-                let c = chars[i];
-                if escaped {
-                    match c {
-                        'n' => s.push('\n'),
-                        'r' => s.push('\r'),
-                        't' => s.push('\t'),
-                        '\\' => s.push('\\'),
-                        _ => s.push(c),
-                    }
-                    escaped = false;
-                    i += 1;
-                } else if c == '\\' {
-                    escaped = true;
-                    i += 1;
-                } else if c == quote {
-                    closed = true;
-                    i += 1;
-                    break;
-                } else {
-                    s.push(c);
-                    i += 1;
-                }
-            }
-            if !closed {
-                return Err(LiliaError::new(
-                    ErrorCode::InvalidInput,
-                    "unterminated string literal in index expression",
-                    false,
-                ));
-            }
-            tokens.push(Token::Str(s));
-            continue;
-        }
-
-        // JSON path starting with '$'
-        if ch == '$' {
-            let mut path = String::new();
-            while i < len
-                && (chars[i].is_alphanumeric()
-                    || chars[i] == '$'
-                    || chars[i] == '.'
-                    || chars[i] == '_'
-                    || chars[i] == '['
-                    || chars[i] == ']'
-                    || chars[i] == '-')
-            {
-                path.push(chars[i]);
-                i += 1;
-            }
-            tokens.push(Token::Path(path));
-            continue;
-        }
-
-        // Numeric literal
-        if ch.is_ascii_digit() {
-            let mut num_str = String::new();
-            let mut is_float = false;
-            while i < len && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                if chars[i] == '.' {
-                    if is_float {
-                        break;
-                    }
-                    // Avoid consuming dot if it's followed by a letter (like path segment)
-                    if i + 1 < len && !chars[i + 1].is_ascii_digit() {
-                        break;
-                    }
-                    is_float = true;
-                }
-                num_str.push(chars[i]);
-                i += 1;
-            }
-            if is_float {
-                let f: f64 = num_str.parse().map_err(|e| {
-                    LiliaError::new(ErrorCode::InvalidInput, format!("invalid float: {e}"), false)
-                })?;
-                tokens.push(Token::Float(f));
-            } else {
-                let int_val: i64 = num_str.parse().map_err(|e| {
-                    LiliaError::new(ErrorCode::InvalidInput, format!("invalid integer: {e}"), false)
-                })?;
-                tokens.push(Token::Int(int_val));
-            }
-            continue;
-        }
-
-        // Word (keyword, identifier, function name, or path like `user.email`)
-        if ch.is_alphabetic() || ch == '_' {
-            let mut word = String::new();
-            while i < len
-                && (chars[i].is_alphanumeric()
-                    || chars[i] == '_'
-                    || chars[i] == '.'
-                    || chars[i] == '['
-                    || chars[i] == ']')
-            {
-                word.push(chars[i]);
-                i += 1;
-            }
-
-            // Check keywords if it does not contain '.' or '['
-            if !word.contains('.') && !word.contains('[') {
-                match word.to_ascii_uppercase().as_str() {
-                    "TRUE" => {
-                        tokens.push(Token::Bool(true));
-                        continue;
-                    }
-                    "FALSE" => {
-                        tokens.push(Token::Bool(false));
-                        continue;
-                    }
-                    "NULL" => {
-                        tokens.push(Token::Null);
-                        continue;
-                    }
-                    "AND" => {
-                        tokens.push(Token::And);
-                        continue;
-                    }
-                    "OR" => {
-                        tokens.push(Token::Or);
-                        continue;
-                    }
-                    "NOT" => {
-                        tokens.push(Token::Not);
-                        continue;
-                    }
-                    "IS" => {
-                        tokens.push(Token::Is);
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
-
-            // If it's followed immediately by '(', it is a function identifier!
-            // Even if word was `json_array_length` or `lower`
-            if i < len && chars[i] == '(' {
-                tokens.push(Token::Ident(word));
-            } else if word.contains('.') || word.contains('[') {
-                tokens.push(Token::Path(word));
-            } else {
-                // Standalone identifier treated as field path (e.g. `priority`)
-                tokens.push(Token::Path(word));
-            }
-            continue;
-        }
-
-        return Err(LiliaError::new(
-            ErrorCode::InvalidInput,
-            format!("unexpected character '{ch}' at position {i}"),
-            false,
-        ));
+impl Lexer {
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
     }
 
-    Ok(tokens)
+    fn next_is(&self, expected: char) -> bool {
+        self.chars.get(self.pos + 1) == Some(&expected)
+    }
+
+    fn take_while(&mut self, accept: impl Fn(char) -> bool) -> String {
+        let start = self.pos;
+        while self.peek().is_some_and(&accept) {
+            self.pos += 1;
+        }
+        self.chars[start..self.pos].iter().collect()
+    }
+
+    /// Consumes `width` characters and returns `token`.
+    fn emit(&mut self, width: usize, token: Token) -> Token {
+        self.pos += width;
+        token
+    }
+
+    /// Punctuation and operators starting with `ch`, `None` for any other character.
+    fn symbol(&mut self, ch: char) -> Result<Option<Token>> {
+        let token = match ch {
+            '(' => self.emit(1, Token::OpenParen),
+            ')' => self.emit(1, Token::CloseParen),
+            ',' => self.emit(1, Token::Comma),
+            '+' => self.emit(1, Token::Plus),
+            '-' => self.emit(1, Token::Minus),
+            '*' => self.emit(1, Token::Star),
+            // A JSON pointer like `/user/name` is a path, a lone `/` a division.
+            '/' if self
+                .chars
+                .get(self.pos + 1)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_') =>
+            {
+                Token::Path(self.take_while(|c| {
+                    c.is_alphanumeric() || matches!(c, '_' | '/' | '.' | '[' | ']')
+                }))
+            }
+            '/' => self.emit(1, Token::Slash),
+            '!' if self.next_is('=') => self.emit(2, Token::NotEq),
+            '!' => self.emit(1, Token::Not),
+            '=' if self.next_is('=') => self.emit(2, Token::Eq),
+            '=' => self.emit(1, Token::Eq),
+            '<' if self.next_is('=') => self.emit(2, Token::Lte),
+            '<' if self.next_is('>') => self.emit(2, Token::NotEq),
+            '<' => self.emit(1, Token::Lt),
+            '>' if self.next_is('=') => self.emit(2, Token::Gte),
+            '>' => self.emit(1, Token::Gt),
+            '&' if self.next_is('&') => self.emit(2, Token::And),
+            '|' if self.next_is('|') => self.emit(2, Token::Or),
+            '&' | '|' => {
+                return Err(LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    format!("unexpected character '{ch}' at pos {}", self.pos),
+                    false,
+                ));
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(token))
+    }
+
+    /// A 'single' or "double" quoted string, with `\n`, `\r`, `\t` and `\\` escapes.
+    fn string_literal(&mut self, quote: char) -> Result<Token> {
+        self.pos += 1;
+        let mut s = String::new();
+        let mut escaped = false;
+        while let Some(c) = self.peek() {
+            self.pos += 1;
+            if escaped {
+                s.push(match c {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    other => other,
+                });
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == quote {
+                return Ok(Token::Str(s));
+            } else {
+                s.push(c);
+            }
+        }
+        Err(LiliaError::new(
+            ErrorCode::InvalidInput,
+            "unterminated string literal in index expression",
+            false,
+        ))
+    }
+
+    fn number(&mut self) -> Result<Token> {
+        let start = self.pos;
+        let mut is_float = false;
+        while let Some(c) = self.peek() {
+            if c == '.' {
+                // A second dot, or a dot not followed by a digit (a path segment), ends the number.
+                if is_float
+                    || !self
+                        .chars
+                        .get(self.pos + 1)
+                        .is_some_and(char::is_ascii_digit)
+                {
+                    break;
+                }
+                is_float = true;
+            } else if !c.is_ascii_digit() {
+                break;
+            }
+            self.pos += 1;
+        }
+        let text: String = self.chars[start..self.pos].iter().collect();
+        if is_float {
+            text.parse().map(Token::Float).map_err(|e| {
+                LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    format!("invalid float: {e}"),
+                    false,
+                )
+            })
+        } else {
+            text.parse().map(Token::Int).map_err(|e| {
+                LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    format!("invalid integer: {e}"),
+                    false,
+                )
+            })
+        }
+    }
+
+    /// A keyword, a function name (followed by `(`) or a field path like `user.email`.
+    fn word(&mut self) -> Token {
+        let word = self.take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '[' | ']'));
+        let is_path = word.contains('.') || word.contains('[');
+        if !is_path {
+            match word.to_ascii_uppercase().as_str() {
+                "TRUE" => return Token::Bool(true),
+                "FALSE" => return Token::Bool(false),
+                "NULL" => return Token::Null,
+                "AND" => return Token::And,
+                "OR" => return Token::Or,
+                "NOT" => return Token::Not,
+                "IS" => return Token::Is,
+                _ => {}
+            }
+        }
+        if self.peek() == Some('(') {
+            Token::Ident(word)
+        } else {
+            // Standalone identifiers are field paths too (e.g. `priority`).
+            Token::Path(word)
+        }
+    }
 }
 
 struct Parser {
@@ -569,6 +468,9 @@ impl Parser {
 }
 
 /// Parse an index expression or a filter predicate string into an AST.
+///
+/// # Errors
+/// `InvalidInput` when `input` is empty or not a valid expression.
 pub fn parse_expr(input: &str) -> Result<Expr> {
     let trimmed = input.trim();
     if trimmed.is_empty() {

@@ -1,5 +1,6 @@
 pub mod aggregation;
 pub mod autotune;
+pub mod calendar;
 pub mod cas;
 mod codec;
 pub mod compression;
@@ -10,18 +11,22 @@ pub mod fle;
 pub mod geo;
 pub mod hlc;
 pub mod hnsw;
+pub mod ibf;
 pub mod integrity;
 pub mod json;
 pub mod json_patch;
 pub mod ledger;
 pub mod levenshtein;
+pub mod parity;
 pub mod quantization;
 pub mod rules;
+pub mod security;
 pub mod sharding;
 pub mod tier;
 pub mod timeseries;
 mod types;
 mod version;
+pub mod wear;
 
 pub use aggregation::{
     accumulators::{
@@ -45,8 +50,9 @@ pub use cas::{
 };
 pub use codec::{Aes256GcmCodec, IdentityCodec, ValueCodec};
 pub use compression::dict::{
-    compress_with_dict, decompress_with_dict, train_dictionary, CollectionDictionary,
-    DictionaryRegistry,
+    compress_with_dict, decompress_with_dict, extract_symbol_signature, hash_token_to_mask,
+    train_dictionary, CollectionDictionary, DictionaryRegistry, DictionarySymbolTable,
+    SymbolSignature,
 };
 pub use compression::{compress_bytes, decompress_bytes};
 pub use crdt::{
@@ -68,8 +74,21 @@ pub use hlc::{
     FieldConflict, Hlc, HlcError, HybridClock, ThreeWayMergeResult, DEFAULT_MAX_DRIFT_MS,
 };
 pub use hnsw::{HnswIndex, HnswNode};
+pub use ibf::{
+    compute_checksum, get_hash_buckets, stratum_for_key, IbfCell, IbfDiff, IbfError,
+    InvertibleBloomFilter, P2pApplyStats, P2pDocumentPayload, ReconciliationItem,
+    ReconciliationSummary, StrataEstimateResult, StrataEstimator, DEFAULT_CELLS_PER_STRATUM,
+    DEFAULT_IBF_SEED, DEFAULT_NUM_HASHES, DEFAULT_NUM_STRATA,
+};
 pub use integrity::{
     paths_overlap, CollectionOptions, KeyMapping, RefAction, Reference, ReferenceSource,
+};
+pub use json::{
+    can_jit_expr, compile_predicate, eval_check, eval_expr, eval_filter_predicate,
+    eval_filter_predicate_jit, parse_expr, parse_json_bytes_to_binary, parse_json_slice_to_binary,
+    referenced_paths, validate_check_expr, BinaryArrayRef, BinaryDoc, BinaryDocBuilder,
+    BinaryObjectRef, BinaryValueRef, CheckOutcome, CompiledPredicate, EvaluatedValue, Expr,
+    JitPredicateCache, LiteralValue, MAGIC, MAGIC_ZSTD,
 };
 pub use ledger::{
     compute_commit_hash, hash_internal_node, verify_audit_path, AuditHop, InclusionProof,
@@ -77,19 +96,21 @@ pub use ledger::{
     LedgerVerifyMode, MerkleTree, DOMAIN_COMMIT, DOMAIN_LEAF, DOMAIN_NODE,
 };
 pub use levenshtein::{LevenshteinAutomaton, LevenshteinState, TermTrie};
-pub use json::{
-    eval_check, eval_expr, eval_filter_predicate, parse_expr, referenced_paths, validate_check_expr, CheckOutcome, parse_json_bytes_to_binary,
-    parse_json_slice_to_binary, BinaryArrayRef, BinaryDoc, BinaryDocBuilder, BinaryObjectRef,
-    BinaryValueRef, EvaluatedValue, Expr, LiteralValue, MAGIC, MAGIC_ZSTD,
+pub use parity::{
+    compute_page_checksum, Gf256, PageChecksum, PageRepairOutcome, ParityConfig, ReedSolomon,
+    RepairSummary, GF,
 };
 pub use rules::{
     eval_rule_condition_json, eval_rule_condition_kv, eval_rule_condition_value,
     infer_target_collection, interpolate_string, interpolate_value, Action, Rule, RuleBuilder,
     RuleContext, SlidingWindow, TriggerMode, WindowCondition,
 };
-pub use sharding::{
-    ShardArchiveResult, ShardGranularity, ShardInfo, ShardStatus, ShardingConfig,
+pub use security::{
+    eval_exemption_condition, eval_security_condition, eval_security_condition_kv,
+    eval_security_condition_str, mask_credit_card, mask_document, mask_email, mask_string,
+    mask_value, MaskFunction, MaskingRule, NamedPolicy, Policy, PolicyAction, SecurityContext,
 };
+pub use sharding::{ShardArchiveResult, ShardGranularity, ShardInfo, ShardStatus, ShardingConfig};
 pub use tier::{
     CollectionKind, CollectionSpec, CollectionTierEntry, CommitMode, EvictionPolicy,
     MemoryTierStats, OverflowPolicy, RingBufferConfig, RingBufferStats, StorageTier,
@@ -102,12 +123,13 @@ pub use timeseries::{
 pub use types::{
     BatchOperation, CentralityType, CheckpointStats, ComponentType, CypherResult, DatabaseEvent,
     DictStats, Direction, Durability, FtsFuzzyHit, FtsFuzzyOptions, FtsHit, FtsSuggestion,
-    GraphEdge, GraphNode, HlcMutationOutcome, HlcRecord,
-    HnswConfig, HybridHit, ImpactAnalysis, IndexOptions, JsonEntry, JsonIndexInfo, JsonRevisionInfo, KvEntry,
-    LiveQueryDiff, MaterializedViewInfo, MutationResult, NodeScore, PageRankConfig, PathEdge,
-    RedoResult, ResourceProfile, SqlQueryResult, TableStorageStat, UndoEntry, UndoResult,
-    VectorElementType, VectorHit, VectorIndexInfo, VectorMetric, Version, WeightedPath,
+    GraphEdge, GraphNode, HlcMutationOutcome, HlcRecord, HnswConfig, HybridHit, ImpactAnalysis,
+    IndexOptions, JsonEntry, JsonIndexInfo, JsonRevisionInfo, KvEntry, LiveQueryDiff,
+    MaterializedViewInfo, MutationResult, NodeScore, PageRankConfig, PathEdge, RedoResult,
+    ResourceProfile, SqlQueryResult, TableStorageStat, UndoEntry, UndoResult, VectorElementType,
+    VectorHit, VectorIndexInfo, VectorMetric, Version, WeightedPath,
 };
+pub use wear::{FlashWearTelemetry, FlashWearTier, FlashWearTracker, WearLevelingPolicy};
 
 #[cfg(windows)]
 pub mod windows_security;

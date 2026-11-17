@@ -196,7 +196,17 @@ pub(crate) fn apply(
     integrity: Option<&IntegrityRegistry>,
 ) -> Result<MutationResult> {
     let Some(registry) = integrity.filter(|registry| !registry.is_empty()) else {
-        return apply_routed(tx, operation, codec, dict_registry, json_options, hlc_clock, cas, shards, None);
+        return apply_routed(
+            tx,
+            operation,
+            codec,
+            dict_registry,
+            json_options,
+            hlc_clock,
+            cas,
+            shards,
+            None,
+        );
     };
     let follow_ups = crate::integrity::guard(tx, operation, registry, shards)?;
     let result = apply_routed(
@@ -239,11 +249,29 @@ fn apply_routed(
     integrity: Option<&IntegrityRegistry>,
 ) -> Result<MutationResult> {
     let Some(shards) = shards else {
-        return apply_in_schema(tx, operation, codec, dict_registry, json_options, hlc_clock, cas, integrity);
+        return apply_in_schema(
+            tx,
+            operation,
+            codec,
+            dict_registry,
+            json_options,
+            hlc_clock,
+            cas,
+            integrity,
+        );
     };
     let target = shards.route_operation(tx, operation)?;
     tx.conn_mut().set_write_schema(target.as_deref());
-    let result = apply_in_schema(tx, operation, codec, dict_registry, json_options, hlc_clock, cas, integrity);
+    let result = apply_in_schema(
+        tx,
+        operation,
+        codec,
+        dict_registry,
+        json_options,
+        hlc_clock,
+        cas,
+        integrity,
+    );
     tx.conn_mut().set_write_schema(None);
     result
 }
@@ -284,16 +312,29 @@ fn apply_in_schema(
                 res
             };
 
-            let stored_value = if cas.options().enabled && value.len() >= cas.options().threshold_bytes {
-                let desc = cas.store(value, None)?;
-                crate::cas::register_blob_in_db(tx, &desc, now)?;
-                let (_, raw_hash) = lilia_core::cas::compute_hash(cas.options().hash_algorithm, value);
-                let ptr = lilia_core::cas::encode_kv_pointer(cas.options().hash_algorithm, &raw_hash, value.len() as u64);
-                std::borrow::Cow::Owned(ptr)
-            } else {
-                codec.encode(value)?
-            };
-            crate::cas::sync_kv_blob_ref(tx, namespace, key, old_raw.as_deref(), stored_value.as_ref(), now)?;
+            let stored_value =
+                if cas.options().enabled && value.len() >= cas.options().threshold_bytes {
+                    let desc = cas.store(value, None)?;
+                    crate::cas::register_blob_in_db(tx, &desc, now)?;
+                    let (_, raw_hash) =
+                        lilia_core::cas::compute_hash(cas.options().hash_algorithm, value);
+                    let ptr = lilia_core::cas::encode_kv_pointer(
+                        cas.options().hash_algorithm,
+                        &raw_hash,
+                        value.len() as u64,
+                    );
+                    std::borrow::Cow::Owned(ptr)
+                } else {
+                    codec.encode(value)?
+                };
+            crate::cas::sync_kv_blob_ref(
+                tx,
+                namespace,
+                key,
+                old_raw.as_deref(),
+                stored_value.as_ref(),
+                now,
+            )?;
 
             let version = match if_version {
                 None => {
@@ -364,10 +405,8 @@ fn apply_in_schema(
         } => {
             validate_name("space", space)?;
             validate_name("id", id)?;
-            let bin_doc = lilia_core::json::BinaryDoc::from_json_value(value);
-            let contracts = integrity
-                .map(|registry| registry.json_contracts(space))
-                .unwrap_or_default();
+            let bin_doc = lilia_core::json::BinaryDoc::from_json_value(value)?;
+            let contracts = integrity.map_or_default(|registry| registry.json_contracts(space));
             put_json_doc(
                 tx,
                 space,
@@ -390,9 +429,7 @@ fn apply_in_schema(
             validate_name("id", id)?;
             let mut buf = data.clone();
             let bin_doc = lilia_core::json::parse_json_bytes_to_binary(&mut buf)?;
-            let contracts = integrity
-                .map(|registry| registry.json_contracts(space))
-                .unwrap_or_default();
+            let contracts = integrity.map_or_default(|registry| registry.json_contracts(space));
             put_json_doc(
                 tx,
                 space,
@@ -706,9 +743,7 @@ fn apply_in_schema(
         } => {
             validate_name("space", space)?;
             validate_name("id", id)?;
-            let contracts = integrity
-                .map(|registry| registry.json_contracts(space))
-                .unwrap_or_default();
+            let contracts = integrity.map_or_default(|registry| registry.json_contracts(space));
             apply_json_put_hlc(
                 tx,
                 space,
@@ -727,7 +762,7 @@ fn apply_in_schema(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn put_json_doc(
     tx: &mut NativeTransaction<'_>,
     space: &str,
@@ -744,12 +779,14 @@ fn put_json_doc(
     }
     let auto_embed = contracts.auto_embed.as_deref();
     let mut prev_source_text: Option<String> = None;
+    let mut row_exists = false;
     let prev_doc: Option<serde_json::Value> = {
         let stmt = tx.slot(StmtSlot::JsonGet)?;
         stmt.reset()?;
         stmt.bind_text_static(1, space)?;
         stmt.bind_text_static(2, id)?;
         let res = if stmt.step()? {
+            row_exists = true;
             let format = stmt.column_int64(1);
             let dict_id = stmt.column_int64(2);
             crate::json::decode_stored_doc(
@@ -762,13 +799,13 @@ fn put_json_doc(
                 dict_registry,
                 None,
             )
-                .ok()
-                .map(|d| {
-                    prev_source_text = auto_embed
-                        .and_then(|config| config.source_text(&d))
-                        .map(str::to_owned);
-                    d.to_json_value()
-                })
+            .ok()
+            .map(|d| {
+                prev_source_text = auto_embed
+                    .and_then(|config| config.source_text(&d))
+                    .map(str::to_owned);
+                d.to_json_value()
+            })
         } else {
             None
         };
@@ -776,16 +813,20 @@ fn put_json_doc(
         res
     };
 
-    let (encoded, format, dict_id) = crate::json::encode_doc_for_storage(
-        bin_doc,
-        space,
-        codec,
-        dict_registry,
-        json_options,
-    )?;
+    let (encoded, format, dict_id) =
+        crate::json::encode_doc_for_storage(bin_doc, space, codec, dict_registry, json_options)?;
 
-    let version = match if_version {
-        None => {
+    // Versions of a document never restart: one that is absent from `_lilia_json` but still owns
+    // revisions (it was deleted) resumes after the last of them, tombstone included. Time travel
+    // and optimistic checks rely on a version naming a single state of the document.
+    let retired_version = if row_exists {
+        None
+    } else {
+        last_json_revision_version(tx, space, id)?
+    };
+
+    let version = match (if_version, retired_version) {
+        (None, None) => {
             let stmt = tx.slot(StmtSlot::JsonPutReturning)?;
             stmt.reset()?;
             stmt.bind_text_static(1, space)?;
@@ -807,10 +848,10 @@ fn put_json_doc(
             stmt.reset()?;
             parse_version(v)?
         }
-        Some(expected) => {
+        (expected, retired) => {
             let current = json_version(tx, space, id)?;
-            assert_version(current, Some(expected))?;
-            let next_version = current.unwrap_or(0) + 1;
+            assert_version(current, expected)?;
+            let next_version = current.or(retired).unwrap_or(0) + 1;
             let stmt = tx.slot(StmtSlot::JsonPutVersioned)?;
             stmt.reset()?;
             stmt.bind_text_static(1, space)?;
@@ -878,8 +919,9 @@ fn update_json_indexes(
     doc: &lilia_core::json::BinaryDoc,
 ) -> Result<()> {
     delete_json_indexes(tx, space, doc_id)?;
-    let mut stmt =
-        tx.prepare("SELECT index_name, json_path, filter_predicate FROM _lilia_json_indexes WHERE space = ?1;")?;
+    let mut stmt = tx.prepare(
+        "SELECT index_name, json_path, filter_predicate FROM _lilia_json_indexes WHERE space = ?1;",
+    )?;
     stmt.bind_text_static(1, space)?;
     let mut indexes: Vec<(String, String, Option<String>)> = Vec::new();
     while stmt.step()? {
@@ -960,6 +1002,25 @@ fn json_version(tx: &mut NativeTransaction<'_>, space: &str, id: &str) -> Result
     Ok(res)
 }
 
+/// Highest version in the revision history of `space/id`, whether it is a write or a tombstone.
+fn last_json_revision_version(
+    tx: &mut NativeTransaction<'_>,
+    space: &str,
+    id: &str,
+) -> Result<Option<u64>> {
+    let mut stmt = tx.prepare(
+        "SELECT version FROM _lilia_json_revisions WHERE space = ?1 AND id = ?2 \
+         ORDER BY version DESC LIMIT 1;",
+    )?;
+    stmt.bind_text_static(1, space)?;
+    stmt.bind_text_static(2, id)?;
+    if stmt.step()? {
+        Ok(Some(parse_version(stmt.column_int64(0))?))
+    } else {
+        Ok(None)
+    }
+}
+
 fn assert_version(current: Option<u64>, expected: Option<u64>) -> Result<()> {
     if expected.is_some_and(|expected| current.unwrap_or(0) != expected) {
         return Err(
@@ -1021,7 +1082,6 @@ fn save_crdt_doc(
     stmt.step()?;
     Ok(())
 }
-
 
 fn load_record_hlc(
     tx: &mut NativeTransaction<'_>,
@@ -1178,7 +1238,7 @@ fn record_conflict_in_db(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn apply_json_put_hlc(
     tx: &mut NativeTransaction<'_>,
     space: &str,
@@ -1220,8 +1280,8 @@ fn apply_json_put_hlc(
                 dict_registry,
                 None,
             )
-                .ok()
-                .map(|d| d.to_json_value())
+            .ok()
+            .map(|d| d.to_json_value())
         } else {
             None
         };
@@ -1238,9 +1298,7 @@ fn apply_json_put_hlc(
     let now = crate::storage::now_ms();
 
     let (final_val, final_hlc, final_parent, conflict_detected) = match (current_rec, prev_doc) {
-        (None, _) | (Some(_), None) => {
-            (value.clone(), incoming_hlc, incoming_parent, false)
-        }
+        (None, _) | (Some(_), None) => (value.clone(), incoming_hlc, incoming_parent, false),
         (Some(curr), Some(curr_val)) => {
             let relation = lilia_core::detect_causality(
                 &curr.hlc,
@@ -1275,7 +1333,8 @@ fn apply_json_put_hlc(
                                 &curr.hlc,
                                 &incoming_hlc,
                             );
-                            let merged_h = hlc_clock.tick_at(now.max(curr.hlc.millis).max(incoming_hlc.millis));
+                            let merged_h = hlc_clock
+                                .tick_at(now.max(curr.hlc.millis).max(incoming_hlc.millis));
                             (merge_res.merged_value, merged_h)
                         }
                         lilia_core::ConflictResolutionStrategy::Manual => {
@@ -1303,7 +1362,7 @@ fn apply_json_put_hlc(
         }
     };
 
-    let bin_doc = lilia_core::json::BinaryDoc::from_json_value(&final_val);
+    let bin_doc = lilia_core::json::BinaryDoc::from_json_value(&final_val)?;
     let mut mut_res = put_json_doc(
         tx,
         space,
@@ -1316,7 +1375,15 @@ fn apply_json_put_hlc(
         contracts,
     )?;
 
-    save_record_hlc(tx, "json", space, id, &final_hlc, final_parent.as_ref(), now)?;
+    save_record_hlc(
+        tx,
+        "json",
+        space,
+        id,
+        &final_hlc,
+        final_parent.as_ref(),
+        now,
+    )?;
 
     mut_res.hlc = Some(final_hlc);
     mut_res.conflict_detected = Some(conflict_detected);
@@ -1327,7 +1394,13 @@ fn apply_json_put_hlc(
 fn sanitize_savepoint_name(name: &str) -> String {
     let s: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if s.is_empty() {
         "unnamed".to_string()
@@ -1355,6 +1428,8 @@ pub(crate) struct SavepointFrame {
     pub(crate) name: String,
     pub(crate) sp_id: String,
     pub(crate) mem_undo: Vec<MemUndoOp>,
+    /// Length of [`Transaction::ledger_entries`] when the savepoint opened.
+    pub(crate) ledger_len: usize,
 }
 
 /// Active multi-model database transaction supporting nested declarative savepoint trees.
@@ -1365,6 +1440,9 @@ pub struct Transaction<'a> {
     savepoint_stack: Vec<SavepointFrame>,
     savepoint_seq: u64,
     committed: bool,
+    /// Ledger entries of the graph, full-text, vector and CRDT writes made so far; JSON and KV
+    /// rows are captured by the ledger triggers.
+    ledger_entries: Vec<lilia_core::ledger::LedgerDeltaEntry>,
 }
 
 impl<'a> Transaction<'a> {
@@ -1375,6 +1453,7 @@ impl<'a> Transaction<'a> {
             savepoint_stack: Vec::new(),
             savepoint_seq: 0,
             committed: false,
+            ledger_entries: Vec::new(),
         }
     }
 
@@ -1386,9 +1465,14 @@ impl<'a> Transaction<'a> {
     /// Returns the stack of active nested savepoint names from root to tip.
     #[must_use]
     pub fn active_savepoints(&self) -> Vec<&str> {
-        self.savepoint_stack.iter().map(|f| f.name.as_str()).collect()
+        self.savepoint_stack
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect()
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn commit(mut self) -> Result<()> {
         if self.committed {
             return Ok(());
@@ -1396,11 +1480,17 @@ impl<'a> Transaction<'a> {
         while let Some(frame) = self.savepoint_stack.pop() {
             self.writer.release_savepoint(&frame.sp_id)?;
         }
+        let entries = std::mem::take(&mut self.ledger_entries);
+        self.db
+            .ledger
+            .record_commit(&self.writer, entries, now_ms())?;
         self.writer.commit()?;
         self.committed = true;
         Ok(())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn rollback(mut self) -> Result<()> {
         if self.committed {
             return Ok(());
@@ -1413,6 +1503,9 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns `Conflict` or `Storage` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn spans_savepoint<F, R>(&mut self, name: &str, f: F) -> Result<R>
     where
         F: FnOnce(&mut Transaction<'_>) -> Result<R>,
@@ -1432,11 +1525,10 @@ impl<'a> Transaction<'a> {
             name: name.to_string(),
             sp_id: sp_id.clone(),
             mem_undo: Vec::new(),
+            ledger_len: self.ledger_entries.len(),
         });
 
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            f(self)
-        }));
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
 
         match res {
             Ok(Ok(val)) => {
@@ -1452,6 +1544,7 @@ impl<'a> Transaction<'a> {
                 self.writer.rollback_to_savepoint(&sp_id)?;
                 self.writer.release_savepoint(&sp_id)?;
                 if let Some(frame) = self.savepoint_stack.pop() {
+                    self.ledger_entries.truncate(frame.ledger_len);
                     self.revert_mem_undo(frame.mem_undo);
                 }
                 Err(err)
@@ -1460,6 +1553,7 @@ impl<'a> Transaction<'a> {
                 let _ = self.writer.rollback_to_savepoint(&sp_id);
                 let _ = self.writer.release_savepoint(&sp_id);
                 if let Some(frame) = self.savepoint_stack.pop() {
+                    self.ledger_entries.truncate(frame.ledger_len);
                     self.revert_mem_undo(frame.mem_undo);
                 }
                 let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
@@ -1478,6 +1572,8 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn execute_sandboxed_plugin<F, R>(&mut self, plugin_name: &str, f: F) -> Result<R>
     where
         F: FnOnce(&mut Transaction<'_>) -> Result<R>,
@@ -1490,32 +1586,36 @@ impl<'a> Transaction<'a> {
         let now = crate::storage::now_ms();
         for op in undo_ops.into_iter().rev() {
             match op {
-                MemUndoOp::KvRestore { namespace, key, previous } => {
-                    match previous {
-                        Some(snap) => {
-                            let _ = self.db.mem_engine.kv_put_direct(
-                                &namespace,
-                                &key,
-                                snap.value,
-                                None,
-                                snap.expires_at_ms,
-                            );
-                        }
-                        None => {
-                            let _ = self.db.mem_engine.kv_delete_direct(&namespace, &key, None);
-                        }
+                MemUndoOp::KvRestore {
+                    namespace,
+                    key,
+                    previous,
+                } => match previous {
+                    Some(snap) => {
+                        let _ = self.db.mem_engine.kv_put_direct(
+                            &namespace,
+                            &key,
+                            snap.value,
+                            None,
+                            snap.expires_at_ms,
+                        );
                     }
-                }
-                MemUndoOp::JsonRestore { space, id, previous } => {
+                    None => {
+                        let _ = self.db.mem_engine.kv_delete_direct(&namespace, &key, None);
+                    }
+                },
+                MemUndoOp::JsonRestore {
+                    space,
+                    id,
+                    previous,
+                } => {
                     let id_str = String::from_utf8_lossy(&id);
                     match previous {
                         Some(snap) => {
-                            let _ = self.db.mem_engine.json_put_direct(
-                                &space,
-                                &id_str,
-                                snap.value,
-                                None,
-                            );
+                            let _ = self
+                                .db
+                                .mem_engine
+                                .json_put_direct(&space, &id_str, snap.value, None);
                         }
                         None => {
                             let _ = self.db.mem_engine.json.delete(&space, &id, None, now);
@@ -1553,7 +1653,13 @@ impl<'a> Transaction<'a> {
         TxVector { tx: self }
     }
 
+    /// # Errors
+    /// Returns `Conflict` errors detected here, and propagates errors from the
+    /// operations it performs.
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn apply_op(&mut self, operation: BatchOperation) -> Result<MutationResult> {
+        use lilia_core::{CollectionKind, StorageTier};
+
         if self.committed {
             return Err(LiliaError::new(
                 ErrorCode::Conflict,
@@ -1561,17 +1667,25 @@ impl<'a> Transaction<'a> {
                 false,
             ));
         }
-        use lilia_core::{CollectionKind, StorageTier};
         let (kind, name) = crate::engine::op_collection(&operation);
         let tier = self.db.catalog.tier_for(kind, name);
 
         // Apply FLE if JsonPut
         let effective_op = match &operation {
-            BatchOperation::JsonPut { space, id, value, if_version } => {
+            BatchOperation::JsonPut {
+                space,
+                id,
+                value,
+                if_version,
+            } => {
                 let spec = self.db.catalog.spec_for(CollectionKind::Json, space);
                 if let Some(policy) = &spec.fle_policy {
                     let mut encrypted_val = value.clone();
-                    lilia_core::encrypt_json_fields(&mut encrypted_val, policy, &self.db.key_registry)?;
+                    lilia_core::encrypt_json_fields(
+                        &mut encrypted_val,
+                        policy,
+                        &self.db.key_registry,
+                    )?;
                     BatchOperation::JsonPut {
                         space: space.clone(),
                         id: id.clone(),
@@ -1591,9 +1705,11 @@ impl<'a> Transaction<'a> {
             if kind == CollectionKind::Fts {
                 let mut native_tx = NativeTransaction::wrap_active(&mut self.writer);
                 let mut res = match &effective_op {
-                    BatchOperation::FtsIndex { collection, doc_id, content } => {
-                        apply_fts_index(&mut native_tx, collection, doc_id, content, true)?
-                    }
+                    BatchOperation::FtsIndex {
+                        collection,
+                        doc_id,
+                        content,
+                    } => apply_fts_index(&mut native_tx, collection, doc_id, content, true)?,
                     BatchOperation::FtsDelete { collection, doc_id } => {
                         apply_fts_delete(&mut native_tx, collection, doc_id, true)?
                     }
@@ -1629,7 +1745,7 @@ impl<'a> Transaction<'a> {
 
             let op_refs = [&effective_op];
             let mut guards = self.db.mem_engine.lock_kv_json_shards(&op_refs);
-            self.db.mem_engine.preflight_with_guards(&op_refs, &guards, now)?;
+            crate::mem_engine::MemEngine::preflight_with_guards(&op_refs, &guards, now)?;
             let res = self.db.mem_engine.apply_op_with_guards(
                 &effective_op,
                 &mut guards,
@@ -1657,40 +1773,74 @@ impl<'a> Transaction<'a> {
             res.tier = StorageTier::Buffered;
         }
         match &effective_op {
-            BatchOperation::VectorSet { collection, id, dim, element_type, vector } => {
-                self.db.sync_hnsw_insert(collection, id, *dim, *element_type, vector, &mut native_tx)?;
+            BatchOperation::VectorSet {
+                collection,
+                id,
+                dim,
+                element_type,
+                vector,
+            } => {
+                self.db.sync_hnsw_insert(
+                    collection,
+                    id,
+                    *dim,
+                    *element_type,
+                    vector,
+                    &mut native_tx,
+                )?;
             }
             BatchOperation::VectorDelete { collection, id } => {
                 self.db.sync_hnsw_delete(collection, id, &mut native_tx)?;
             }
             _ => {}
         }
+        self.db
+            .apply_rule_cascade(&mut native_tx, std::slice::from_ref(&effective_op), now)?;
+        self.ledger_entries.extend(crate::ledger::operation_entries(
+            std::slice::from_ref(&effective_op),
+            std::slice::from_ref(&res),
+        ));
         Ok(res)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn exec(&mut self, sql: &str) -> Result<()> {
         self.writer.exec(sql)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn query_int(&mut self, sql: &str) -> Result<i64> {
         self.writer.query_int(sql)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn json_get(&mut self, space: &str, id: &str) -> Result<Option<lilia_core::JsonEntry>> {
         validate_name("space", space)?;
         validate_name("id", id)?;
-        let tier = self.db.catalog.tier_for(lilia_core::CollectionKind::Json, space);
+        let tier = self
+            .db
+            .catalog
+            .tier_for(lilia_core::CollectionKind::Json, space);
         if tier == lilia_core::StorageTier::Memory {
             let now = crate::storage::now_ms();
-            return Ok(self.db.mem_engine.json.get(space, id.as_bytes(), now, true).map(|snap| {
-                let mut val = snap.value.clone();
-                let _ = lilia_core::decrypt_json_fields(
-                    &mut val,
-                    &self.db.key_registry,
-                    lilia_core::DecryptionMode::Tolerant,
-                );
-                crate::json::json_snapshot_to_entry(space, id.to_owned(), &val, snap.version)
-            }));
+            return self
+                .db
+                .mem_engine
+                .json
+                .get(space, id.as_bytes(), now, true)
+                .map(|snap| {
+                    let mut val = snap.value.clone();
+                    let _ = lilia_core::decrypt_json_fields(
+                        &mut val,
+                        &self.db.key_registry,
+                        lilia_core::DecryptionMode::Tolerant,
+                    );
+                    crate::json::json_snapshot_to_entry(space, id.to_owned(), &val, snap.version)
+                })
+                .transpose();
         }
 
         let stmt = self.writer.slot(StmtSlot::JsonGet)?;
@@ -1717,9 +1867,14 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn kv_get(&mut self, namespace: &str, key: &[u8]) -> Result<Option<lilia_core::KvEntry>> {
         validate_name("namespace", namespace)?;
-        let tier = self.db.catalog.tier_for(lilia_core::CollectionKind::Kv, namespace);
+        let tier = self
+            .db
+            .catalog
+            .tier_for(lilia_core::CollectionKind::Kv, namespace);
         let now = now_ms();
         if tier == lilia_core::StorageTier::Memory {
             let Some(snap) = self.db.mem_engine.kv.get(namespace, key, now, true) else {
@@ -1761,6 +1916,8 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn graph_has_edge(
         &mut self,
         graph: &str,
@@ -1772,7 +1929,10 @@ impl<'a> Transaction<'a> {
         validate_name("source", source)?;
         validate_name("target", target)?;
         validate_name("kind", kind)?;
-        let tier = self.db.catalog.tier_for(lilia_core::CollectionKind::Graph, graph);
+        let tier = self
+            .db
+            .catalog
+            .tier_for(lilia_core::CollectionKind::Graph, graph);
         if tier == lilia_core::StorageTier::Memory {
             return Ok(self
                 .db
@@ -1781,7 +1941,9 @@ impl<'a> Transaction<'a> {
                 .scan(Some(graph), None, usize::MAX, now_ms())
                 .into_iter()
                 .any(|(_, _, snap)| {
-                    snap.value.source == source && snap.value.target == target && snap.value.kind == kind
+                    snap.value.source == source
+                        && snap.value.target == target
+                        && snap.value.kind == kind
                 }));
         }
         let sql = "SELECT 1 FROM _lilia_graph_edges WHERE graph = ?1 AND source = ?2 AND target = ?3 AND kind = ?4 LIMIT 1;";
@@ -1811,16 +1973,18 @@ pub struct TxJson<'t, 'a> {
     tx: &'t mut Transaction<'a>,
 }
 
-impl<'t, 'a> TxJson<'t, 'a> {
+impl TxJson<'_, '_> {
+    /// # Errors
+    /// Returns `InvalidInput` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn put<T: serde::Serialize>(
         &mut self,
         space: &str,
         id: &str,
         value: &T,
     ) -> Result<MutationResult> {
-        let val = serde_json::to_value(value).map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false)
-        })?;
+        let val = serde_json::to_value(value)
+            .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
         self.tx.apply_op(BatchOperation::JsonPut {
             space: space.to_owned(),
             id: id.to_owned(),
@@ -1829,6 +1993,8 @@ impl<'t, 'a> TxJson<'t, 'a> {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn put_value(
         &mut self,
         space: &str,
@@ -1843,6 +2009,8 @@ impl<'t, 'a> TxJson<'t, 'a> {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn delete(&mut self, space: &str, id: &str) -> Result<MutationResult> {
         self.tx.apply_op(BatchOperation::JsonDelete {
             space: space.to_owned(),
@@ -1851,6 +2019,8 @@ impl<'t, 'a> TxJson<'t, 'a> {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn get(&mut self, space: &str, id: &str) -> Result<Option<lilia_core::JsonEntry>> {
         self.tx.json_get(space, id)
     }
@@ -1863,11 +2033,15 @@ pub struct TxGraph<'t, 'a> {
     graph_name: String,
 }
 
-impl<'t, 'a> TxGraph<'t, 'a> {
+impl TxGraph<'_, '_> {
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn add_edge(&mut self, source: &str, target: &str, kind: &str) -> Result<()> {
         self.add_edge_weighted(source, target, kind, 1.0)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn add_edge_weighted(
         &mut self,
         source: &str,
@@ -1885,6 +2059,8 @@ impl<'t, 'a> TxGraph<'t, 'a> {
         Ok(())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn remove_edge(&mut self, source: &str, target: &str, kind: &str) -> Result<bool> {
         let res = self.tx.apply_op(BatchOperation::GraphRemoveEdge {
             graph: self.graph_name.clone(),
@@ -1895,12 +2071,9 @@ impl<'t, 'a> TxGraph<'t, 'a> {
         Ok(res.deleted)
     }
 
-    pub fn set_node(
-        &mut self,
-        id: &str,
-        kind: &str,
-        metadata: &serde_json::Value,
-    ) -> Result<()> {
+    /// # Errors
+    /// Propagates errors from the operations it performs.
+    pub fn set_node(&mut self, id: &str, kind: &str, metadata: &serde_json::Value) -> Result<()> {
         self.tx.apply_op(BatchOperation::GraphSetNode {
             graph: self.graph_name.clone(),
             id: id.to_owned(),
@@ -1912,6 +2085,8 @@ impl<'t, 'a> TxGraph<'t, 'a> {
         Ok(())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn delete_node(&mut self, id: &str) -> Result<bool> {
         let res = self.tx.apply_op(BatchOperation::GraphDeleteNode {
             graph: self.graph_name.clone(),
@@ -1920,8 +2095,11 @@ impl<'t, 'a> TxGraph<'t, 'a> {
         Ok(res.deleted)
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn has_edge(&mut self, source: &str, target: &str, kind: &str) -> Result<bool> {
-        self.tx.graph_has_edge(&self.graph_name, source, target, kind)
+        self.tx
+            .graph_has_edge(&self.graph_name, source, target, kind)
     }
 }
 
@@ -1931,7 +2109,9 @@ pub struct TxKv<'t, 'a> {
     tx: &'t mut Transaction<'a>,
 }
 
-impl<'t, 'a> TxKv<'t, 'a> {
+impl TxKv<'_, '_> {
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn set(&mut self, namespace: &str, key: &[u8], value: &[u8]) -> Result<MutationResult> {
         self.tx.apply_op(BatchOperation::KvSet {
             namespace: namespace.to_owned(),
@@ -1942,6 +2122,8 @@ impl<'t, 'a> TxKv<'t, 'a> {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn set_with_ttl(
         &mut self,
         namespace: &str,
@@ -1958,6 +2140,8 @@ impl<'t, 'a> TxKv<'t, 'a> {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn delete(&mut self, namespace: &str, key: &[u8]) -> Result<MutationResult> {
         self.tx.apply_op(BatchOperation::KvDelete {
             namespace: namespace.to_owned(),
@@ -1966,6 +2150,8 @@ impl<'t, 'a> TxKv<'t, 'a> {
         })
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn get(&mut self, namespace: &str, key: &[u8]) -> Result<Option<lilia_core::KvEntry>> {
         self.tx.kv_get(namespace, key)
     }
@@ -1977,7 +2163,9 @@ pub struct TxFts<'t, 'a> {
     tx: &'t mut Transaction<'a>,
 }
 
-impl<'t, 'a> TxFts<'t, 'a> {
+impl TxFts<'_, '_> {
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn index(&mut self, collection: &str, doc_id: &str, content: &str) -> Result<()> {
         self.tx.apply_op(BatchOperation::FtsIndex {
             collection: collection.to_owned(),
@@ -1987,6 +2175,8 @@ impl<'t, 'a> TxFts<'t, 'a> {
         Ok(())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn delete(&mut self, collection: &str, doc_id: &str) -> Result<bool> {
         let res = self.tx.apply_op(BatchOperation::FtsDelete {
             collection: collection.to_owned(),
@@ -2002,7 +2192,9 @@ pub struct TxVector<'t, 'a> {
     tx: &'t mut Transaction<'a>,
 }
 
-impl<'t, 'a> TxVector<'t, 'a> {
+impl TxVector<'_, '_> {
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn set(
         &mut self,
         collection: &str,
@@ -2021,6 +2213,8 @@ impl<'t, 'a> TxVector<'t, 'a> {
         Ok(())
     }
 
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn delete(&mut self, collection: &str, id: &str) -> Result<bool> {
         let res = self.tx.apply_op(BatchOperation::VectorDelete {
             collection: collection.to_owned(),

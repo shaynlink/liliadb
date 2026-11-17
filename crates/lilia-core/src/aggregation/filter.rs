@@ -76,6 +76,33 @@ impl FilterExpr {
     pub fn as_value(&self) -> &Value {
         &self.predicate
     }
+
+    /// Extract query candidate tokens from this filter expression for compressed-domain filtering.
+    #[must_use]
+    pub fn extract_tokens(&self) -> Vec<String> {
+        let mut tokens = Vec::new();
+        if let Value::Object(map) = &self.predicate {
+            for (k, v) in map {
+                tokens.push(k.clone());
+                match v {
+                    Value::String(s) => tokens.push(s.clone()),
+                    Value::Number(n) => tokens.push(n.to_string()),
+                    Value::Bool(b) => tokens.push(if *b { "true".into() } else { "false".into() }),
+                    Value::Object(inner) => {
+                        for (op, target) in inner {
+                            if op == "$eq" {
+                                if let Value::String(s) = target {
+                                    tokens.push(s.clone());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        tokens
+    }
 }
 
 impl From<FilterExpr> for Value {
@@ -144,13 +171,11 @@ fn evaluate_operator(actual: Option<&Value>, op: &str, target: &Value) -> bool {
             Some(val) => val != target,
             None => !target.is_null(),
         },
-        "$gt" => actual
-            .and_then(|val| compare_values(val, target)) == Some(Ordering::Greater),
+        "$gt" => actual.and_then(|val| compare_values(val, target)) == Some(Ordering::Greater),
         "$gte" => actual
             .and_then(|val| compare_values(val, target))
             .is_some_and(|ord| ord != Ordering::Less),
-        "$lt" => actual
-            .and_then(|val| compare_values(val, target)) == Some(Ordering::Less),
+        "$lt" => actual.and_then(|val| compare_values(val, target)) == Some(Ordering::Less),
         "$lte" => actual
             .and_then(|val| compare_values(val, target))
             .is_some_and(|ord| ord != Ordering::Greater),

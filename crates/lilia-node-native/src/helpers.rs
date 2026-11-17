@@ -15,9 +15,7 @@ use napi::bindgen_prelude::{Buffer, Error, Result, Status};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::{
-    NativeFtsHit, NativeHybridHit, NativeKvEntry, NativeOpenOptions, NativeVectorHit,
-};
+use crate::{NativeFtsHit, NativeHybridHit, NativeKvEntry, NativeOpenOptions, NativeVectorHit};
 
 pub fn napi_error(error: lilia_core::LiliaError) -> Error {
     Error::new(
@@ -66,9 +64,11 @@ pub fn parse_params(params_json: Option<&str>) -> Result<Vec<serde_json::Value>>
 }
 
 pub fn parse_u64(raw: &str, label: &str) -> Result<u64> {
-    raw.trim()
-        .parse::<u64>()
-        .map_err(|_| invalid_arg(format!("invalid {label} '{raw}': expected unsigned integer")))
+    raw.trim().parse::<u64>().map_err(|_| {
+        invalid_arg(format!(
+            "invalid {label} '{raw}': expected unsigned integer"
+        ))
+    })
 }
 
 pub fn parse_hlc(raw: &str) -> Result<Hlc> {
@@ -148,10 +148,10 @@ pub fn parse_aggregation(aggregation: Option<&str>) -> Result<DownsampleAggregat
 pub fn current_epoch_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 pub fn build_database_options(options: NativeOpenOptions) -> Result<DatabaseOptions> {
     let mut settings = DatabaseOptions::durable(options.path);
     if let Some(profile) = options.profile.as_deref() {
@@ -220,8 +220,8 @@ pub fn build_database_options(options: NativeOpenOptions) -> Result<DatabaseOpti
             settings.timeseries_options.auto_retention = v;
         }
         if let Some(v) = ts_opts.retention_interval_ms {
-            settings.timeseries_options.retention_interval_ms = u64::try_from(v)
-                .map_err(|_| invalid_arg("retention_interval_ms must be >= 0"))?;
+            settings.timeseries_options.retention_interval_ms =
+                u64::try_from(v).map_err(|_| invalid_arg("retention_interval_ms must be >= 0"))?;
         }
     }
     if let Some(node_id) = options.node_id {
@@ -256,11 +256,12 @@ pub fn build_database_options(options: NativeOpenOptions) -> Result<DatabaseOpti
     if let Some(sharding) = options.sharding {
         let mut config = lilia_core::sharding::ShardingConfig::new();
         if let Some(name) = sharding.granularity.as_deref() {
-            let granularity = lilia_core::sharding::ShardGranularity::parse(name).ok_or_else(|| {
-                napi::Error::from_reason(format!(
-                    "invalid sharding granularity '{name}': expected monthly, daily or yearly"
-                ))
-            })?;
+            let granularity =
+                lilia_core::sharding::ShardGranularity::parse(name).ok_or_else(|| {
+                    napi::Error::from_reason(format!(
+                        "invalid sharding granularity '{name}': expected monthly, daily or yearly"
+                    ))
+                })?;
             config = config.with_granularity(granularity);
         }
         if let Some(auto_rollover) = sharding.auto_rollover {
@@ -571,7 +572,10 @@ pub fn geo_record_gps_points(db: &Database, track_id: &str, points_json: &str) -
 
 pub fn crdt_counter_merge(db: &Database, space: &str, id: &str, remote_json: &str) -> Result<i64> {
     let remote: PNCounter = from_json_str(remote_json)?;
-    db.crdt().counter(space, id).merge(&remote).map_err(napi_error)
+    db.crdt()
+        .counter(space, id)
+        .merge(&remote)
+        .map_err(napi_error)
 }
 
 pub fn crdt_set_merge(db: &Database, space: &str, id: &str, remote_json: &str) -> Result<()> {
@@ -581,6 +585,10 @@ pub fn crdt_set_merge(db: &Database, space: &str, id: &str, remote_json: &str) -
 
 pub fn crdt_json_merge(db: &Database, space: &str, id: &str, remote_json: &str) -> Result<String> {
     let remote: LwwJsonDocument = from_json_str(remote_json)?;
-    let version = db.crdt().doc(space, id).merge(&remote).map_err(napi_error)?;
+    let version = db
+        .crdt()
+        .doc(space, id)
+        .merge(&remote)
+        .map_err(napi_error)?;
     Ok(version.to_string())
 }

@@ -3,6 +3,7 @@ use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
 #[test]
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn test_json_time_travel_and_delta_encoding() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db = Database::open(DatabaseOptions::durable(
@@ -127,8 +128,7 @@ fn test_json_time_travel_and_delta_encoding() {
         .diff("docs", "contract_42", Version(1), Version(3))
         .unwrap();
     assert!(diff.is_array());
-    let diff_ops = diff.as_array().unwrap();
-    assert!(!diff_ops.is_empty());
+    assert_ne!(diff, json!([]));
 
     // 8. Delete document (creates revision 4 tombstone)
     db.batch(&[BatchOperation::JsonDelete {

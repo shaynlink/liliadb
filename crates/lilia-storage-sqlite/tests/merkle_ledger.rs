@@ -174,8 +174,8 @@ fn test_tamper_detection_sqlite_cli_manipulation() {
     drop(db);
 
     // Simulate external malicious modification directly via SQLite connection (bypassing LiliaDB)
-    let raw_conn = NativeConnection::open_with_config(&path, "FULL", 0, 5000, -8192)
-        .expect("open raw sqlite");
+    let raw_conn =
+        NativeConnection::open_with_config(&path, "FULL", 0, 5000, -8192).expect("open raw sqlite");
     raw_conn
         .exec("UPDATE _lilia_json SET value = '{\"balance\": 999999}' WHERE id = 'acc_42';")
         .expect("update json");
@@ -213,8 +213,8 @@ fn test_tamper_detection_ledger_chain_rewrite() {
     drop(db);
 
     // Alter the parent_hash of commit 2 in _lilia_ledger
-    let raw_conn = NativeConnection::open_with_config(&path, "FULL", 0, 5000, -8192)
-        .expect("open raw sqlite");
+    let raw_conn =
+        NativeConnection::open_with_config(&path, "FULL", 0, 5000, -8192).expect("open raw sqlite");
     raw_conn
         .exec("UPDATE _lilia_ledger SET parent_hash = X'0000000000000000000000000000000000000000000000000000000000000000' WHERE commit_seq = 2;")
         .expect("tamper ledger");
@@ -270,5 +270,160 @@ fn test_tamper_detection_hex_editing() {
         err.code == ErrorCode::TamperDetected || err.code == ErrorCode::Storage,
         "unexpected error code: {:?}",
         err.code
+    );
+}
+
+fn reopen_verified(path: &PathBuf) -> Database {
+    let db = Database::open(DatabaseOptions::durable(path).with_undo_log_capacity(10))
+        .expect("strict reopen must accept every write made through LiliaDB");
+    let report = db.verify_ledger().expect("verify ledger");
+    assert!(
+        report.is_valid,
+        "ledger verification failed: {:?}",
+        report.error
+    );
+    db
+}
+
+#[test]
+fn test_every_write_path_is_recorded_for_strict_reopen() {
+    let (_dir, path) = temp_db_path();
+    {
+        let db = Database::open(DatabaseOptions::durable(&path).with_undo_log_capacity(10))
+            .expect("open db");
+        db.rules()
+            .register(
+                "flag_large_orders",
+                lilia_core::rules::Rule::when("orders.total > 500")
+                    .then_insert("flagged_orders", json!({ "order": "$id" }))
+                    .build(),
+            )
+            .expect("register rule");
+
+        // Interactive transaction, including a document written by a rule it triggers.
+        db.with_transaction(|tx| {
+            tx.json().put("orders", "o1", &json!({ "total": 900 }))?;
+            tx.kv().set("settings", b"theme", b"dark")?;
+            Ok(())
+        })
+        .expect("transaction");
+
+        // Raw SQL on the managed tables.
+        db.sql_query(
+            "UPDATE _lilia_kv SET value = X'6c69676874', version = version + 1 \
+             WHERE namespace = 'settings' AND key = X'7468656d65';",
+            &[],
+        )
+        .expect("raw sql update");
+
+        // Undo restores an older revision, redo the newer one, undo again.
+        db.batch(&[BatchOperation::JsonPut {
+            space: "orders".into(),
+            id: "o2".into(),
+            value: json!({ "total": 10 }),
+            if_version: None,
+        }])
+        .expect("first revision");
+        db.batch(&[BatchOperation::JsonPut {
+            space: "orders".into(),
+            id: "o2".into(),
+            value: json!({ "total": 20 }),
+            if_version: None,
+        }])
+        .expect("second revision");
+        db.undo().expect("undo").expect("an undo entry");
+        db.redo().expect("redo").expect("a redo entry");
+        db.undo().expect("undo again").expect("an undo entry");
+    }
+
+    let db = reopen_verified(&path);
+    assert_eq!(
+        db.json_get("orders", "o1").unwrap().unwrap().value()["total"],
+        900
+    );
+    assert_eq!(
+        db.kv_get("settings", b"theme").unwrap().unwrap().value,
+        b"light"
+    );
+    assert_eq!(
+        db.json_get("orders", "o2").unwrap().unwrap().value()["total"],
+        10
+    );
+    let flagged = db
+        .sql_query(
+            "SELECT COUNT(*) FROM _lilia_json WHERE space = 'flagged_orders';",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(flagged.rows[0][0], json!(1));
+}
+
+#[test]
+fn test_ledger_adopts_existing_data_with_a_genesis_commit() {
+    let (_dir, path) = temp_db_path();
+    {
+        let db = Database::open(DatabaseOptions::durable(&path).with_ledger(false)).expect("open");
+        db.batch(&[
+            BatchOperation::JsonPut {
+                space: "legacy".into(),
+                id: "doc".into(),
+                value: json!({ "kept": true }),
+                if_version: None,
+            },
+            BatchOperation::KvSet {
+                namespace: "legacy".into(),
+                key: b"key".to_vec(),
+                value: b"value".to_vec(),
+                if_version: None,
+                expires_at_ms: None,
+            },
+        ])
+        .expect("write without ledger");
+        assert!(db.ledger_latest_commit().unwrap().is_none());
+    }
+
+    {
+        let db = reopen_verified(&path);
+        let genesis = db.ledger_latest_commit().unwrap().expect("genesis commit");
+        assert_eq!(genesis.commit_seq, 1);
+        assert_eq!(genesis.operation_count, 2);
+        db.ledger_prove_doc("legacy", "doc", None)
+            .expect("legacy document is provable");
+    }
+
+    // The adopted rows are now protected like any other.
+    let raw_conn =
+        NativeConnection::open_with_config(&path, "FULL", 0, 5000, -8192).expect("open raw sqlite");
+    raw_conn
+        .exec("UPDATE _lilia_kv SET value = X'00' WHERE namespace = 'legacy';")
+        .expect("tamper kv");
+    drop(raw_conn);
+    let err = Database::open(DatabaseOptions::durable(&path)).expect_err("tamper detected");
+    assert_eq!(err.code, ErrorCode::TamperDetected);
+}
+
+#[test]
+fn test_raw_sql_cannot_rewrite_the_ledger() {
+    let (_dir, path) = temp_db_path();
+    let db = Database::open(DatabaseOptions::durable(&path)).expect("open db");
+    db.batch(&[BatchOperation::JsonPut {
+        space: "data".into(),
+        id: "doc".into(),
+        value: json!({ "v": 1 }),
+        if_version: None,
+    }])
+    .expect("batch");
+
+    for sql in [
+        "DELETE FROM _lilia_ledger;",
+        "UPDATE _lilia_ledger_leaves SET leaf_hash = X'00';",
+    ] {
+        assert!(db.sql_query(sql, &[]).is_err(), "{sql} must be refused");
+    }
+    assert_eq!(
+        db.sql_query("SELECT COUNT(*) FROM _lilia_ledger;", &[])
+            .unwrap()
+            .rows[0][0],
+        json!(1)
     );
 }

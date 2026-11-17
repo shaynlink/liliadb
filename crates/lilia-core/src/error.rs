@@ -67,7 +67,10 @@ impl LiliaError {
                 map
             }
         };
-        object.insert("constraint".to_owned(), Value::String(constraint.to_owned()));
+        object.insert(
+            "constraint".to_owned(),
+            Value::String(constraint.to_owned()),
+        );
         object.insert(
             "kind".to_owned(),
             serde_json::to_value(kind).unwrap_or(Value::Null),

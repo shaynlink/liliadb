@@ -2,7 +2,7 @@ use lilia_core::aggregation::{Aggregate, FilterExpr, Sort};
 use lilia_core::Result;
 use serde_json::Value;
 
-use super::cursor::{open_document_stream, StreamDocument};
+use super::cursor::{open_document_stream_filtered, StreamDocument};
 use super::stages::{apply_full_sort, apply_top_k, execute_group_by, FilterStream, UnwindStream};
 use crate::Database;
 
@@ -11,7 +11,7 @@ pub struct AggregationPipeline<'a> {
     db: &'a Database,
     space: String,
     filter_expr: Option<FilterExpr>,
-    filter_fn: Option<Box<dyn Fn(&StreamDocument) -> bool + Send + Sync>>,
+    filter_fn: Option<super::stages::DocumentPredicate>,
     unwind_field: Option<String>,
     group_by_field: Option<String>,
     aggregates: Vec<Aggregate>,
@@ -114,13 +114,35 @@ impl<'a> AggregationPipeline<'a> {
     }
 
     /// Execute the pipeline eagerly and collect all resulting documents into a vector.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn execute(self) -> Result<Vec<Value>> {
         self.stream()?.collect()
     }
 
     /// Stream the pipeline results lazily as a pull-based iterator.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn stream(self) -> Result<Box<dyn Iterator<Item = Result<Value>> + 'a>> {
-        let raw_stream = open_document_stream(self.db, &self.space)?;
+        let symbol_filter = self.db.dict_registry().get(&self.space).and_then(|dict| {
+            self.filter_expr.as_ref().and_then(|fe| {
+                let tokens = fe.extract_tokens();
+                if tokens.is_empty() {
+                    None
+                } else {
+                    let tok_slices: Vec<&str> = tokens.iter().map(String::as_str).collect();
+                    let sig = dict.symbols.query_signature(&tok_slices);
+                    if sig == 0 {
+                        None
+                    } else {
+                        Some(sig)
+                    }
+                }
+            })
+        });
+        let raw_stream = open_document_stream_filtered(self.db, &self.space, symbol_filter)?;
         let filtered = FilterStream::new(raw_stream, self.filter_expr, self.filter_fn);
 
         let doc_stream: Box<dyn Iterator<Item = Result<StreamDocument>> + 'a> =
@@ -132,11 +154,8 @@ impl<'a> AggregationPipeline<'a> {
 
         // If aggregations are requested:
         if !self.aggregates.is_empty() || self.group_by_field.is_some() {
-            let mut grouped = execute_group_by(
-                doc_stream,
-                self.group_by_field.as_deref(),
-                &self.aggregates,
-            )?;
+            let mut grouped =
+                execute_group_by(doc_stream, self.group_by_field.as_deref(), &self.aggregates)?;
 
             // Sort and Top-K optimization
             if let Some(ref sort) = self.sort {

@@ -8,10 +8,7 @@ pub enum Expr {
     /// A literal constant value (string, integer, float, bool, or null).
     Literal(LiteralValue),
     /// A function invocation with an identifier name and argument expressions.
-    FunctionCall {
-        name: String,
-        args: Vec<Expr>,
-    },
+    FunctionCall { name: String, args: Vec<Expr> },
     /// A binary operation (e.g. comparisons like `==`, `!=`, `<`, `>` or logical operators `AND`, `OR`).
     Binary {
         op: BinaryOp,
@@ -19,10 +16,7 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// A unary operation (e.g. `NOT`, unary negation `-`).
-    Unary {
-        op: UnaryOp,
-        expr: Box<Expr>,
-    },
+    Unary { op: UnaryOp, expr: Box<Expr> },
     /// Special predicate checking if an expression evaluates to NULL or is missing.
     IsNull(Box<Expr>),
     /// Special predicate checking if an expression evaluates to a non-NULL value.

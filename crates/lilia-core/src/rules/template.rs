@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::calendar::CivilDate;
+
 /// Evaluation context available for variable substitution in rule actions.
 #[derive(Debug, Clone, Default)]
 pub struct RuleContext {
@@ -64,8 +66,14 @@ impl RuleContext {
             "$id" => Some(Value::String(self.id.clone())),
             "$collection" | "$space" => Some(Value::String(self.collection.clone())),
             "$window.count" => self.window_count.map(|c| Value::Number(c.into())),
-            "$window.sum" => self.window_sum.and_then(serde_json::Number::from_f64).map(Value::Number),
-            "$window.avg" => self.window_avg.and_then(serde_json::Number::from_f64).map(Value::Number),
+            "$window.sum" => self
+                .window_sum
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number),
+            "$window.avg" => self
+                .window_avg
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number),
             _ => {
                 if let Some(path) = var.strip_prefix("$event.") {
                     if let Some(ref payload) = self.event_payload {
@@ -111,9 +119,11 @@ pub fn interpolate_value(val: &Value, ctx: &RuleContext) -> Value {
                 Value::String(s.clone())
             }
         }
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|item| interpolate_value(item, ctx)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|item| interpolate_value(item, ctx))
+                .collect(),
+        ),
         Value::Object(map) => {
             let mut new_map = serde_json::Map::with_capacity(map.len());
             for (k, v) in map {
@@ -171,35 +181,18 @@ fn extract_path(val: &Value, path: &str) -> Option<Value> {
     Some(curr.clone())
 }
 
+/// ISO 8601 UTC rendering of `timestamp_ms`, to the second.
 fn format_iso_timestamp(timestamp_ms: i64) -> String {
     let secs = timestamp_ms.div_euclid(1000);
-    let nsecs = u32::try_from(timestamp_ms.rem_euclid(1000) * 1_000_000).unwrap_or(0);
-    // Simple fast formatting for ISO 8601 UTC
-    let days_since_epoch = secs.div_euclid(86400);
-    let secs_of_day = secs.rem_euclid(86400);
-
-    let (year, month, day) = civil_from_days(days_since_epoch);
-    let hour = secs_of_day / 3600;
-    let min = (secs_of_day % 3600) / 60;
-    let sec = secs_of_day % 60;
-
-    let _ = nsecs; // Keep standard second precision or millisecond if needed
+    let date = CivilDate::from_days(secs.div_euclid(86_400));
+    let secs_of_day = secs.rem_euclid(86_400);
+    let (year, month, day) = (date.year, date.month, date.day);
+    let (hour, min, sec) = (
+        secs_of_day / 3600,
+        secs_of_day % 3600 / 60,
+        secs_of_day % 60,
+    );
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
-}
-
-// Convert days since UNIX epoch (1970-01-01) to civil year, month, day
-fn civil_from_days(days: i64) -> (i32, u32, u32) {
-    let z = days + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
 }
 
 #[cfg(test)]
@@ -222,6 +215,6 @@ mod tests {
         let interpolated = interpolate_value(&doc, &ctx);
         assert_eq!(interpolated["target"], "p1");
         assert_eq!(interpolated["hr"], 150);
-        assert!(interpolated["now"].as_str().unwrap().contains("T"));
+        assert_eq!(interpolated["now"], "2023-11-14T22:13:20Z");
     }
 }

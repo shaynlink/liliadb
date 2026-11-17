@@ -5,6 +5,7 @@ use lilia_core::{Direction, NodeScore};
 
 use crate::snapshot::GraphView;
 
+#[must_use]
 pub fn pagerank(view: &GraphView, config: &PageRankConfig) -> Vec<NodeScore> {
     let n = view.node_count();
     if n == 0 {
@@ -18,16 +19,16 @@ pub fn pagerank(view: &GraphView, config: &PageRankConfig) -> Vec<NodeScore> {
     if let Some(ref seeds) = config.seeds {
         let valid_seeds: Vec<usize> = seeds.iter().filter_map(|s| view.node_idx(s)).collect();
         if valid_seeds.is_empty() {
-            let uniform = 1.0 / (n as f64);
+            let uniform = 1.0 / super::count_f64(n);
             teleport.fill(uniform);
         } else {
-            let w = 1.0 / (valid_seeds.len() as f64);
+            let w = 1.0 / super::count_f64(valid_seeds.len());
             for s in valid_seeds {
                 teleport[s] = w;
             }
         }
     } else {
-        let uniform = 1.0 / (n as f64);
+        let uniform = 1.0 / super::count_f64(n);
         teleport.fill(uniform);
     }
 
@@ -37,7 +38,7 @@ pub fn pagerank(view: &GraphView, config: &PageRankConfig) -> Vec<NodeScore> {
 
     // Precalculate out-degree or out-weight per node for the selected direction
     let mut out_weights = vec![0.0; n];
-    for u in 0..n {
+    for (u, out_weight) in out_weights.iter_mut().enumerate() {
         let edges = view.edges_dir(u, config.direction);
         let mut total_w = 0.0;
         for edge in edges {
@@ -48,7 +49,7 @@ pub fn pagerank(view: &GraphView, config: &PageRankConfig) -> Vec<NodeScore> {
             }
             total_w += edge.weight;
         }
-        out_weights[u] = total_w;
+        *out_weight = total_w;
     }
 
     for _ in 0..config.max_iterations {
@@ -112,6 +113,7 @@ pub fn pagerank(view: &GraphView, config: &PageRankConfig) -> Vec<NodeScore> {
     scores
 }
 
+#[must_use]
 pub fn betweenness_centrality(
     view: &GraphView,
     direction: Direction,
@@ -178,7 +180,7 @@ pub fn betweenness_centrality(
     }
 
     if normalized && n > 2 {
-        let scale = 1.0 / (((n - 1) * (n - 2)) as f64);
+        let scale = 1.0 / super::count_f64((n - 1) * (n - 2));
         for score in &mut cb {
             *score *= scale;
         }
@@ -202,6 +204,7 @@ pub fn betweenness_centrality(
     scores
 }
 
+#[must_use]
 pub fn closeness_centrality(
     view: &GraphView,
     direction: Direction,
@@ -242,7 +245,7 @@ pub fn closeness_centrality(
         }
 
         let score = if sum_dist > 0 && reachable > 0 {
-            (reachable as f64) / (sum_dist as f64)
+            f64::from(reachable) / f64::from(sum_dist)
         } else {
             0.0
         };
@@ -262,6 +265,7 @@ pub fn closeness_centrality(
     scores
 }
 
+#[must_use]
 pub fn degree_centrality(
     view: &GraphView,
     direction: Direction,
@@ -274,7 +278,7 @@ pub fn degree_centrality(
 
     let kind_id_filter = kind_filter.and_then(|k| view.kind_id(k));
     let mut scores = Vec::with_capacity(n);
-    let denom = if n > 1 { (n - 1) as f64 } else { 1.0 };
+    let denom = if n > 1 { super::count_f64(n - 1) } else { 1.0 };
 
     for s in 0..n {
         let edges = view.edges_dir(s, direction);
@@ -286,7 +290,7 @@ pub fn degree_centrality(
 
         scores.push(NodeScore {
             node: view.node_id(s).to_string(),
-            score: (count as f64) / denom,
+            score: super::count_f64(count) / denom,
         });
     }
 

@@ -18,7 +18,9 @@ impl ShardLayout {
             || base_path
                 .extension()
                 .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("liliadb") || ext.eq_ignore_ascii_case("bundle"));
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("liliadb") || ext.eq_ignore_ascii_case("bundle")
+                });
 
         if let Some(ref explicit_dir) = config.shards_dir {
             Self {
@@ -89,6 +91,9 @@ impl ShardLayout {
     }
 
     /// Ensures the shards directory exists on disk.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
         if self.is_bundle_dir {
             if let Some(parent) = self.coordinator_path.parent() {

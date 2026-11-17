@@ -81,7 +81,10 @@ fn test_storage_or_set_lifecycle_add_wins_and_sql_view() {
     // Sync state from db1 to db2
     let state1 = set1.state().expect("state1");
     set2.merge(&state1).expect("merge into db2");
-    assert_eq!(set2.read().expect("read db2"), set1.read().expect("read db1"));
+    assert_eq!(
+        set2.read().expect("read db2"),
+        set1.read().expect("read db1")
+    );
 
     // Concurrent offline operations:
     // db1 removes "widget-A"
@@ -126,13 +129,8 @@ fn test_storage_lww_json_concurrent_fields_and_sql_extract() {
         .set_field("system", "/username", json!("johndoe"), Some(100))
         .expect("set username");
     assert_eq!(v1, 1);
-    doc1.set_field(
-        "system",
-        "/profile/bio",
-        json!("Initial bio"),
-        Some(100),
-    )
-    .expect("set bio");
+    doc1.set_field("system", "/profile/bio", json!("Initial bio"), Some(100))
+        .expect("set bio");
     doc1.set_field("system", "/profile/theme", json!("dark"), Some(100))
         .expect("set theme");
 
@@ -156,13 +154,8 @@ fn test_storage_lww_json_concurrent_fields_and_sql_extract() {
     .expect("update bio");
 
     // db2 modifies theme at t=160 and adds avatar
-    doc2.set_field(
-        "device-b",
-        "/profile/theme",
-        json!("light"),
-        Some(160),
-    )
-    .expect("update theme");
+    doc2.set_field("device-b", "/profile/theme", json!("light"), Some(160))
+        .expect("update theme");
     doc2.set_field(
         "device-b",
         "/profile/avatar",
@@ -245,13 +238,25 @@ fn test_crdt_batch_atomicity_and_cdc_events() {
 
     // Verify counter
     assert_eq!(
-        db.crdt().counter("analytics", "pageviews").get().expect("counter"),
+        db.crdt()
+            .counter("analytics", "pageviews")
+            .get()
+            .expect("counter"),
         50
     );
     // Verify set
-    assert!(db.crdt().set("tags", "article-1").contains("database").expect("set"));
+    assert!(db
+        .crdt()
+        .set("tags", "article-1")
+        .contains("database")
+        .expect("set"));
     // Verify doc
-    let doc = db.crdt().doc("articles", "art-1").get().expect("doc").expect("exists");
+    let doc = db
+        .crdt()
+        .doc("articles", "art-1")
+        .get()
+        .expect("doc")
+        .expect("exists");
     assert_eq!(doc["title"], "CRDTs in Storage");
 
     // Verify CDC events were dispatched
@@ -271,7 +276,12 @@ fn test_crdt_batch_atomicity_and_cdc_events() {
     }
 
     match &events[1] {
-        lilia_core::DatabaseEvent::CrdtSetMutated { space, id, element, deleted } => {
+        lilia_core::DatabaseEvent::CrdtSetMutated {
+            space,
+            id,
+            element,
+            deleted,
+        } => {
             assert_eq!(space, "tags");
             assert_eq!(id, "article-1");
             assert_eq!(element, "database");

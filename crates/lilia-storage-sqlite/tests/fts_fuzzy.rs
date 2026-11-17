@@ -10,18 +10,27 @@ fn test_fts_croisant_to_croissant_autocomplete_latency() {
     let fts = db.collection("bakery").fts().unwrap();
 
     // 1. Index realistic documents
-    fts.index("doc1", "Un délicieux croissant au beurre croustillant le matin.")
-        .unwrap();
-    fts.index("doc2", "Une baguette tradition bien cuite avec de la confiture.")
-        .unwrap();
-    fts.index("doc3", "Pain au chocolat ou chocolatine pour le petit déjeuner.")
-        .unwrap();
+    fts.index(
+        "doc1",
+        "Un délicieux croissant au beurre croustillant le matin.",
+    )
+    .unwrap();
+    fts.index(
+        "doc2",
+        "Une baguette tradition bien cuite avec de la confiture.",
+    )
+    .unwrap();
+    fts.index(
+        "doc3",
+        "Pain au chocolat ou chocolatine pour le petit déjeuner.",
+    )
+    .unwrap();
     fts.index("doc4", "Croisière gourmande sur la Seine avec dégustation.")
         .unwrap();
 
     // 2. Exact match autocomplete
     let exact_sugg = fts.suggest("croiss", 1, 5).unwrap();
-    assert!(!exact_sugg.is_empty());
+    assert_ne!(exact_sugg, []);
     assert_eq!(exact_sugg[0].term, "croissant");
     assert_eq!(exact_sugg[0].distance, 0);
 
@@ -31,7 +40,7 @@ fn test_fts_croisant_to_croissant_autocomplete_latency() {
     let elapsed = start.elapsed();
 
     println!("Mobile autocomplete latency for 'croisant': {elapsed:?}");
-    assert!(!typo_sugg.is_empty());
+    assert_ne!(typo_sugg, []);
     assert_eq!(typo_sugg[0].term, "croissant");
     assert_eq!(typo_sugg[0].distance, 1);
 
@@ -43,7 +52,7 @@ fn test_fts_croisant_to_croissant_autocomplete_latency() {
 
     // 4. Damerau transposition: "crosiant" (swapped 's' and missing 's') -> distance 1 or 2
     let damerau_sugg = fts.suggest("crosiant", 2, 5).unwrap();
-    assert!(!damerau_sugg.is_empty());
+    assert_ne!(damerau_sugg, []);
     assert!(damerau_sugg.iter().any(|s| s.term == "croissant"));
 
     // 5. Fuzzy full-text document search: query has typo "croisant beure"
@@ -51,8 +60,7 @@ fn test_fts_croisant_to_croissant_autocomplete_latency() {
     assert!(!hits.is_empty(), "fuzzy search must find matching document");
     assert_eq!(hits[0].doc_id, "doc1");
     assert!(
-        hits[0].snippet.contains("<b>croissant</b>")
-            || hits[0].snippet.contains("croissant"),
+        hits[0].snippet.contains("<b>croissant</b>") || hits[0].snippet.contains("croissant"),
         "snippet must highlight matched term"
     );
     assert_eq!(hits[0].edit_distance, 1);
@@ -79,7 +87,7 @@ fn test_fts_fuzzy_persistence_across_reopen() {
 
         // Autocomplete with typo "macbok" -> finds "macbook"
         let sugg = fts.suggest("macbok", 1, 5).unwrap();
-        assert!(!sugg.is_empty());
+        assert_ne!(sugg, []);
         assert_eq!(sugg[0].term, "macbook");
         assert_eq!(sugg[0].distance, 1);
 
@@ -104,13 +112,13 @@ fn test_fts_load_custom_dictionary() {
 
     // User typos: "paracetmol" (missing 'a')
     let sugg = fts.suggest("paracetmol", 1, 5).unwrap();
-    assert!(!sugg.is_empty());
+    assert_ne!(sugg, []);
     assert_eq!(sugg[0].term, "paracetamol");
     assert_eq!(sugg[0].distance, 1);
 
     // User typos: "ibupofene" (missing 'r')
     let sugg2 = fts.suggest("ibupofene", 1, 5).unwrap();
-    assert!(!sugg2.is_empty());
+    assert_ne!(sugg2, []);
     assert_eq!(sugg2[0].term, "ibuprofene");
 }
 
@@ -125,7 +133,7 @@ fn test_fts_memory_tier_fuzzy() {
         .unwrap();
 
     let sugg = fts.suggest("hybrd", 1, 5).unwrap();
-    assert!(!sugg.is_empty());
+    assert_ne!(sugg, []);
     assert_eq!(sugg[0].term, "hybride");
 
     let hits = fts.fuzzy_search("motuer hybryde", 1, 5).unwrap();

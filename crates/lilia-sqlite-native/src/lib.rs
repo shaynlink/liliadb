@@ -18,7 +18,8 @@ pub use slots::{StatementSlots, StmtSlot};
 pub use statement::{NativeStatement, StmtStatus};
 pub use transaction::NativeTransaction;
 pub use vtab::{
-    ConstraintOp, IndexConstraint, IndexPlan, VTabValue, VirtualCursor, VirtualTableProvider,
+    ConstraintOp, IndexConstraint, IndexPlan, VTabValue, VirtualCursor, VirtualTableFactory,
+    VirtualTableProvider,
 };
 
 pub fn sqlite_version() -> &'static str {
@@ -287,7 +288,7 @@ mod tests {
     #[test]
     fn test_stmt_status_reports_full_scan_steps() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let conn = NativeConnection::open_file(&temp_dir.path().join("scan.db")).unwrap();
+        let conn = NativeConnection::open_file(temp_dir.path().join("scan.db")).unwrap();
         conn.exec(
             "CREATE TABLE demo(id INTEGER PRIMARY KEY, grp INTEGER NOT NULL, v TEXT);
              CREATE INDEX demo_grp ON demo(grp);
@@ -296,13 +297,21 @@ mod tests {
         )
         .unwrap();
 
-        let mut scan = conn.prepare("SELECT count(*) FROM demo WHERE v = 'x';").unwrap();
+        let mut scan = conn
+            .prepare("SELECT count(*) FROM demo WHERE v = 'x';")
+            .unwrap();
         assert!(scan.step().unwrap());
         // 200 rows are visited by 199 forward steps after the first row.
         assert!(scan.status(StmtStatus::FullscanStep, true) >= 199);
-        assert_eq!(scan.status(StmtStatus::FullscanStep, false), 0, "reset must clear the counter");
+        assert_eq!(
+            scan.status(StmtStatus::FullscanStep, false),
+            0,
+            "reset must clear the counter"
+        );
 
-        let mut indexed = conn.prepare("SELECT count(*) FROM demo WHERE grp = 3;").unwrap();
+        let mut indexed = conn
+            .prepare("SELECT count(*) FROM demo WHERE grp = 3;")
+            .unwrap();
         assert!(indexed.step().unwrap());
         assert_eq!(indexed.status(StmtStatus::FullscanStep, true), 0);
     }
@@ -481,9 +490,7 @@ mod tests {
         assert_eq!(stmt.column_text(1), "memory");
         assert!(!stmt.step().unwrap());
 
-        let mut all_stmt = conn
-            .prepare("SELECT count(*) FROM unified_items;")
-            .unwrap();
+        let mut all_stmt = conn.prepare("SELECT count(*) FROM unified_items;").unwrap();
         assert!(all_stmt.step().unwrap());
         assert_eq!(all_stmt.column_int64(0), 3);
     }

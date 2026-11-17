@@ -1,4 +1,5 @@
-use crate::json::expr::{eval_expr, EvaluatedValue, Expr};
+use crate::json::expr::eval::{eval_binary_op, literal_to_evaluated};
+use crate::json::expr::{eval_expr, EvaluatedValue, Expr, UnaryOp};
 use crate::json::BinaryDoc;
 use crate::Result;
 use serde_json::Value;
@@ -10,6 +11,9 @@ pub fn eval_rule_condition_json(expr: &Expr, collection: &str, doc: &BinaryDoc) 
 }
 
 /// Evaluates a rule's compiled `Expr` condition against a `serde_json::Value`.
+///
+/// # Errors
+/// `InvalidInput` when `val` cannot be encoded as a binary document.
 pub fn eval_rule_condition_value(expr: &Expr, collection: &str, val: &Value) -> Result<bool> {
     let mut bytes = serde_json::to_vec(val).unwrap_or_default();
     let bin_doc = crate::json::parse_json_bytes_to_binary(&mut bytes)?;
@@ -18,20 +22,17 @@ pub fn eval_rule_condition_value(expr: &Expr, collection: &str, val: &Value) -> 
 
 /// Evaluates a rule condition against a KV entry (namespace, key, value bytes).
 #[must_use]
-pub fn eval_rule_condition_kv(
-    expr: &Expr,
-    namespace: &str,
-    key: &[u8],
-    value: &[u8],
-) -> bool {
+pub fn eval_rule_condition_kv(expr: &Expr, namespace: &str, key: &[u8], value: &[u8]) -> bool {
     let key_str = String::from_utf8_lossy(key);
     let val_str = String::from_utf8_lossy(value);
 
     // 1. Try parsing KV value as JSON object
     if let Ok(mut json_val) = serde_json::from_slice::<Value>(value) {
         if let Value::Object(ref mut map) = json_val {
-            map.entry("$key").or_insert_with(|| Value::String(key_str.to_string()));
-            map.entry("key").or_insert_with(|| Value::String(key_str.to_string()));
+            map.entry("$key")
+                .or_insert_with(|| Value::String(key_str.to_string()));
+            map.entry("key")
+                .or_insert_with(|| Value::String(key_str.to_string()));
         }
         if let Ok(res) = eval_rule_condition_value(expr, namespace, &json_val) {
             return res;
@@ -74,7 +75,7 @@ pub fn infer_target_collection(expr: &Expr) -> Option<String> {
             }
             None
         }
-        _ => None,
+        Expr::Literal(_) => None,
     }
 }
 
@@ -112,9 +113,11 @@ fn eval_rule_node(expr: &Expr, collection: &str, doc: &BinaryDoc) -> EvaluatedVa
         Expr::Unary { op, expr } => {
             let val = eval_rule_node(expr, collection, doc);
             match op {
-                crate::json::expr::UnaryOp::Not => EvaluatedValue::Bool(!val.is_truthy()),
-                crate::json::expr::UnaryOp::Neg => match val {
-                    EvaluatedValue::Int(i) => EvaluatedValue::Int(-i),
+                UnaryOp::Not => EvaluatedValue::Bool(!val.is_truthy()),
+                UnaryOp::Neg => match val {
+                    EvaluatedValue::Int(i) => i
+                        .checked_neg()
+                        .map_or(EvaluatedValue::Null, EvaluatedValue::Int),
                     EvaluatedValue::Float(f) => EvaluatedValue::Float(-f),
                     _ => EvaluatedValue::Null,
                 },
@@ -148,65 +151,6 @@ fn binary_ref_to_evaluated(val_ref: &crate::json::BinaryValueRef<'_>) -> Evaluat
         crate::json::BinaryValueRef::Array(_) | crate::json::BinaryValueRef::Object(_) => {
             EvaluatedValue::String(val_ref.to_json_value().to_string())
         }
-    }
-}
-
-fn literal_to_evaluated(lit: &crate::json::expr::LiteralValue) -> EvaluatedValue {
-    match lit {
-        crate::json::expr::LiteralValue::Null => EvaluatedValue::Null,
-        crate::json::expr::LiteralValue::Bool(b) => EvaluatedValue::Bool(*b),
-        crate::json::expr::LiteralValue::Int(i) => EvaluatedValue::Int(*i),
-        crate::json::expr::LiteralValue::Float(f) => EvaluatedValue::Float(*f),
-        crate::json::expr::LiteralValue::String(s) => EvaluatedValue::String(s.clone()),
-    }
-}
-
-fn eval_binary_op(
-    op: crate::json::expr::BinaryOp,
-    left: &EvaluatedValue,
-    right: &EvaluatedValue,
-) -> EvaluatedValue {
-    use crate::json::expr::BinaryOp;
-    match op {
-        BinaryOp::And => EvaluatedValue::Bool(left.is_truthy() && right.is_truthy()),
-        BinaryOp::Or => EvaluatedValue::Bool(left.is_truthy() || right.is_truthy()),
-        BinaryOp::Eq => EvaluatedValue::Bool(compare_equal(left, right)),
-        BinaryOp::NotEq => EvaluatedValue::Bool(!compare_equal(left, right)),
-        BinaryOp::Lt => EvaluatedValue::Bool(compare_order(left, right) == Some(std::cmp::Ordering::Less)),
-        BinaryOp::Lte => EvaluatedValue::Bool(matches!(
-            compare_order(left, right),
-            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
-        )),
-        BinaryOp::Gt => EvaluatedValue::Bool(compare_order(left, right) == Some(std::cmp::Ordering::Greater)),
-        BinaryOp::Gte => EvaluatedValue::Bool(matches!(
-            compare_order(left, right),
-            Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
-        )),
-        _ => EvaluatedValue::Null,
-    }
-}
-
-fn compare_equal(left: &EvaluatedValue, right: &EvaluatedValue) -> bool {
-    match (left, right) {
-        (EvaluatedValue::Null, EvaluatedValue::Null) => true,
-        (EvaluatedValue::Bool(a), EvaluatedValue::Bool(b)) => a == b,
-        (EvaluatedValue::Int(a), EvaluatedValue::Int(b)) => a == b,
-        (EvaluatedValue::Float(a), EvaluatedValue::Float(b)) => (a - b).abs() < f64::EPSILON,
-        (EvaluatedValue::Int(a), EvaluatedValue::Float(b)) => (*a as f64 - b).abs() < f64::EPSILON,
-        (EvaluatedValue::Float(a), EvaluatedValue::Int(b)) => (a - *b as f64).abs() < f64::EPSILON,
-        (EvaluatedValue::String(a), EvaluatedValue::String(b)) => a == b,
-        _ => false,
-    }
-}
-
-fn compare_order(left: &EvaluatedValue, right: &EvaluatedValue) -> Option<std::cmp::Ordering> {
-    match (left, right) {
-        (EvaluatedValue::Int(a), EvaluatedValue::Int(b)) => Some(a.cmp(b)),
-        (EvaluatedValue::Float(a), EvaluatedValue::Float(b)) => a.partial_cmp(b),
-        (EvaluatedValue::Int(a), EvaluatedValue::Float(b)) => (*a as f64).partial_cmp(b),
-        (EvaluatedValue::Float(a), EvaluatedValue::Int(b)) => a.partial_cmp(&(*b as f64)),
-        (EvaluatedValue::String(a), EvaluatedValue::String(b)) => Some(a.cmp(b)),
-        _ => None,
     }
 }
 

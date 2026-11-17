@@ -40,7 +40,7 @@ struct Stats {
     avg_us: f64,
 }
 
-#[inline(always)]
+#[inline]
 fn format_key(buf: &mut [u8; 16], id: usize) -> &[u8] {
     buf[..4].copy_from_slice(b"key_");
     let mut n = id;
@@ -74,7 +74,7 @@ fn setup_db(conn: &Connection, sync_mode: &str) {
     conn.pragma_update(None, "synchronous", sync_mode).unwrap();
     conn.pragma_update(None, "temp_store", "MEMORY").unwrap();
     conn.pragma_update(None, "cache_size", -65536).unwrap();
-    let _ = conn.pragma_update(None, "mmap_size", 1073741824i64);
+    let _ = conn.pragma_update(None, "mmap_size", 1_073_741_824_i64);
 
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS _lilia_kv (
@@ -102,7 +102,7 @@ unsafe fn bench_direct_ffi(db: *mut ffi::sqlite3, total_ops: usize, batch_size: 
     .unwrap();
 
     let mut stmt: *mut ffi::sqlite3_stmt = ptr::null_mut();
-    ffi::sqlite3_prepare_v2(db, sql.as_ptr(), -1, &mut stmt, ptr::null_mut());
+    ffi::sqlite3_prepare_v2(db, sql.as_ptr(), -1, &raw mut stmt, ptr::null_mut());
 
     let begin_cmd = CString::new("BEGIN IMMEDIATE;").unwrap();
     let commit_cmd = CString::new("COMMIT;").unwrap();
@@ -135,14 +135,14 @@ unsafe fn bench_direct_ffi(db: *mut ffi::sqlite3, total_ops: usize, batch_size: 
                 stmt,
                 2,
                 key.as_ptr().cast::<c_void>(),
-                key.len() as c_int,
+                c_int::try_from(key.len()).expect("key length fits a C int"),
                 ffi::SQLITE_STATIC(),
             );
             ffi::sqlite3_bind_blob(
                 stmt,
                 3,
                 val.as_ptr().cast::<c_void>(),
-                val.len() as c_int,
+                c_int::try_from(val.len()).expect("value length fits a C int"),
                 ffi::SQLITE_STATIC(),
             );
             ffi::sqlite3_bind_null(stmt, 4);
@@ -184,7 +184,7 @@ unsafe fn bench_direct_ffi_returning(
     .unwrap();
 
     let mut stmt: *mut ffi::sqlite3_stmt = ptr::null_mut();
-    ffi::sqlite3_prepare_v2(db, sql.as_ptr(), -1, &mut stmt, ptr::null_mut());
+    ffi::sqlite3_prepare_v2(db, sql.as_ptr(), -1, &raw mut stmt, ptr::null_mut());
 
     let begin_cmd = CString::new("BEGIN IMMEDIATE;").unwrap();
     let commit_cmd = CString::new("COMMIT;").unwrap();
@@ -217,14 +217,14 @@ unsafe fn bench_direct_ffi_returning(
                 stmt,
                 2,
                 key.as_ptr().cast::<c_void>(),
-                key.len() as c_int,
+                c_int::try_from(key.len()).expect("key length fits a C int"),
                 ffi::SQLITE_STATIC(),
             );
             ffi::sqlite3_bind_blob(
                 stmt,
                 3,
                 val.as_ptr().cast::<c_void>(),
-                val.len() as c_int,
+                c_int::try_from(val.len()).expect("value length fits a C int"),
                 ffi::SQLITE_STATIC(),
             );
             ffi::sqlite3_bind_null(stmt, 4);

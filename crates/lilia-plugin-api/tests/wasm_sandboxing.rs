@@ -486,7 +486,11 @@ fn test_wasm_plugin_fuel_exhaustion_savepoint_isolation() {
     let plugin_result = tx.execute_sandboxed_plugin("looping_plugin", |sub_tx| {
         sub_tx
             .json()
-            .put("orders", "ord_speculative", &serde_json::json!({"amount": 9999}))
+            .put(
+                "orders",
+                "ord_speculative",
+                &serde_json::json!({"amount": 9999}),
+            )
             .unwrap();
 
         // Infinite loop triggers fuel exhaustion
@@ -501,7 +505,11 @@ fn test_wasm_plugin_fuel_exhaustion_savepoint_isolation() {
     );
 
     // Savepoint rolled back in O(1)
-    assert!(tx.json().get("orders", "ord_speculative").unwrap().is_none());
+    assert!(tx
+        .json()
+        .get("orders", "ord_speculative")
+        .unwrap()
+        .is_none());
     assert!(tx.json().get("orders", "ord_100").unwrap().is_some());
 
     tx.commit().expect("commit");
@@ -555,4 +563,3 @@ fn test_wasm_plugin_oom_quota_savepoint_isolation() {
     assert!(db.kv_get("auth", b"token_1").unwrap().is_some());
     assert!(db.kv_get("auth", b"speculative_token").unwrap().is_none());
 }
-

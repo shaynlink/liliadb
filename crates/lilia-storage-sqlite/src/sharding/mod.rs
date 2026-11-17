@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 pub mod archive;
 pub mod layout;
 pub mod views;
@@ -32,7 +33,11 @@ pub struct ShardManager {
 }
 
 impl ShardManager {
-    /// Creates a new ShardManager for the given base path and configuration.
+    /// Creates a new `ShardManager` for the given base path and configuration.
+    ///
+    /// # Errors
+    /// Returns `Storage` errors detected here, and propagates errors from the
+    /// operations it performs.
     pub fn new(base_path: &Path, config: ShardingConfig) -> Result<Self> {
         let layout = ShardLayout::resolve(base_path, &config);
         layout.ensure_dirs().map_err(|e| {
@@ -52,6 +57,10 @@ impl ShardManager {
     }
 
     /// Loads the shard catalog from the coordinator database and syncs with on-disk files.
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     pub fn load_from_connection(&self, connection: &NativeConnection) -> Result<()> {
         let mut loaded = HashMap::new();
 
@@ -71,8 +80,8 @@ impl ShardManager {
                 let status_str = stmt.column_text(4);
                 let status = ShardStatus::parse(status_str).unwrap_or(ShardStatus::Warm);
                 let is_compressed = stmt.column_int64(5) != 0;
-                let uncompressed_bytes = stmt.column_int64(6) as u64;
-                let compressed_bytes = stmt.column_int64(7) as u64;
+                let uncompressed_bytes = u64::try_from(stmt.column_int64(6)).unwrap_or_default();
+                let compressed_bytes = u64::try_from(stmt.column_int64(7)).unwrap_or_default();
                 let checksum = if stmt.column_is_null(8) {
                     None
                 } else {
@@ -111,12 +120,13 @@ impl ShardManager {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".lilia") {
+                    if path.extension().is_some_and(|ext| ext == "lilia") {
                         let id = name.trim_end_matches(".lilia");
                         if !loaded.contains_key(id) {
-                            if let Ok((start, end)) = self.config.granularity.parse_period_range(id) {
+                            if let Ok((start, end)) = self.config.granularity.parse_period_range(id)
+                            {
                                 let meta = std::fs::metadata(&path).ok();
-                                let size = meta.map(|m| m.len()).unwrap_or(0);
+                                let size = meta.map_or(0, |m| m.len());
                                 loaded.insert(
                                     id.to_string(),
                                     ShardInfo {
@@ -138,9 +148,10 @@ impl ShardManager {
                     } else if name.ends_with(".lilia.zst") {
                         let id = name.trim_end_matches(".lilia.zst");
                         if !loaded.contains_key(id) {
-                            if let Ok((start, end)) = self.config.granularity.parse_period_range(id) {
+                            if let Ok((start, end)) = self.config.granularity.parse_period_range(id)
+                            {
                                 let meta = std::fs::metadata(&path).ok();
-                                let size = meta.map(|m| m.len()).unwrap_or(0);
+                                let size = meta.map_or(0, |m| m.len());
                                 loaded.insert(
                                     id.to_string(),
                                     ShardInfo {
@@ -172,12 +183,15 @@ impl ShardManager {
         if let Some(existing) = loaded.get_mut(&current_period) {
             if !existing.is_compressed {
                 existing.status = ShardStatus::Active;
-                active_id = current_period.clone();
+                active_id.clone_from(&current_period);
             }
         }
 
         if active_id.is_empty() {
-            let (start, end) = self.config.granularity.parse_period_range(&current_period)?;
+            let (start, end) = self
+                .config
+                .granularity
+                .parse_period_range(&current_period)?;
             let file_name = ShardLayout::shard_file_name(&current_period);
             let file_path = self.layout.shards_dir.join(&file_name);
             let info = ShardInfo {
@@ -202,14 +216,27 @@ impl ShardManager {
             self.persist_shard_record(connection, info)?;
         }
 
-        *self.active_shard_id.write().unwrap_or_else(std::sync::PoisonError::into_inner) = active_id;
-        *self.shards.write().unwrap_or_else(std::sync::PoisonError::into_inner) = loaded;
+        *self
+            .active_shard_id
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = active_id;
+        *self
+            .shards
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = loaded;
 
         Ok(())
     }
 
     /// Persists or updates a shard record in `_lilia_shards`.
-    pub fn persist_shard_record(&self, connection: &NativeConnection, info: &ShardInfo) -> Result<()> {
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
+    pub fn persist_shard_record(
+        &self,
+        connection: &NativeConnection,
+        info: &ShardInfo,
+    ) -> Result<()> {
         let file_name = info
             .file_path
             .file_name()
@@ -244,7 +271,7 @@ impl ShardManager {
             end = info.period_end_ms,
             fname = file_name,
             status = info.status.as_str(),
-            comp = if info.is_compressed { 1 } else { 0 },
+            comp = i32::from(info.is_compressed),
             ubytes = info.uncompressed_bytes,
             cbytes = info.compressed_bytes,
             created = info.created_at_ms,
@@ -268,6 +295,9 @@ impl ShardManager {
     }
 
     /// Returns the catalogue entry for `shard_id`.
+    ///
+    /// # Errors
+    /// Returns `NotFound` errors.
     pub fn get_shard_info(&self, shard_id: &str) -> Result<ShardInfo> {
         self.shards
             .read()
@@ -284,6 +314,9 @@ impl ShardManager {
     }
 
     /// Returns information about the current active writing shard.
+    ///
+    /// # Errors
+    /// Returns `NotFound` errors.
     pub fn active_shard(&self) -> Result<ShardInfo> {
         let active_id = self
             .active_shard_id
@@ -308,7 +341,10 @@ impl ShardManager {
     #[must_use]
     pub fn attached_aliases(&self) -> Vec<String> {
         let mut aliases = Vec::new();
-        let guard = self.shards.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = self
+            .shards
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for info in guard.values() {
             if info.status.is_attached() && !info.is_compressed {
                 aliases.push(ShardLayout::shard_alias(&info.shard_id));
@@ -322,10 +358,16 @@ impl ShardManager {
     #[must_use]
     pub fn attached_shard_paths(&self) -> Vec<(String, PathBuf)> {
         let mut pairs = Vec::new();
-        let guard = self.shards.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = self
+            .shards
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for info in guard.values() {
             if info.status.is_attached() && !info.is_compressed {
-                pairs.push((ShardLayout::shard_alias(&info.shard_id), info.file_path.clone()));
+                pairs.push((
+                    ShardLayout::shard_alias(&info.shard_id),
+                    info.file_path.clone(),
+                ));
             }
         }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -345,7 +387,10 @@ impl ShardManager {
 
         if let Some(ts) = timestamp_ms {
             let period = self.config.granularity.format_period(ts);
-            let guard = self.shards.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let guard = self
+                .shards
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(info) = guard.get(&period) {
                 if info.status.is_attached() && !info.is_compressed {
                     return ShardLayout::shard_alias(&info.shard_id);
@@ -370,7 +415,10 @@ impl ShardManager {
     /// coordinator (both receive chunks that fall outside any shard period).
     #[must_use]
     pub fn schemas_overlapping(&self, start_ms: i64, end_ms: i64) -> Vec<String> {
-        let guard = self.shards.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = self
+            .shards
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut schemas: Vec<String> = guard
             .values()
             .filter(|info| {
@@ -434,11 +482,10 @@ impl ShardManager {
     }
 
     /// Rollover to a new active shard for `now_ms`.
-    pub fn rollover(
-        &self,
-        connection: &NativeConnection,
-        now_ms: i64,
-    ) -> Result<ShardInfo> {
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
+    pub fn rollover(&self, connection: &NativeConnection, now_ms: i64) -> Result<ShardInfo> {
         let new_period = self.config.granularity.format_period(now_ms);
         let active_id = self
             .active_shard_id
@@ -451,7 +498,10 @@ impl ShardManager {
             return self.active_shard();
         }
 
-        let mut shards = self.shards.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut shards = self
+            .shards
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Transition previous active shard to Warm
         if let Some(old) = shards.get_mut(&active_id) {
@@ -485,30 +535,37 @@ impl ShardManager {
         };
 
         self.persist_shard_record(connection, &new_info)?;
-        *self.active_shard_id.write().unwrap_or_else(std::sync::PoisonError::into_inner) = new_period;
+        *self
+            .active_shard_id
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = new_period;
 
         Ok(new_info)
     }
 
     /// Updates the in-memory and persisted status of a shard.
-    pub fn update_shard_info(
-        &self,
-        connection: &NativeConnection,
-        info: ShardInfo,
-    ) -> Result<()> {
-        let mut guard = self.shards.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
+    pub fn update_shard_info(&self, connection: &NativeConnection, info: ShardInfo) -> Result<()> {
+        let mut guard = self
+            .shards
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.persist_shard_record(connection, &info)?;
         guard.insert(info.shard_id.clone(), info);
         Ok(())
     }
 
     /// Removes a shard from tracking (e.g. when purged).
-    pub fn remove_shard(
-        &self,
-        connection: &NativeConnection,
-        shard_id: &str,
-    ) -> Result<()> {
-        let mut guard = self.shards.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ///
+    /// # Errors
+    /// Propagates errors from the operations it performs.
+    pub fn remove_shard(&self, connection: &NativeConnection, shard_id: &str) -> Result<()> {
+        let mut guard = self
+            .shards
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         connection.exec(&format!(
             "DELETE FROM _lilia_shards WHERE shard_id = '{shard_id}';"
         ))?;

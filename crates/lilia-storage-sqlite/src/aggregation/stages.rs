@@ -11,10 +11,13 @@ use serde_json::Value;
 use super::cursor::StreamDocument;
 
 /// Filter stage: evaluates filter expressions or closures lazily.
+/// Caller-supplied predicate deciding whether a document passes a filter stage.
+pub type DocumentPredicate = Box<dyn Fn(&StreamDocument) -> bool + Send + Sync>;
+
 pub struct FilterStream<I> {
     upstream: I,
     filter_expr: Option<FilterExpr>,
-    filter_fn: Option<Box<dyn Fn(&StreamDocument) -> bool + Send + Sync>>,
+    filter_fn: Option<DocumentPredicate>,
 }
 
 impl<I> std::fmt::Debug for FilterStream<I> {
@@ -22,7 +25,7 @@ impl<I> std::fmt::Debug for FilterStream<I> {
         f.debug_struct("FilterStream")
             .field("filter_expr", &self.filter_expr)
             .field("has_filter_fn", &self.filter_fn.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -30,7 +33,7 @@ impl<I> FilterStream<I> {
     pub fn new(
         upstream: I,
         filter_expr: Option<FilterExpr>,
-        filter_fn: Option<Box<dyn Fn(&StreamDocument) -> bool + Send + Sync>>,
+        filter_fn: Option<DocumentPredicate>,
     ) -> Self {
         Self {
             upstream,
@@ -82,7 +85,7 @@ impl<I> std::fmt::Debug for UnwindStream<I> {
             .field("current_doc", &self.current_doc)
             .field("current_idx", &self.current_idx)
             .field("items_len", &self.current_items.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -119,7 +122,9 @@ impl<I: Iterator<Item = Result<StreamDocument>>> Iterator for UnwindStream<I> {
             // Fetch next document from upstream
             match self.upstream.next() {
                 Some(Ok(doc)) => {
-                    let items = if let Some(arr) = doc.doc.extract(&self.field).and_then(|v| v.as_array()) {
+                    let items = if let Some(arr) =
+                        doc.doc.extract(&self.field).and_then(|v| v.as_array())
+                    {
                         arr.iter().map(|item| item.to_json_value()).collect()
                     } else if let Some(val) = doc.extract_value(&self.field) {
                         if let Value::Array(arr) = val {
@@ -156,11 +161,13 @@ pub enum RunningAccumulator {
     Variance(WelfordAccumulator),
     StdDev(WelfordAccumulator),
     Quantile(TDigest, f64),
-    ApproxCountDistinct(HyperLogLog),
+    // Boxed: the sketch is 2 KiB, the other accumulators a few words.
+    ApproxCountDistinct(Box<HyperLogLog>),
     AnomalyCount(AnomalyAccumulator),
 }
 
 impl RunningAccumulator {
+    #[must_use]
     pub fn from_aggregate(agg: &Aggregate) -> Self {
         match agg {
             Aggregate::Count { .. } => Self::Count(CountAccumulator::new()),
@@ -171,7 +178,9 @@ impl RunningAccumulator {
             Aggregate::Variance { .. } => Self::Variance(WelfordAccumulator::new()),
             Aggregate::StdDev { .. } => Self::StdDev(WelfordAccumulator::new()),
             Aggregate::Quantile { quantile, .. } => Self::Quantile(TDigest::new(100.0), *quantile),
-            Aggregate::ApproxCountDistinct { .. } => Self::ApproxCountDistinct(HyperLogLog::new()),
+            Aggregate::ApproxCountDistinct { .. } => {
+                Self::ApproxCountDistinct(Box::new(HyperLogLog::new()))
+            }
             Aggregate::AnomalyCount { threshold, .. } => {
                 Self::AnomalyCount(AnomalyAccumulator::new(*threshold))
             }
@@ -222,31 +231,29 @@ impl RunningAccumulator {
     pub fn finalize(&mut self) -> Value {
         match self {
             Self::Count(c) => Value::Number(c.value().into()),
-            Self::Sum(s) => serde_json::Number::from_f64(s.value())
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
-            Self::Avg(w) => serde_json::Number::from_f64(w.mean())
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
+            Self::Sum(s) => {
+                serde_json::Number::from_f64(s.value()).map_or(Value::Null, Value::Number)
+            }
+            Self::Avg(w) => {
+                serde_json::Number::from_f64(w.mean()).map_or(Value::Null, Value::Number)
+            }
             Self::Min(m) => m
                 .value()
                 .and_then(serde_json::Number::from_f64)
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::Number),
             Self::Max(m) => m
                 .value()
                 .and_then(serde_json::Number::from_f64)
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
-            Self::Variance(w) => serde_json::Number::from_f64(w.sample_variance())
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
-            Self::StdDev(w) => serde_json::Number::from_f64(w.std_dev())
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
-            Self::Quantile(td, q) => serde_json::Number::from_f64(td.quantile(*q))
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::Number),
+            Self::Variance(w) => {
+                serde_json::Number::from_f64(w.sample_variance()).map_or(Value::Null, Value::Number)
+            }
+            Self::StdDev(w) => {
+                serde_json::Number::from_f64(w.std_dev()).map_or(Value::Null, Value::Number)
+            }
+            Self::Quantile(td, q) => {
+                serde_json::Number::from_f64(td.quantile(*q)).map_or(Value::Null, Value::Number)
+            }
             Self::ApproxCountDistinct(hll) => Value::Number(hll.count().into()),
             Self::AnomalyCount(a) => Value::Number(a.anomaly_count().into()),
         }
@@ -254,6 +261,9 @@ impl RunningAccumulator {
 }
 
 /// Executes single-pass streaming grouping over an upstream document stream.
+///
+/// # Errors
+/// Propagates errors from the operations it performs.
 pub fn execute_group_by<I: Iterator<Item = Result<StreamDocument>>>(
     upstream: I,
     group_key_field: Option<&str>,
@@ -325,10 +335,8 @@ impl SortKey {
             (Self::Number(a), Self::Number(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
             (Self::Text(a), Self::Text(b)) => a.cmp(b),
             (Self::Null, Self::Null) => Ordering::Equal,
-            (Self::Null, _) => Ordering::Less,
-            (_, Self::Null) => Ordering::Greater,
-            (Self::Number(_), Self::Text(_)) => Ordering::Less,
-            (Self::Text(_), Self::Number(_)) => Ordering::Greater,
+            (Self::Null, _) | (Self::Number(_), Self::Text(_)) => Ordering::Less,
+            (_, Self::Null) | (Self::Text(_), Self::Number(_)) => Ordering::Greater,
         }
     }
 }
@@ -368,6 +376,7 @@ impl Ord for HeapItem {
 }
 
 /// Applies Top-K streaming sort using a bounded heap of size `limit`.
+#[must_use]
 pub fn apply_top_k(items: Vec<Value>, sort: &Sort, limit: usize) -> Vec<Value> {
     if limit == 0 || items.is_empty() {
         return Vec::new();
@@ -417,6 +426,7 @@ pub fn apply_top_k(items: Vec<Value>, sort: &Sort, limit: usize) -> Vec<Value> {
 }
 
 /// Sorts a vector of JSON values fully when unbounded.
+#[must_use]
 pub fn apply_full_sort(mut items: Vec<Value>, sort: &Sort) -> Vec<Value> {
     let descending = sort.direction == SortDirection::Desc;
     items.sort_by(|a, b| {
