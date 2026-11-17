@@ -23,19 +23,39 @@ pub fn sqlite_transient() -> sqlite3_destructor_type {
 
 pub const SQLITE_UTF8: u8 = 1;
 
+// sqlite3_stmt_status() counters
+pub const SQLITE_STMTSTATUS_FULLSCAN_STEP: c_int = 1;
+pub const SQLITE_STMTSTATUS_SORT: c_int = 2;
+pub const SQLITE_STMTSTATUS_AUTOINDEX: c_int = 3;
+pub const SQLITE_STMTSTATUS_VM_STEP: c_int = 4;
+pub const SQLITE_STMTSTATUS_RUN: c_int = 6;
+
 // Result codes
 pub const SQLITE_OK: c_int = 0;
+pub const SQLITE_DENY: c_int = 1;
+pub const SQLITE_AUTH: c_int = 23;
 pub const SQLITE_ERROR: c_int = 1;
 pub const SQLITE_BUSY: c_int = 5;
 pub const SQLITE_LOCKED: c_int = 6;
+pub const SQLITE_LOCKED_SHAREDCACHE: c_int = SQLITE_LOCKED | (1 << 8);
 pub const SQLITE_INTERRUPT: c_int = 9;
 pub const SQLITE_IOERR: c_int = 10;
 pub const SQLITE_CORRUPT: c_int = 11;
 pub const SQLITE_FULL: c_int = 13;
+pub const SQLITE_CONSTRAINT: c_int = 19;
 pub const SQLITE_MISUSE: c_int = 21;
 pub const SQLITE_NOTADB: c_int = 26;
 pub const SQLITE_ROW: c_int = 100;
 pub const SQLITE_DONE: c_int = 101;
+
+// Virtual table index constraint operators & scan flags
+pub const SQLITE_INDEX_CONSTRAINT_EQ: c_uchar = 2;
+pub const SQLITE_INDEX_CONSTRAINT_GT: c_uchar = 4;
+pub const SQLITE_INDEX_CONSTRAINT_LE: c_uchar = 8;
+pub const SQLITE_INDEX_CONSTRAINT_LT: c_uchar = 16;
+pub const SQLITE_INDEX_CONSTRAINT_GE: c_uchar = 32;
+pub const SQLITE_INDEX_CONSTRAINT_LIKE: c_uchar = 65;
+pub const SQLITE_INDEX_SCAN_UNIQUE: c_int = 0x0000_0001;
 
 // Open flags
 pub const SQLITE_OPEN_READONLY: c_int = 0x00000001;
@@ -54,6 +74,11 @@ pub const SQLITE_FLOAT: c_int = 2;
 pub const SQLITE_TEXT: c_int = 3;
 pub const SQLITE_BLOB: c_int = 4;
 pub const SQLITE_NULL: c_int = 5;
+
+// Changeset operation types
+pub const SQLITE_DELETE: c_int = 9;
+pub const SQLITE_INSERT: c_int = 18;
+pub const SQLITE_UPDATE: c_int = 23;
 
 // Global Config ops
 pub const SQLITE_CONFIG_LOG: c_int = 16;
@@ -78,6 +103,140 @@ pub const SQLITE_CHECKPOINT_PASSIVE: c_int = 0;
 pub const SQLITE_CHECKPOINT_FULL: c_int = 1;
 pub const SQLITE_CHECKPOINT_RESTART: c_int = 2;
 pub const SQLITE_CHECKPOINT_TRUNCATE: c_int = 3;
+
+// Virtual table C ABI structs (SQLite 3.54.1)
+#[repr(C)]
+pub struct sqlite3_vtab {
+    pub pModule: *const sqlite3_module,
+    pub nRef: c_int,
+    pub zErrMsg: *mut c_char,
+}
+
+#[repr(C)]
+pub struct sqlite3_vtab_cursor {
+    pub pVtab: *mut sqlite3_vtab,
+}
+
+#[repr(C)]
+pub struct sqlite3_index_constraint {
+    pub iColumn: c_int,
+    pub op: c_uchar,
+    pub usable: c_uchar,
+    pub iTermOffset: c_int,
+}
+
+#[repr(C)]
+pub struct sqlite3_index_orderby {
+    pub iColumn: c_int,
+    pub desc: c_uchar,
+}
+
+#[repr(C)]
+pub struct sqlite3_index_constraint_usage {
+    pub argvIndex: c_int,
+    pub omit: c_uchar,
+}
+
+#[repr(C)]
+pub struct sqlite3_index_info {
+    pub nConstraint: c_int,
+    pub aConstraint: *mut sqlite3_index_constraint,
+    pub nOrderBy: c_int,
+    pub aOrderBy: *mut sqlite3_index_orderby,
+    pub aConstraintUsage: *mut sqlite3_index_constraint_usage,
+    pub idxNum: c_int,
+    pub idxStr: *mut c_char,
+    pub needToFreeIdxStr: c_int,
+    pub orderByConsumed: c_int,
+    pub estimatedCost: f64,
+    pub estimatedRows: i64,
+    pub idxFlags: c_int,
+    pub colUsed: u64,
+}
+
+#[repr(C)]
+pub struct sqlite3_module {
+    pub iVersion: c_int,
+    pub xCreate: Option<
+        unsafe extern "C" fn(
+            *mut sqlite3,
+            *mut c_void,
+            c_int,
+            *const *const c_char,
+            *mut *mut sqlite3_vtab,
+            *mut *mut c_char,
+        ) -> c_int,
+    >,
+    pub xConnect: Option<
+        unsafe extern "C" fn(
+            *mut sqlite3,
+            *mut c_void,
+            c_int,
+            *const *const c_char,
+            *mut *mut sqlite3_vtab,
+            *mut *mut c_char,
+        ) -> c_int,
+    >,
+    pub xBestIndex: Option<
+        unsafe extern "C" fn(*mut sqlite3_vtab, *mut sqlite3_index_info) -> c_int,
+    >,
+    pub xDisconnect: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
+    pub xDestroy: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
+    pub xOpen: Option<
+        unsafe extern "C" fn(*mut sqlite3_vtab, *mut *mut sqlite3_vtab_cursor) -> c_int,
+    >,
+    pub xClose: Option<unsafe extern "C" fn(*mut sqlite3_vtab_cursor) -> c_int>,
+    pub xFilter: Option<
+        unsafe extern "C" fn(
+            *mut sqlite3_vtab_cursor,
+            c_int,
+            *const c_char,
+            c_int,
+            *mut *mut sqlite3_value,
+        ) -> c_int,
+    >,
+    pub xNext: Option<unsafe extern "C" fn(*mut sqlite3_vtab_cursor) -> c_int>,
+    pub xEof: Option<unsafe extern "C" fn(*mut sqlite3_vtab_cursor) -> c_int>,
+    pub xColumn: Option<
+        unsafe extern "C" fn(*mut sqlite3_vtab_cursor, *mut sqlite3_context, c_int) -> c_int,
+    >,
+    pub xRowid: Option<unsafe extern "C" fn(*mut sqlite3_vtab_cursor, *mut i64) -> c_int>,
+    pub xUpdate: Option<
+        unsafe extern "C" fn(
+            *mut sqlite3_vtab,
+            c_int,
+            *mut *mut sqlite3_value,
+            *mut i64,
+        ) -> c_int,
+    >,
+    pub xBegin: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
+    pub xSync: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
+    pub xCommit: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
+    pub xRollback: Option<unsafe extern "C" fn(*mut sqlite3_vtab) -> c_int>,
+    pub xFindFunction: Option<
+        unsafe extern "C" fn(
+            *mut sqlite3_vtab,
+            c_int,
+            *const c_char,
+            *mut Option<unsafe extern "C" fn(*mut sqlite3_context, c_int, *mut *mut sqlite3_value)>,
+            *mut *mut c_void,
+        ) -> c_int,
+    >,
+    pub xRename: Option<unsafe extern "C" fn(*mut sqlite3_vtab, *const c_char) -> c_int>,
+    pub xSavepoint: Option<unsafe extern "C" fn(*mut sqlite3_vtab, c_int) -> c_int>,
+    pub xRelease: Option<unsafe extern "C" fn(*mut sqlite3_vtab, c_int) -> c_int>,
+    pub xRollbackTo: Option<unsafe extern "C" fn(*mut sqlite3_vtab, c_int) -> c_int>,
+    pub xShadowName: Option<unsafe extern "C" fn(*const c_char) -> c_int>,
+    pub xIntegrity: Option<
+        unsafe extern "C" fn(
+            *mut sqlite3_vtab,
+            *const c_char,
+            *const c_char,
+            c_int,
+            *mut *mut c_char,
+        ) -> c_int,
+    >,
+}
 
 // Function flags
 pub const SQLITE_DETERMINISTIC: c_int = 0x000000800;
@@ -120,6 +279,21 @@ extern "C" {
         pzTail: *mut *const c_char,
     ) -> c_int;
 
+    pub fn sqlite3_set_authorizer(
+        db: *mut sqlite3,
+        xAuth: Option<
+            unsafe extern "C" fn(
+                *mut c_void,
+                c_int,
+                *const c_char,
+                *const c_char,
+                *const c_char,
+                *const c_char,
+            ) -> c_int,
+        >,
+        pUserData: *mut c_void,
+    ) -> c_int;
+
     pub fn sqlite3_finalize(pStmt: *mut sqlite3_stmt) -> c_int;
     pub fn sqlite3_step(pStmt: *mut sqlite3_stmt) -> c_int;
     pub fn sqlite3_reset(pStmt: *mut sqlite3_stmt) -> c_int;
@@ -157,6 +331,7 @@ extern "C" {
     pub fn sqlite3_column_text(pStmt: *mut sqlite3_stmt, iCol: c_int) -> *const c_uchar;
     pub fn sqlite3_column_name(pStmt: *mut sqlite3_stmt, iCol: c_int) -> *const c_char;
     pub fn sqlite3_stmt_readonly(pStmt: *mut sqlite3_stmt) -> c_int;
+    pub fn sqlite3_stmt_status(pStmt: *mut sqlite3_stmt, op: c_int, resetFlg: c_int) -> c_int;
     pub fn sqlite3_db_handle(pStmt: *mut sqlite3_stmt) -> *mut sqlite3;
 
     // Metadata & Execution stats
@@ -290,6 +465,35 @@ extern "C" {
         pnOut: *mut c_int,
         ppOut: *mut *mut c_void,
     ) -> c_int;
+    pub fn sqlite3changeset_start(
+        pp: *mut *mut sqlite3_changeset_iter,
+        nData: c_int,
+        pData: *const c_void,
+    ) -> c_int;
+    pub fn sqlite3changeset_next(pIter: *mut sqlite3_changeset_iter) -> c_int;
+    pub fn sqlite3changeset_op(
+        pIter: *mut sqlite3_changeset_iter,
+        pzTab: *mut *const c_char,
+        pnCol: *mut c_int,
+        pOp: *mut c_int,
+        pbIndirect: *mut c_int,
+    ) -> c_int;
+    pub fn sqlite3changeset_pk(
+        pIter: *mut sqlite3_changeset_iter,
+        pabPK: *mut *const c_uchar,
+        pnCol: *mut c_int,
+    ) -> c_int;
+    pub fn sqlite3changeset_old(
+        pIter: *mut sqlite3_changeset_iter,
+        iVal: c_int,
+        ppValue: *mut *mut sqlite3_value,
+    ) -> c_int;
+    pub fn sqlite3changeset_new(
+        pIter: *mut sqlite3_changeset_iter,
+        iVal: c_int,
+        ppValue: *mut *mut sqlite3_value,
+    ) -> c_int;
+    pub fn sqlite3changeset_finalize(pIter: *mut sqlite3_changeset_iter) -> c_int;
 
     // External extensions entry points
     pub fn sqlite3_series_init(
@@ -302,6 +506,26 @@ extern "C" {
         pzErrMsg: *mut *mut c_char,
         pApi: *const c_void,
     ) -> c_int;
+
+    pub fn sqlite3_malloc(n: c_int) -> *mut c_void;
+    pub fn sqlite3_malloc64(n: u64) -> *mut c_void;
+    pub fn sqlite3_declare_vtab(db: *mut sqlite3, zSql: *const c_char) -> c_int;
+    pub fn sqlite3_create_module_v2(
+        db: *mut sqlite3,
+        zName: *const c_char,
+        p: *const sqlite3_module,
+        pClientData: *mut c_void,
+        xDestroy: Option<unsafe extern "C" fn(*mut c_void)>,
+    ) -> c_int;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+extern "C" {
+    pub fn sqlite3_unlock_notify(
+        pBlocked: *mut sqlite3,
+        xNotify: Option<unsafe extern "C" fn(*mut *mut c_void, c_int)>,
+        pNotifyArg: *mut c_void,
+    ) -> c_int;
 }
 
 /// Convert an SQLite return code to a `LiliaError`.
@@ -313,8 +537,26 @@ pub fn sqlite_code_to_lilia(rc: c_int, msg: impl Into<String>) -> LiliaError {
         SQLITE_CORRUPT | SQLITE_NOTADB => ErrorCode::Corrupt,
         SQLITE_FULL => ErrorCode::DiskFull,
         SQLITE_INTERRUPT => ErrorCode::Timeout,
+        SQLITE_CONSTRAINT => ErrorCode::ConstraintViolation,
+        SQLITE_AUTH => ErrorCode::Unsupported,
         _ => ErrorCode::Storage,
     };
     let retryable = code == ErrorCode::Busy || code == ErrorCode::Timeout;
     LiliaError::new(code, msg.into(), retryable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constraint_codes_map_to_constraint_violation() {
+        const SQLITE_CONSTRAINT_CHECK: c_int = SQLITE_CONSTRAINT | (1 << 8);
+        for rc in [SQLITE_CONSTRAINT, SQLITE_CONSTRAINT_CHECK] {
+            let error = sqlite_code_to_lilia(rc, "CHECK constraint failed");
+            assert_eq!(error.code, ErrorCode::ConstraintViolation);
+            assert!(!error.retryable);
+        }
+        assert_eq!(sqlite_code_to_lilia(1, "other").code, ErrorCode::Storage);
+    }
 }

@@ -5,11 +5,15 @@
 )]
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::Instant;
 
 use clap::Parser;
-use lilia_core::{Aes256GcmCodec, BatchOperation, Durability, IdentityCodec, ValueCodec};
+use lilia_core::{
+    Aes256GcmCodec, BatchOperation, CollectionKind, CollectionSpec, Durability, IdentityCodec,
+    OverflowPolicy, RingBufferConfig, StorageTier, TimeSeriesPoint, ValueCodec,
+};
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +42,10 @@ struct Arguments {
     /// Include raw `SQLite` native (C / rusqlite) baseline
     #[arg(long)]
     raw_sqlite: bool,
+
+    /// Run comparative tiered storage suite (Disk vs Memory vs RingBuffer vs GroupSync vs IoT Coalescing)
+    #[arg(long)]
+    tier_suite: bool,
 
     /// Output results as JSON
     #[arg(long)]
@@ -304,6 +312,10 @@ fn run_raw_sqlite_benchmark(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Arguments::parse();
 
+    if args.tier_suite {
+        return run_tier_suite(args.count, args.json);
+    }
+
     let durability = match args.durability.to_lowercase().as_str() {
         "balanced" => Durability::Balanced,
         "performance" => Durability::Performance,
@@ -400,6 +412,378 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!("  Disk Expansion:    {disk_diff:+.1}%\n");
         }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TierBenchMetrics {
+    scenario: String,
+    tier: String,
+    threads: usize,
+    total_ops: usize,
+    duration_ms: f64,
+    throughput_ops_sec: f64,
+    p50_us: f64,
+    p95_us: f64,
+    p99_us: f64,
+    disk_bytes: u64,
+    notes: String,
+}
+
+fn sqlite_footprint_bytes(db_path: &std::path::Path) -> u64 {
+    let mut total = std::fs::metadata(db_path).map_or(0, |m| m.len());
+    for suffix in ["-wal", "-shm"] {
+        let mut side = db_path.as_os_str().to_os_string();
+        side.push(suffix);
+        total += std::fs::metadata(side).map_or(0, |m| m.len());
+    }
+    total
+}
+
+fn from_bench_metrics(
+    scenario: &str,
+    tier: &str,
+    threads: usize,
+    m: BenchMetrics,
+    notes: impl Into<String>,
+) -> TierBenchMetrics {
+    TierBenchMetrics {
+        scenario: scenario.into(),
+        tier: tier.into(),
+        threads,
+        total_ops: m.total_mutations,
+        duration_ms: m.total_duration_ms,
+        throughput_ops_sec: m.throughput_ops_sec,
+        p50_us: m.p50_us,
+        p95_us: m.p95_us,
+        p99_us: m.p99_us,
+        disk_bytes: m.disk_bytes,
+        notes: notes.into(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalize_tier_metrics(
+    scenario: &str,
+    tier: &str,
+    threads: usize,
+    total_ops: usize,
+    elapsed: std::time::Duration,
+    mut latencies_us: Vec<f64>,
+    disk_bytes: u64,
+    notes: String,
+) -> TierBenchMetrics {
+    latencies_us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let secs = elapsed.as_secs_f64().max(1e-9);
+    TierBenchMetrics {
+        scenario: scenario.into(),
+        tier: tier.into(),
+        threads,
+        total_ops,
+        duration_ms: secs * 1000.0,
+        throughput_ops_sec: total_ops as f64 / secs,
+        p50_us: percentile(&latencies_us, 50.0),
+        p95_us: percentile(&latencies_us, 95.0),
+        p99_us: percentile(&latencies_us, 99.0),
+        disk_bytes,
+        notes,
+    }
+}
+
+fn run_parallel_workload<F>(
+    threads: usize,
+    total_ops: usize,
+    op_fn: &F,
+) -> Result<(std::time::Duration, Vec<f64>), Box<dyn std::error::Error>>
+where
+    F: Fn(usize) -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Sync,
+{
+    let workers = threads.max(1);
+    let barrier = Barrier::new(workers + 1);
+    let per_worker = total_ops / workers;
+    let remainder = total_ops % workers;
+
+    let mut all_latencies = Vec::with_capacity(total_ops);
+    let wall_elapsed = thread::scope(
+        |s| -> Result<std::time::Duration, Box<dyn std::error::Error + Send + Sync>> {
+            let mut handles = Vec::with_capacity(workers);
+            let mut offset = 0usize;
+            for tid in 0..workers {
+                let count = per_worker + usize::from(tid < remainder);
+                let start_id = offset;
+                offset += count;
+                let barrier_ref = &barrier;
+                handles.push(s.spawn(move || {
+                    let mut lats = Vec::with_capacity(count);
+                    barrier_ref.wait();
+                    for id in start_id..(start_id + count) {
+                        let t0 = Instant::now();
+                        op_fn(id)?;
+                        lats.push(t0.elapsed().as_nanos() as f64 / 1000.0);
+                    }
+                    Ok::<Vec<f64>, Box<dyn std::error::Error + Send + Sync>>(lats)
+                }));
+            }
+
+            barrier.wait();
+            let wall_start = Instant::now();
+            for handle in handles {
+                let lats = handle
+                    .join()
+                    .map_err(|_| std::io::Error::other("benchmark worker panicked"))??;
+                all_latencies.extend(lats);
+            }
+            Ok(wall_start.elapsed())
+        },
+    )
+    .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+
+    Ok((wall_elapsed, all_latencies))
+}
+
+fn bench_memory_tier(
+    threads: usize,
+    count: usize,
+) -> Result<TierBenchMetrics, Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("mem_bench.lilia");
+    let db = Database::open(DatabaseOptions::durable(&db_path))?;
+    db.set_collection_spec(CollectionSpec::new(
+        CollectionKind::Kv,
+        "mem_kv",
+        StorageTier::Memory,
+    ))?;
+
+    for w in 0..200 {
+        db.batch(&[BatchOperation::KvSet {
+            namespace: "mem_kv".into(),
+            key: format!("warm_{w}").into_bytes(),
+            value: vec![1u8; 256],
+            if_version: None,
+            expires_at_ms: None,
+        }])?;
+    }
+    let before_bytes = sqlite_footprint_bytes(&db_path);
+    let payload = vec![7u8; 256];
+
+    let (elapsed, latencies) = run_parallel_workload(threads, count, &|id| {
+        db.batch(&[BatchOperation::KvSet {
+            namespace: "mem_kv".into(),
+            key: format!("mem_key_{id:08}").into_bytes(),
+            value: payload.clone(),
+            if_version: None,
+            expires_at_ms: None,
+        }])?;
+        Ok(())
+    })?;
+    let after_bytes = sqlite_footprint_bytes(&db_path);
+    let wal_delta = after_bytes.saturating_sub(before_bytes);
+    let scenario = if threads == 1 {
+        "Memory Tier KV (1 thread)"
+    } else {
+        "Memory Tier KV (8 threads)"
+    };
+    Ok(finalize_tier_metrics(
+        scenario,
+        "memory",
+        threads,
+        count,
+        elapsed,
+        latencies,
+        wal_delta,
+        format!("wal_delta={wal_delta} B"),
+    ))
+}
+
+fn bench_ring_config(flush_interval_ms: u64, watermark_trigger: usize) -> RingBufferConfig {
+    RingBufferConfig {
+        capacity: 65_536,
+        max_batch_size: 4096,
+        flush_interval_ms,
+        watermark_trigger,
+        overflow_policy: OverflowPolicy::Block {
+            timeout_ms: Some(5_000),
+        },
+        coalesce_timeseries: true,
+        coalesce_kv_writes: false,
+        enable_read_overlay: true,
+    }
+}
+
+fn bench_buffered_ring_kv(count: usize) -> Result<TierBenchMetrics, Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("ring_bench.lilia");
+    let ring_cfg = bench_ring_config(5, 1024);
+    let db = Database::open(
+        DatabaseOptions::durable(&db_path)
+            .with_ring_buffer(ring_cfg)
+            .with_buffered_kv("buf_kv"),
+    )?;
+    let ring = db.ring_buffer();
+    let payload = vec![5u8; 256];
+
+    let t0 = Instant::now();
+    let (enqueue_elapsed, latencies) = run_parallel_workload(8, count, &|id| {
+        ring.push_kv("buf_kv", format!("buf_key_{id:08}").as_bytes(), &payload)?;
+        Ok(())
+    })?;
+    let stats = db.flush_writes()?;
+    let total_elapsed = t0.elapsed();
+    let disk_bytes = sqlite_footprint_bytes(&db_path);
+    let enqueue_rate = count as f64 / enqueue_elapsed.as_secs_f64().max(1e-9);
+    Ok(finalize_tier_metrics(
+        "Buffered RingBuffer Async KV (8 threads + flush)",
+        "buffered",
+        8,
+        count,
+        total_elapsed,
+        latencies,
+        disk_bytes,
+        format!(
+            "enqueue={enqueue_rate:.0} ops/s, batches={}, flushed={}",
+            stats.batches_committed, stats.committed_total
+        ),
+    ))
+}
+
+fn bench_groupsync_kv(count: usize) -> Result<TierBenchMetrics, Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("groupsync_bench.lilia");
+    let db = Database::open(DatabaseOptions::durable(&db_path))?;
+    let payload = vec![9u8; 256];
+
+    let (elapsed, latencies) = run_parallel_workload(8, count, &|id| {
+        db.commit_group_batch(
+            vec![BatchOperation::KvSet {
+                namespace: "sync_kv".into(),
+                key: format!("gs_key_{id:08}").into_bytes(),
+                value: payload.clone(),
+                if_version: None,
+                expires_at_ms: None,
+            }],
+            None,
+        )?;
+        Ok(())
+    })?;
+    let stats = db.ring_buffer_stats();
+    let disk_bytes = sqlite_footprint_bytes(&db_path);
+    Ok(finalize_tier_metrics(
+        "GroupSync Multi-Thread KV (8 threads shared WAL)",
+        "disk+groupsync",
+        8,
+        count,
+        elapsed,
+        latencies,
+        disk_bytes,
+        format!("wal_batches={}", stats.batches_committed),
+    ))
+}
+
+fn bench_iot_ts_coalescing(count: usize) -> Result<TierBenchMetrics, Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("iot_ts_bench.lilia");
+    let ring_cfg = bench_ring_config(10, 2048);
+    let db = Database::open(
+        DatabaseOptions::durable(&db_path)
+            .with_ring_buffer(ring_cfg)
+            .with_buffered_series("iot_sensor"),
+    )?;
+
+    let t0 = Instant::now();
+    let (_, latencies) = run_parallel_workload(1, count, &|id| {
+        let point = TimeSeriesPoint::new(
+            1_700_000_000_000 + id as i64 * 100,
+            20.0 + (id % 100) as f64 * 0.1,
+        );
+        db.ts_append_buffered("iot_sensor", &[point])?;
+        Ok(())
+    })?;
+    let stats = db.flush_writes()?;
+    let total_elapsed = t0.elapsed();
+
+    let chunk_res = db.sql_query(
+        "SELECT COUNT(*) FROM main._lilia_timeseries_chunks WHERE series_id = 'iot_sensor'",
+        &[],
+    )?;
+    let chunks = chunk_res
+        .rows
+        .first()
+        .and_then(|r| r.first())
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    let disk_bytes = sqlite_footprint_bytes(&db_path);
+    Ok(finalize_tier_metrics(
+        "Buffered IoT Gorilla TS Coalescing (single-pt pushes)",
+        "buffered",
+        1,
+        count,
+        total_elapsed,
+        latencies,
+        disk_bytes,
+        format!(
+            "chunks={chunks}, batches={}, coalesced_pts={}",
+            stats.batches_committed, stats.coalesced_ts_points
+        ),
+    ))
+}
+
+fn run_tier_suite(count: usize, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let disk_durable = run_single_benchmark(
+        "cleartext",
+        Arc::new(IdentityCodec),
+        "durable",
+        Durability::Durable,
+        count,
+        1,
+    )?;
+    let disk_balanced = run_single_benchmark(
+        "cleartext",
+        Arc::new(IdentityCodec),
+        "balanced",
+        Durability::Balanced,
+        count,
+        1,
+    )?;
+
+    let results = vec![
+        from_bench_metrics("Disk Durable KV (batch=1)", "disk", 1, disk_durable, "WAL FULL"),
+        from_bench_metrics("Disk Balanced KV (batch=1)", "disk", 1, disk_balanced, "WAL NORMAL"),
+        bench_memory_tier(1, count)?,
+        bench_memory_tier(8, count)?,
+        bench_buffered_ring_kv(count)?,
+        bench_groupsync_kv(count)?,
+        bench_iot_ts_coalescing(count)?,
+    ];
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+    } else {
+        println!("\n=== LiliaDB Tiered Storage Benchmark Suite (count={count}) ===");
+        println!(
+            "{:<50} | {:<14} | {:>3} | {:>14} | {:>9} | {:>9} | {:>9} | {:>10} | Notes",
+            "Scenario", "Tier", "Thr", "Throughput", "p50 (µs)", "p95 (µs)", "p99 (µs)", "Disk (KB)"
+        );
+        println!(
+            "{:-<50}-|-{:-<14}-|-{:-<3}-|-{:-<14}-|-{:-<9}-|-{:-<9}-|-{:-<9}-|-{:-<10}-|-{:-<28}",
+            "", "", "", "", "", "", "", "", ""
+        );
+        for m in &results {
+            println!(
+                "{:<50} | {:<14} | {:>3} | {:>8.0} ops/s | {:>9.2} | {:>9.2} | {:>9.2} | {:>10.1} | {}",
+                m.scenario,
+                m.tier,
+                m.threads,
+                m.throughput_ops_sec,
+                m.p50_us,
+                m.p95_us,
+                m.p99_us,
+                m.disk_bytes as f64 / 1024.0,
+                m.notes
+            );
+        }
+        println!();
     }
 
     Ok(())

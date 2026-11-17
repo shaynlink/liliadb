@@ -309,3 +309,318 @@ impl NativeSession {
         Ok(())
     }
 }
+
+/// Operation type of a row change in a changeset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ChangeOp {
+    Insert,
+    Update,
+    Delete,
+}
+
+/// A parsed change for a single row within a changeset.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RowChange {
+    pub table: String,
+    pub op: ChangeOp,
+    pub is_indirect: bool,
+    pub old_values: Vec<Option<serde_json::Value>>,
+    pub new_values: Vec<Option<serde_json::Value>>,
+}
+
+unsafe fn sqlite3_value_to_json(val: *mut ffi::sqlite3_value) -> serde_json::Value {
+    if val.is_null() {
+        return serde_json::Value::Null;
+    }
+    match ffi::sqlite3_value_type(val) {
+        ffi::SQLITE_INTEGER => serde_json::Value::Number(ffi::sqlite3_value_int64(val).into()),
+        ffi::SQLITE_FLOAT => {
+            let num = ffi::sqlite3_value_double(val);
+            serde_json::Number::from_f64(num)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null)
+        }
+        ffi::SQLITE_TEXT => {
+            let text = ffi::sqlite3_value_text(val);
+            let len = ffi::sqlite3_value_bytes(val);
+            if text.is_null() || len <= 0 {
+                serde_json::Value::String(String::new())
+            } else {
+                let slice = slice::from_raw_parts(text, len as usize);
+                let s = String::from_utf8_lossy(slice).into_owned();
+                serde_json::Value::String(s)
+            }
+        }
+        ffi::SQLITE_BLOB => {
+            let blob = ffi::sqlite3_value_blob(val);
+            let len = ffi::sqlite3_value_bytes(val);
+            if blob.is_null() || len <= 0 {
+                serde_json::Value::String(String::new())
+            } else {
+                let slice = slice::from_raw_parts(blob.cast::<u8>(), len as usize);
+                if slice.starts_with(b"LBJ\x01") {
+                    if let Ok(doc) = lilia_core::json::BinaryDoc::from_bytes(slice.to_vec()) {
+                        return doc.to_json_value();
+                    }
+                }
+                if let Ok(s) = std::str::from_utf8(slice) {
+                    if let Ok(json_val) = serde_json::from_str(s) {
+                        return json_val;
+                    }
+                    serde_json::Value::String(s.to_string())
+                } else {
+                    let mut hex = String::with_capacity(slice.len() * 2);
+                    for b in slice {
+                        use std::fmt::Write;
+                        let _ = write!(&mut hex, "{b:02x}");
+                    }
+                    serde_json::Value::String(hex)
+                }
+            }
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Safe iterator over individual row modifications in an SQLite binary changeset.
+pub struct ChangesetIterator {
+    raw: *mut ffi::sqlite3_changeset_iter,
+}
+
+unsafe impl Send for ChangesetIterator {}
+
+impl Drop for ChangesetIterator {
+    fn drop(&mut self) {
+        if !self.raw.is_null() {
+            unsafe {
+                ffi::sqlite3changeset_finalize(self.raw);
+            }
+        }
+    }
+}
+
+impl ChangesetIterator {
+    /// Create a new iterator over a binary changeset buffer.
+    pub fn new(changeset: &[u8]) -> Result<Self> {
+        if changeset.is_empty() {
+            return Err(LiliaError::new(
+                ErrorCode::InvalidInput,
+                "empty changeset cannot be parsed",
+                false,
+            ));
+        }
+
+        let mut raw = ptr::null_mut();
+        let rc = unsafe {
+            ffi::sqlite3changeset_start(
+                &mut raw,
+                changeset.len() as c_int,
+                changeset.as_ptr().cast::<c_void>(),
+            )
+        };
+
+        if rc != ffi::SQLITE_OK || raw.is_null() {
+            return Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("failed to start changeset iterator: rc={rc}"),
+                false,
+            ));
+        }
+
+        Ok(Self { raw })
+    }
+
+    /// Advance to and return the next row change, or `None` if finished.
+    pub fn next_change(&mut self) -> Result<Option<RowChange>> {
+        let rc = unsafe { ffi::sqlite3changeset_next(self.raw) };
+        if rc == ffi::SQLITE_DONE {
+            return Ok(None);
+        }
+        if rc != ffi::SQLITE_ROW {
+            return Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("changeset iterator next failed: rc={rc}"),
+                false,
+            ));
+        }
+
+        let mut z_tab: *const c_char = ptr::null();
+        let mut n_col: c_int = 0;
+        let mut op: c_int = 0;
+        let mut b_indirect: c_int = 0;
+
+        let rc = unsafe {
+            ffi::sqlite3changeset_op(self.raw, &mut z_tab, &mut n_col, &mut op, &mut b_indirect)
+        };
+        if rc != ffi::SQLITE_OK {
+            return Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("failed to get changeset op: rc={rc}"),
+                false,
+            ));
+        }
+
+        let table = if z_tab.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(z_tab).to_string_lossy().into_owned() }
+        };
+
+        let change_op = match op {
+            ffi::SQLITE_INSERT => ChangeOp::Insert,
+            ffi::SQLITE_UPDATE => ChangeOp::Update,
+            ffi::SQLITE_DELETE => ChangeOp::Delete,
+            other => {
+                return Err(LiliaError::new(
+                    ErrorCode::Storage,
+                    format!("unknown changeset op: {other}"),
+                    false,
+                ));
+            }
+        };
+
+        let col_count = n_col.max(0) as usize;
+        let mut old_values = Vec::with_capacity(col_count);
+        let mut new_values = Vec::with_capacity(col_count);
+
+        match change_op {
+            ChangeOp::Insert => {
+                for i in 0..n_col {
+                    let mut p_val: *mut ffi::sqlite3_value = ptr::null_mut();
+                    let rc = unsafe { ffi::sqlite3changeset_new(self.raw, i, &mut p_val) };
+                    if rc == ffi::SQLITE_OK && !p_val.is_null() {
+                        let val = unsafe { sqlite3_value_to_json(p_val) };
+                        new_values.push(Some(val));
+                    } else {
+                        new_values.push(None);
+                    }
+                }
+            }
+            ChangeOp::Delete => {
+                for i in 0..n_col {
+                    let mut p_val: *mut ffi::sqlite3_value = ptr::null_mut();
+                    let rc = unsafe { ffi::sqlite3changeset_old(self.raw, i, &mut p_val) };
+                    if rc == ffi::SQLITE_OK && !p_val.is_null() {
+                        let val = unsafe { sqlite3_value_to_json(p_val) };
+                        old_values.push(Some(val));
+                    } else {
+                        old_values.push(None);
+                    }
+                }
+            }
+            ChangeOp::Update => {
+                for i in 0..n_col {
+                    let mut p_old: *mut ffi::sqlite3_value = ptr::null_mut();
+                    let rc = unsafe { ffi::sqlite3changeset_old(self.raw, i, &mut p_old) };
+                    if rc == ffi::SQLITE_OK && !p_old.is_null() {
+                        let val = unsafe { sqlite3_value_to_json(p_old) };
+                        old_values.push(Some(val));
+                    } else {
+                        old_values.push(None);
+                    }
+
+                    let mut p_new: *mut ffi::sqlite3_value = ptr::null_mut();
+                    let rc = unsafe { ffi::sqlite3changeset_new(self.raw, i, &mut p_new) };
+                    if rc == ffi::SQLITE_OK && !p_new.is_null() {
+                        let val = unsafe { sqlite3_value_to_json(p_new) };
+                        new_values.push(Some(val));
+                    } else {
+                        new_values.push(None);
+                    }
+                }
+            }
+        }
+
+        Ok(Some(RowChange {
+            table,
+            op: change_op,
+            is_indirect: b_indirect != 0,
+            old_values,
+            new_values,
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_changeset_iterator_captures_insert_update_delete() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("changeset_test.db");
+        let mut conn = NativeConnection::open_file(&db_path).unwrap();
+        conn.exec(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, status TEXT, priority INT);",
+        )
+        .unwrap();
+
+        let session = NativeSession::create(&conn, "main").unwrap();
+        session.attach_all().unwrap();
+
+        let tx = conn.transaction().unwrap();
+        tx.exec("INSERT INTO tasks VALUES ('T1', 'Design', 'pending', 1);")
+            .unwrap();
+        tx.exec("INSERT INTO tasks VALUES ('T2', 'Build', 'draft', 2);")
+            .unwrap();
+        tx.commit().unwrap();
+
+        let cs = session.changeset().unwrap();
+        assert!(!cs.is_empty());
+
+        let mut iter = ChangesetIterator::new(&cs).unwrap();
+        let mut changes = Vec::new();
+        while let Some(change) = iter.next_change().unwrap() {
+            changes.push(change);
+        }
+
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].table, "tasks");
+        assert_eq!(changes[0].op, ChangeOp::Insert);
+
+        let t1 = changes
+            .iter()
+            .find(|c| c.new_values[0] == Some(serde_json::json!("T1")))
+            .unwrap();
+        assert_eq!(t1.new_values[2], Some(serde_json::json!("pending")));
+
+        let t2 = changes
+            .iter()
+            .find(|c| c.new_values[0] == Some(serde_json::json!("T2")))
+            .unwrap();
+        assert_eq!(t2.new_values[2], Some(serde_json::json!("draft")));
+
+        // Now test UPDATE and DELETE
+        let session2 = NativeSession::create(&conn, "main").unwrap();
+        session2.attach_all().unwrap();
+
+        let tx2 = conn.transaction().unwrap();
+        tx2.exec("UPDATE tasks SET status = 'pending' WHERE id = 'T2';")
+            .unwrap();
+        tx2.exec("DELETE FROM tasks WHERE id = 'T1';").unwrap();
+        tx2.commit().unwrap();
+
+        let cs2 = session2.changeset().unwrap();
+        let mut iter2 = ChangesetIterator::new(&cs2).unwrap();
+        let mut changes2 = Vec::new();
+        while let Some(change) = iter2.next_change().unwrap() {
+            changes2.push(change);
+        }
+
+        assert_eq!(changes2.len(), 2);
+        // One update, one delete
+        let update_change = changes2.iter().find(|c| c.op == ChangeOp::Update).unwrap();
+        assert_eq!(
+            update_change.old_values[2],
+            Some(serde_json::json!("draft"))
+        );
+        assert_eq!(
+            update_change.new_values[2],
+            Some(serde_json::json!("pending"))
+        );
+
+        let delete_change = changes2.iter().find(|c| c.op == ChangeOp::Delete).unwrap();
+        assert_eq!(delete_change.old_values[0], Some(serde_json::json!("T1")));
+    }
+}

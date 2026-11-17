@@ -1,18 +1,105 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type DatabaseMode = "embedded" | "daemon";
 export type Durability = "durable" | "balanced" | "performance";
+export type ResourceProfile = "server" | "mobile" | "constrained";
+
+export interface CheckpointPolicy {
+  walBytes?: number;
+  intervalMs?: number;
+}
+
+export interface JsonOptions {
+  binaryStorage?: boolean;
+  autoTrainDict?: boolean;
+  dictSampleThreshold?: number;
+  dictTargetSizeBytes?: number;
+  disabledAutoTrainSpaces?: string[];
+}
+
+export interface TimeSeriesOptions {
+  autoRetention?: boolean;
+  retentionIntervalMs?: number;
+}
+
+export interface CasOptions {
+  enabled?: boolean;
+  thresholdBytes?: number;
+  hashAlgorithm?: "sha256" | "blake3";
+  blobsDir?: string;
+  autoPurgeOnCheckpoint?: boolean;
+}
+
+export type ShardGranularity = "monthly" | "daily" | "yearly";
+
+export type ShardStatus = "active" | "warm" | "cold" | "detached";
+
+export interface ShardingOptions {
+  granularity?: ShardGranularity;
+  autoRollover?: boolean;
+  maxAttachedShards?: number;
+  shardsDir?: string;
+  zstdLevel?: number;
+  autoArchiveOldest?: boolean;
+}
+
+export interface ShardInfo {
+  shardId: string;
+  status: ShardStatus;
+  periodStartMs: number;
+  periodEndMs: number;
+  filePath: string;
+  isCompressed: boolean;
+  uncompressedBytes: number;
+  compressedBytes: number;
+  checksum?: string;
+  createdAtMs: number;
+  archivedAtMs?: number;
+}
+
+export interface ShardArchiveResult {
+  shardId: string;
+  archivePath: string;
+  originalSizeBytes: number;
+  compressedSizeBytes: number;
+  compressionRatio: number;
+  checksum: string;
+  durationMs: number;
+  archivedAtMs: number;
+}
+
+export interface BlobDescriptor {
+  $blob: string;
+  hash: string;
+  sizeBytes: number;
+  mimeType?: string;
+}
+
+export interface BlobGcStats {
+  orphansPurged: number;
+  bytesReclaimed: number;
+}
 
 export interface OpenOptions {
   path: string;
   mode?: DatabaseMode;
   durability?: Durability;
+  profile?: ResourceProfile;
   plugins?: readonly ("kv" | "json")[];
   endpoint?: string;
   tokenFile?: string;
   busyTimeoutMs?: number;
   writerQueueCapacity?: number;
   readPoolSize?: number;
-  checkpointPolicy?: { walBytes?: number; intervalMs?: number };
+  mmapSizeBytes?: number;
+  cacheSizeKib?: number;
+  undoLogCapacity?: number;
+  checkpointPolicy?: CheckpointPolicy;
+  jsonOptions?: JsonOptions;
+  timeseriesOptions?: TimeSeriesOptions;
+  casOptions?: CasOptions;
+  sharding?: ShardingOptions;
+  nodeId?: string;
+  maxDriftMs?: number;
   encryptionKey?: string;
   signal?: AbortSignal;
 }
@@ -41,6 +128,63 @@ export interface JsonIndexInfo {
 export interface CreateIndexOptions {
   name?: string;
   path?: string;
+  filter?: string;
+}
+
+export interface JsonRevisionInfo {
+  space: string;
+  id: string;
+  version: bigint;
+  timestampMs: number;
+  isDeletion: boolean;
+  isKeyframe: boolean;
+  patch?: JsonValue;
+}
+
+export interface DictStats {
+  space: string;
+  dictId: number;
+  sampleCount: number;
+  dictSize: number;
+  createdAtMs: number;
+}
+
+export type ConflictResolutionStrategy = "last_write_wins" | "three_way_merge" | "manual";
+export type CausalRelation = "ancestor" | "descendant" | "identical" | "concurrent";
+
+export interface HlcRecord {
+  model: string;
+  space: string;
+  id: string;
+  hlc: string;
+  parentHlc?: string;
+  nodeId: string;
+  updatedAtMs: number;
+}
+
+export interface HlcMutationOutcome {
+  hlc: string;
+  version: bigint;
+  causalRelation: CausalRelation;
+  conflictDetected: boolean;
+  conflictId?: number;
+  resolvedBy?: ConflictResolutionStrategy;
+}
+
+export interface ConflictRecord {
+  id?: number;
+  model: string;
+  space: string;
+  docId: string;
+  baseHlc?: string;
+  oursHlc: string;
+  theirsHlc: string;
+  oursValue: JsonValue;
+  theirsValue: JsonValue;
+  resolvedValue?: JsonValue;
+  resolutionStrategy: ConflictResolutionStrategy;
+  status: string;
+  detectedAtMs: number;
 }
 
 export interface KvGetOptions {
@@ -73,6 +217,13 @@ export interface JsonPutOptions {
   signal?: AbortSignal;
 }
 
+export interface JsonPutHlcOptions {
+  hlc?: string;
+  parentHlc?: string;
+  strategy?: ConflictResolutionStrategy;
+  signal?: AbortSignal;
+}
+
 export interface JsonDeleteOptions {
   ifVersion?: bigint;
   signal?: AbortSignal;
@@ -84,9 +235,21 @@ export interface JsonScanOptions {
   signal?: AbortSignal;
 }
 
+export interface JsonScanPrefixOptions {
+  afterId?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}
+
 export interface JsonFindOptions {
   after?: string;
   limit?: number;
+  signal?: AbortSignal;
+}
+
+export interface JsonTrainDictionaryOptions {
+  sampleCount?: number;
+  dictSize?: number;
   signal?: AbortSignal;
 }
 
@@ -107,6 +270,105 @@ export interface CloseOptions {
 }
 
 export type GraphDirection = "outgoing" | "incoming" | "both";
+export type CentralityType = "betweenness" | "closeness" | "degree";
+export type ComponentType = "strongly_connected" | "weakly_connected";
+
+export interface GraphNode {
+  graph: string;
+  id: string;
+  kind: string;
+  metadata: JsonValue;
+  docSpace?: string;
+  docId?: string;
+}
+
+export interface GraphEdge {
+  graph: string;
+  source: string;
+  target: string;
+  kind: string;
+  weight: number;
+}
+
+export interface PathEdge {
+  source: string;
+  target: string;
+  kind: string;
+  weight: number;
+}
+
+export interface WeightedPath {
+  nodes: string[];
+  totalWeight: number;
+  edges: PathEdge[];
+}
+
+export interface NodeScore {
+  node: string;
+  score: number;
+}
+
+export interface ImpactAnalysis {
+  direct: string[];
+  dependants: string[];
+  totalAffected: number;
+}
+
+export interface PageRankConfig {
+  dampingFactor?: number;
+  maxIterations?: number;
+  tolerance?: number;
+  seeds?: string[];
+  direction?: GraphDirection;
+  edgeKind?: string;
+}
+
+export interface CypherResult<T = Record<string, JsonValue>> {
+  columns: string[];
+  rows: JsonValue[][];
+  records: T[];
+}
+
+export interface GraphSetNodeOptions {
+  docSpace?: string;
+  docId?: string;
+  signal?: AbortSignal;
+}
+
+export interface GraphAddEdgeOptions {
+  weight?: number;
+  signal?: AbortSignal;
+}
+
+export interface GraphTraversalOptions {
+  direction?: GraphDirection;
+  kindFilter?: string;
+  signal?: AbortSignal;
+}
+
+export interface GraphListNodesOptions {
+  kind?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+export interface GraphListEdgesOptions {
+  source?: string;
+  target?: string;
+  kind?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+export interface GraphCentralityOptions extends GraphTraversalOptions {
+  normalized?: boolean;
+}
+
+export interface GraphFindCyclesOptions {
+  maxCycles?: number;
+  kindFilter?: string;
+  signal?: AbortSignal;
+}
 
 export interface FtsHit {
   collection: string;
@@ -118,10 +380,51 @@ export interface FtsHit {
 export type VectorElementType = "float32" | "int8" | "bit";
 export type VectorMetric = "cosine" | "l2" | "dot" | "hamming";
 
+export interface HnswConfig {
+  m?: number;
+  efConstruction?: number;
+  efSearch?: number;
+  metric?: VectorMetric;
+  elementType?: VectorElementType;
+  dim: number;
+}
+
+export interface VectorIndexInfo {
+  collection: string;
+  nodeCount: number;
+  maxLevel: number;
+  m: number;
+  efConstruction: number;
+  efSearch: number;
+  metric: VectorMetric;
+  elementType: VectorElementType;
+  dim: number;
+}
+
+export interface VectorSearchOptions {
+  dim?: number;
+  elementType?: VectorElementType;
+  metric?: VectorMetric;
+  limit?: number;
+  signal?: AbortSignal;
+}
+
 export interface VectorHit {
   collection: string;
   id: string;
   distance: number;
+}
+
+export interface AutoEmbedConfig {
+  sourceField: string;
+  targetField?: string;
+  model: "all-minilm-l6-v2" | "minilm-l6";
+}
+
+export interface EmbedStatus {
+  pending: number;
+  failed: number;
+  lastError?: string;
 }
 
 export interface HybridHit {
@@ -133,19 +436,152 @@ export interface HybridHit {
   vectorDistance?: number;
 }
 
+export interface TimeSeriesPoint {
+  timestamp: number;
+  value: number;
+}
+
+export interface TimeSeriesStats {
+  min: number;
+  max: number;
+  avg: number;
+  sum: number;
+  count: number;
+}
+
+export type DownsampleAggregation = "avg" | "min" | "max" | "sum" | "first" | "last" | "count";
+
+export interface TimeSeriesRetentionRule {
+  resolutionMs: number;
+  retentionMs?: number | null;
+  aggregation: DownsampleAggregation;
+}
+
+export interface TimeSeriesLifecyclePolicy {
+  seriesPattern: string;
+  rules: TimeSeriesRetentionRule[];
+}
+
+export interface TimeSeriesRetentionStats {
+  seriesProcessed: number;
+  downsampledPointsCreated: number;
+  chunksPruned: number;
+  bytesReclaimedApprox: number;
+}
+
+export interface GpsPoint {
+  timestamp: number;
+  latitude: number;
+  longitude: number;
+  altitude?: number;
+  speed?: number;
+  accuracy?: number;
+}
+
+export interface GeofenceMatch {
+  id: string;
+  name: string;
+  category: string;
+  metadata?: string;
+}
+
+export interface GeoAddFenceOptions {
+  metadata?: string;
+  signal?: AbortSignal;
+}
+
+export interface GeoTrackQueryOptions {
+  startTime?: number;
+  endTime?: number;
+  signal?: AbortSignal;
+}
+
+export interface CrdtCounterState {
+  p: Record<string, number>;
+  n: Record<string, number>;
+}
+
+export interface CrdtOrSetState {
+  entries: Record<string, string[]>;
+  tombstones: Record<string, number>;
+}
+
+export interface CrdtLogicalClock {
+  timestampMs: number;
+  counter: number;
+}
+
+export interface CrdtLwwClock {
+  clock: CrdtLogicalClock;
+  actorId: string;
+}
+
+export interface CrdtLwwField {
+  value: JsonValue;
+  clock: CrdtLwwClock;
+  isDeleted: boolean;
+}
+
+export interface LwwJsonDocumentState {
+  fields: Record<string, CrdtLwwField>;
+}
+
+export interface UndoResult {
+  id: number;
+  summary: string;
+  timestampMs: number;
+}
+
+export interface RedoResult {
+  id: number;
+  summary: string;
+  timestampMs: number;
+}
+
+export interface UndoEntry {
+  id: number;
+  timestampMs: number;
+  summary: string;
+  undone: boolean;
+}
+
+export interface CheckpointStats {
+  attempts: number;
+  incomplete: number;
+  logFrames: number;
+  checkpointedFrames: number;
+  lastError?: string;
+}
+
+export interface TableStorageStat {
+  name: string;
+  pageCount: number;
+  payloadBytes: number;
+  unusedBytes: number;
+}
+
 export type BatchOperation =
   | { model: "kv_set"; namespace: string; key: Uint8Array; value: Uint8Array; ifVersion?: bigint; expiresAtMs?: number }
   | { model: "kv_delete"; namespace: string; key: Uint8Array; ifVersion?: bigint }
   | { model: "json_put"; space: string; id: string; value: JsonValue; ifVersion?: bigint }
+  | { model: "json_put_raw"; space: string; id: string; data: Uint8Array; ifVersion?: bigint }
+  | { model: "json_put_hlc"; space: string; id: string; value: JsonValue; hlc?: string; parentHlc?: string; strategy?: ConflictResolutionStrategy }
   | { model: "json_delete"; space: string; id: string; ifVersion?: bigint }
-  | { model: "graph_set_node"; graph: string; id: string; kind: string; metadata?: JsonValue }
+  | { model: "graph_set_node"; graph: string; id: string; kind: string; metadata?: JsonValue; docSpace?: string; docId?: string }
   | { model: "graph_delete_node"; graph: string; id: string }
-  | { model: "graph_add_edge"; graph: string; source: string; target: string; kind: string }
+  | { model: "graph_add_edge"; graph: string; source: string; target: string; kind: string; weight?: number }
   | { model: "graph_remove_edge"; graph: string; source: string; target: string; kind: string }
   | { model: "fts_index"; collection: string; docId: string; content: string }
   | { model: "fts_delete"; collection: string; docId: string }
   | { model: "vector_set"; collection: string; id: string; dim: number; elementType?: VectorElementType; vector: Uint8Array | number[] | Float32Array }
-  | { model: "vector_delete"; collection: string; id: string };
+  | { model: "vector_delete"; collection: string; id: string }
+  | { model: "crdt_pn_counter_increment"; space: string; id: string; actorId: string; amount: number | bigint }
+  | { model: "crdt_pn_counter_decrement"; space: string; id: string; actorId: string; amount: number | bigint }
+  | { model: "crdt_or_set_add"; space: string; id: string; actorId: string; element: string }
+  | { model: "crdt_or_set_remove"; space: string; id: string; element: string; timestampMs?: number }
+  | { model: "crdt_json_set_field"; space: string; id: string; actorId: string; path: string; value: JsonValue; timestampMs?: number }
+  | { model: "crdt_json_delete_field"; space: string; id: string; actorId: string; path: string; timestampMs?: number }
+  | { model: "crdt_json_merge"; space: string; id: string; state: Uint8Array | LwwJsonDocumentState };
 
 export type DatabaseEvent =
   | { type: "kv_mutated"; namespace: string; key: Uint8Array; version?: bigint; deleted: boolean }
@@ -153,7 +589,11 @@ export type DatabaseEvent =
   | { type: "graph_node_mutated"; graph: string; id: string; deleted: boolean }
   | { type: "graph_edge_mutated"; graph: string; source: string; target: string; kind: string; deleted: boolean }
   | { type: "fts_mutated"; collection: string; docId: string; deleted: boolean }
-  | { type: "vector_mutated"; collection: string; id: string; deleted: boolean };
+  | { type: "vector_mutated"; collection: string; id: string; deleted: boolean }
+  | { type: "crdt_counter_mutated"; space: string; id: string; value: number }
+  | { type: "crdt_set_mutated"; space: string; id: string; element: string; deleted: boolean }
+  | { type: "crdt_json_mutated"; space: string; id: string; version?: bigint }
+  | { type: "conflict_detected"; model: string; space: string; id: string; baseHlc?: string; oursHlc: string; theirsHlc: string; resolutionStrategy: ConflictResolutionStrategy };
 
 export interface WatchSubscription extends Disposable, AsyncDisposable {
   unsubscribe(): void | Promise<void>;
@@ -162,7 +602,36 @@ export interface WatchSubscription extends Disposable, AsyncDisposable {
   [Symbol.asyncDispose](): Promise<void>;
 }
 
-export interface MutationResult { version?: bigint; deleted: boolean }
+export interface LiveQueryDiff<T = Record<string, unknown>> {
+  subscriptionId: number;
+  added: T[];
+  updated: T[];
+  removed: T[];
+  isInitial: boolean;
+}
+
+export interface LiveQuerySubscription extends Disposable, AsyncDisposable {
+  unsubscribe(): void | Promise<void>;
+  (): void | Promise<void>;
+  [Symbol.dispose](): void;
+  [Symbol.asyncDispose](): Promise<void>;
+}
+
+export interface MaterializedViewInfo {
+  name: string;
+  sourceTable: string;
+  query: string;
+  storageTable: string;
+  groupBy?: string;
+  createdAtMs: number;
+}
+
+export interface MutationResult {
+  version?: bigint;
+  deleted: boolean;
+  hlc?: string;
+  conflictDetected?: boolean;
+}
 
 export interface SqlQueryResult<T = Record<string, unknown>> {
   columns: string[];

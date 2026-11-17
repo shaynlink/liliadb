@@ -9,22 +9,14 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(target_arch = "wasm32"))]
 use lilia_core::LiliaError;
-use lilia_core::{ErrorCode, Result};
+#[cfg(not(target_arch = "wasm32"))]
+use lilia_core::ErrorCode;
+pub use lilia_core::CheckpointStats;
+use lilia_core::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use lilia_sqlite_native::NativeConnection;
-use serde::{Deserialize, Serialize};
 
 use crate::engine::CheckpointPolicy;
-
-/// Background attempts only; explicit checkpoints are not included.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CheckpointStats {
-    pub attempts: u64,
-    pub incomplete: u64,
-    pub log_frames: i64,
-    pub checkpointed_frames: i64,
-    pub last_error: Option<ErrorCode>,
-}
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
@@ -42,7 +34,12 @@ pub(crate) struct Checkpointer {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Checkpointer {
-    pub(crate) fn start(path: &Path, policy: CheckpointPolicy, synchronous: &str) -> Result<Self> {
+    pub(crate) fn start(
+        path: &Path,
+        policy: CheckpointPolicy,
+        synchronous: &str,
+        cas: Option<Arc<crate::cas::CasEngine>>,
+    ) -> Result<Self> {
         let connection = NativeConnection::open_with_config(path, synchronous, 0, 0, -2048)?;
         connection.pragma_update("wal_autocheckpoint", "0")?;
         connection.pragma_update("temp_store", "MEMORY")?;
@@ -55,7 +52,7 @@ impl Checkpointer {
         let shared = Arc::clone(&stats);
         let worker = thread::Builder::new()
             .name("lilia-checkpoint".into())
-            .spawn(move || run(&connection, page_size, policy, &receive, &shared))
+            .spawn(move || run(&connection, page_size, policy, &receive, &shared, cas))
             .map_err(|error| LiliaError::new(ErrorCode::Io, error.to_string(), false))?;
         let service = Self {
             wake: Some(wake),
@@ -88,6 +85,7 @@ impl Checkpointer {
         _path: &Path,
         _policy: CheckpointPolicy,
         _synchronous: &str,
+        _cas: Option<Arc<crate::cas::CasEngine>>,
     ) -> Result<Self> {
         Ok(Self {
             stats: Arc::new(Mutex::new(CheckpointStats::default())),
@@ -122,6 +120,7 @@ fn run(
     policy: CheckpointPolicy,
     receive: &mpsc::Receiver<()>,
     stats: &Mutex<CheckpointStats>,
+    cas: Option<Arc<crate::cas::CasEngine>>,
 ) {
     let interval = Duration::from_millis(policy.interval_ms);
     let mut tick = Instant::now();
@@ -153,6 +152,10 @@ fn run(
                 defer_until_tick = busy != 0 || (log >= 0 && copied < log);
                 if defer_until_tick {
                     stats.incomplete = stats.incomplete.saturating_add(1);
+                } else if let Some(ref cas_engine) = cas {
+                    if cas_engine.options().enabled && cas_engine.options().auto_purge_on_checkpoint {
+                        let _ = crate::cas::purge_orphan_blobs(connection, cas_engine);
+                    }
                 }
             }
             Ok(None) => {}

@@ -11,11 +11,13 @@ axum.workspace = true
 base64.workspace = true
 clap.workspace = true
 serde.workspace = true
+serde_bytes.workspace = true
 serde_json.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
 lilia-core = { path = "../../crates/lilia-core" }
 lilia-storage-sqlite = { path = "../../crates/lilia-storage-sqlite" }
+lilia-graph = { path = "../../crates/lilia-graph" }
 lilia-plugin-api = { path = "../../crates/lilia-plugin-api" }
 lilia-protocol = { path = "../../crates/lilia-protocol" }
 rand.workspace = true

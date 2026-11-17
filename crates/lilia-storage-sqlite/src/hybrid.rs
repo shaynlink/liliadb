@@ -184,6 +184,7 @@ impl Database {
         }
         drop(stmt);
         drop(conn);
+        self.autotune.record_index_use(space, index_name);
 
         let candidate_refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
         self.vector_search_filtered(

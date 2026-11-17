@@ -1,0 +1,33 @@
+[package]
+name = "lilia-embed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Runs inference on the Apple GPU through Metal.
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+# Uses the Apple Accelerate framework for CPU inference.
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+# Enables ONNX runtime backend for Android NNAPI, DirectML, and ONNX models.
+onnx = ["dep:ort"]
+
+[dependencies]
+lilia-core = { path = "../lilia-core" }
+candle-core = "0.11.1"
+candle-nn = "0.11.1"
+candle-transformers = "0.11.1"
+serde_json.workspace = true
+thiserror.workspace = true
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
+ort = { version = "=2.0.0-rc.9", optional = true }
+
+[dev-dependencies]
+lilia-storage-sqlite = { path = "../lilia-storage-sqlite" }
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

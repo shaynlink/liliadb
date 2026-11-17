@@ -103,12 +103,12 @@ fn codec_encrypts_kv_and_json_at_rest() {
         .json_get("credentials", "user1")
         .expect("json_get")
         .expect("exists");
-    assert_eq!(json_val.value["username"], "alice");
-    assert_eq!(json_val.value["apikey"], "secret-key-999");
+    assert_eq!(json_val.value()["username"], "alice");
+    assert_eq!(json_val.value()["apikey"], "secret-key-999");
 
     let json_scan = db.json_scan("credentials", None, 10).expect("json_scan");
     assert_eq!(json_scan.len(), 1);
-    assert_eq!(json_scan[0].value["username"], "alice");
+    assert_eq!(json_scan[0].value()["username"], "alice");
 
     // Close and inspect raw SQLite storage
     drop(db);

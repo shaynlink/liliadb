@@ -249,24 +249,123 @@ Run identical LiliaDB storage engines across web browsers and serverless edge fu
 
 ---
 
+### 7. In-Database Embeddings (`lilia-embed`, Rust API)
+Declare which text field to embed and the engine keeps the HNSW index up to date; the application never computes a vector:
+
+```rust
+let embedder = CandleEmbedder::load(BuiltinModel::MiniLmL6V2, "assets/all-MiniLM-L6-v2", DevicePreference::Auto)?;
+let db = Database::open(DatabaseOptions::durable("app.lilia").with_embedder(Arc::new(embedder)))?;
+
+db.json().create_collection("articles", CollectionOptions {
+    auto_embed: Some(AutoEmbedConfig::new("content", BuiltinModel::MiniLmL6V2)),
+    ..CollectionOptions::default()
+})?;
+
+// Writes return immediately; a background thread embeds the documents whose text changed.
+let hits = db.vector_search_text("articles", "how do I cook noodles?", 5)?;
+```
+
+- **Background and crash-safe**: writes queue the document in the same transaction; inference runs outside any lock and the queue is drained again after a restart.
+- **Documents are never rewritten**: vectors live in the vector collection of the same name, under the document id, so versions and optimistic writes are untouched.
+- **No network, no bundled blob**: the application ships the `all-MiniLM-L6-v2` files (about 90 MB) and passes the folder. Inference is pure Rust (candle), with optional Metal and Accelerate support on Apple platforms.
+- Available from Rust today; the other SDK surfaces do not expose it yet.
+
+---
+
+### 8. Cross-Model Integrity Contracts (Foreign Keys & JSON CHECK, Rust API)
+Enforce strong consistency across KV, JSON, and Graph models with declarative contracts evaluated inside the SQLite WAL write transaction:
+
+```rust
+// 1. Declarative CHECK constraints on JSON collections (evaluated in SQL 3-valued Kleene logic)
+db.json().create_collection("accounts", CollectionOptions {
+    check: Some("$.balance >= 0.0 AND length($.iban) == 27".into()),
+    ..CollectionOptions::default()
+})?;
+
+// 2. Cross-Model Foreign Keys: Graph Nodes -> JSON Documents with CASCADE
+db.integrity().add_reference(
+    Reference::graph_nodes("social", "users")
+        .on_delete(RefAction::Cascade)
+)?;
+
+// 3. Cross-Model Foreign Keys: KV Keys -> JSON Documents with RESTRICT
+db.integrity().add_reference(
+    Reference::kv("sessions", "users")
+        .key(KeyMapping::Prefix { separator: ':' })
+        .on_delete(RefAction::Restrict)
+)?;
+```
+
+- **Single Transactional Funnel**: Constraints are verified inside `transaction::apply`. A `json.delete("users", "user_42")` automatically cascades to delete the associated graph node and all its incident edges in one atomic commit.
+- **Fail-Fast Structured Errors**: Any mutation violating a CHECK or reference contract is immediately rejected with `CONSTRAINT_VIOLATION` (HTTP 409) containing detailed error context.
+- **Anti-Bypass Protection**: Direct SQL writes (`INSERT`, `UPDATE`, `DELETE`) to governed tables (`_lilia_json`, `_lilia_kv`, `_lilia_graph_nodes`) are automatically blocked when integrity contracts are declared.
+- **Strict Tier Pinning**: All collections participating in integrity contracts must live on the durable `StorageTier::Disk` tier.
+
+### 9. Vectorized Analytics (Arrow Columnar Engine, Rust API)
+
+SQLite is a row store: aggregating 500,000 rows walks the B-tree one row at a time. With the `analytics` feature, LiliaDB keeps opt-in **columnar projections** of JSON collections and SQL tables as Apache Arrow segments inside the database file and runs analytical SQL on them with DataFusion, in vectorized batches of 1,024 rows:
+
+```rust
+use lilia_storage_sqlite::{ColumnType, ColumnarTableSpec, Database, DatabaseOptions};
+
+let db = Database::open(DatabaseOptions::durable("app.lilia"))?;
+let analytics = db.analytics()?;
+analytics.create_table(
+    ColumnarTableSpec::json("users_col", "users")
+        .column("age", "$.age", ColumnType::Int64)
+        .column("city", "$.city", ColumnType::Utf8),
+)?;
+
+// Arrow record batches, or JSON rows with `query_json`.
+let output = analytics.query(
+    "SELECT city, count(*), avg(age) FROM users_col WHERE age > 30 GROUP BY city",
+)?;
+```
+
+- **Always current**: the row store remains the source of truth. Triggers track every changed row on every write path; queries overlay them on read and a background worker compacts them into segments.
+- **Columnar I/O**: one Arrow IPC chunk per column and per segment, zone maps to skip segments, a byte-bounded cache of decoded chunks. Only the columns a query references are read.
+- **Safe by construction**: read-only SQL, segments encoded through the database codec, field-level encrypted values left encrypted.
+- **Opt-in**: `lilia-storage-sqlite = { features = ["analytics"] }`, native targets. SIMD follows the build's target features: NEON on aarch64; on x86_64 compile with `-C target-cpu=x86-64-v3` (AVX2) or `x86-64-v4` (AVX-512).
+
+---
+
 ## Performance Benchmarks
 
 Calibrated throughput and latency distributions measured on Apple M3 Max (14 cores, macOS 25.6, SQLite WAL `Durability::Durable`, November 2026):
 
+### 1. Multi-Tier Storage Engine & Concurrency Benchmarks
+| Storage Tier / Architecture | Threads | Workload | Throughput (ops/sec) | Latency $p_{50}$ | Latency $p_{99}$ | Architectural Highlights |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Memory Tier (`StorageTier::Memory`)** | 1 | 10,000 | **1,570,126 ops/s** | **0.50 µs** | 4.63 µs | Sub-microsecond pure RAM engine, zero disk I/O, zero WAL |
+| **Memory Tier (`StorageTier::Memory`)** | 8 | 10,000 | **972,136 ops/s** | **3.75 µs** | 44.92 µs | Concurrent multi-threaded lock-free in-memory storage |
+| **Buffered RingBuffer (`StorageTier::Buffered`)** | 8 | 10,000 | **386,462 ops/s** | **3.00 µs** | 33.04 µs | Enqueue rate **1,399,474 ops/s**, async micro-batch flush to SQLite |
+| **GroupSync Multi-Thread Commit** | 8 | 10,000 | **19,481 ops/s** | **372.83 µs** | 929.17 µs | Shared WAL commit (**10.8x faster** under concurrent write contention) |
+| **Buffered IoT Gorilla TS Stream** | 1 | 10,000 | **3,446,790 pts/s** | **0.25 µs** | 0.50 µs | Auto-coalescing single-point pushes into Gorilla float chunks |
+
+### 2. Standard ACID Disk Persistence Across Execution Surfaces (`Durability::Durable`)
 | Surface | Workload | Batch Size | Throughput (ops/sec) | Latency $p_{50}$ | Latency $p_{99}$ |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Node.js (Node-API Sync)** | 10,000 | 1 | **9,799 ops/s** | 59.58 µs | 1453.57 µs |
-| **Daemon via IPC (Socket)** | 10,000 | 1 | **7,519 ops/s** | 101.29 µs | 205.71 µs |
-| **Daemon via HTTP Loopback** | 10,000 | 1 | **7,075 ops/s** | 109.92 µs | 241.76 µs |
-| **Rust Native Embedded** | 10,000 | 1 | **5,466 ops/s** | 56.27 µs | 3121.45 µs |
-| **Node.js (Node-API Sync)** | 10,000 | 100 | **207,250 ops/s** | 4.47 µs | 5.35 µs |
-| **Rust Native Embedded** | 10,000 | 100 | **172,503 ops/s** | 4.61 µs | 23.10 µs |
-| **Daemon via IPC (Socket)** | 10,000 | 100 | **172,747 ops/s** | 5.34 µs | 7.25 µs |
-| **Daemon via HTTP Loopback** | 10,000 | 100 | **149,918 ops/s** | 6.30 µs | 7.86 µs |
-| **Rust Native Bulk Ingest** | 100,000 | 500 | **298,308 ops/s** | 3.23 µs | 3.92 µs |
-| **Node.js (Node-API Sync)** | 100,000 | 500 | **256,193 ops/s** | 3.53 µs | 5.15 µs |
-| **Daemon via HTTP Bulk Ingest** | 100,000 | 500 | **203,038 ops/s** | 4.59 µs | 6.15 µs |
-| **Daemon via IPC Bulk Ingest** | 100,000 | 500 | **196,967 ops/s** | 4.48 µs | 9.43 µs |
+| **Node.js (Node-API Sync)** | 10,000 | 1 | **4,347 ops/s** | 193.42 µs | 437.42 µs |
+| **Daemon via HTTP Loopback** | 10,000 | 1 | **3,556 ops/s** | 268.60 µs | 456.80 µs |
+| **Node.js (Node-API Async)** | 10,000 | 1 | **3,518 ops/s** | 220.83 µs | 496.97 µs |
+| **Daemon via IPC (Socket)** | 10,000 | 1 | **3,353 ops/s** | 253.79 µs | 454.42 µs |
+| **Rust Native Embedded** | 10,000 | 1 | **1,797 ops/s** | 211.33 µs | 3807.74 µs |
+| **Node.js (Node-API Sync)** | 10,000 | 100 | **117,816 ops/s** | 7.67 µs | 10.85 µs |
+| **Daemon via IPC (Socket)** | 10,000 | 100 | **104,071 ops/s** | 9.06 µs | 14.26 µs |
+| **Node.js (Node-API Async)** | 10,000 | 100 | **98,157 ops/s** | 8.15 µs | 42.75 µs |
+| **Daemon via HTTP Loopback** | 10,000 | 100 | **97,907 ops/s** | 9.87 µs | 12.27 µs |
+| **Rust Native Embedded** | 10,000 | 100 | **94,867 ops/s** | 8.19 µs | 44.05 µs |
+| **Rust Native Bulk Ingest** | 100,000 | 500 | **145,547 ops/s** | 6.69 µs | 8.75 µs |
+| **Node.js (Node-API Sync)** | 100,000 | 500 | **131,563 ops/s** | 6.59 µs | 18.98 µs |
+| **Node.js (Node-API Async)** | 100,000 | 500 | **127,768 ops/s** | 6.62 µs | 30.87 µs |
+| **Daemon via HTTP Bulk Ingest** | 100,000 | 500 | **122,225 ops/s** | 7.57 µs | 22.07 µs |
+| **Daemon via IPC Bulk Ingest** | 100,000 | 500 | **117,370 ops/s** | 7.17 µs | 25.98 µs |
+
+### 3. Vectorized Analytics vs Row Store (500,000 rows, `analytics` feature)
+| Query | SQLite on JSON documents | SQLite on a typed table | Columnar, warm cache | Columnar, no cache |
+| :--- | :---: | :---: | :---: | :---: |
+| `count`/`sum`/`avg` with a filter | 5,637 ms | 18.9 ms | **0.97 ms** (513 M rows/s) | 2.60 ms |
+| `GROUP BY` (16 groups) with `count`/`avg` | 5,167 ms | 117.6 ms | **1.37 ms** (366 M rows/s) | 3.87 ms |
 
 Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) and the [Comparative Benchmark: LiliaDB vs Native SQLite & Ecosystems](docs/benchmarks_comparison.md).
 
@@ -279,6 +378,8 @@ Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) an
   - `lilia-core`: Storage primitives, vector types, HNSW algorithm, quantization, time-series, and geofencing.
   - `lilia-storage-sqlite`: SQLite engine adapter, HNSW vector storage, hybrid RRF search, migrations, and views.
   - `lilia-sqlite-native`: Direct SQLite amalgamation integration, extension loading, backup, and session API.
+  - `lilia-embed`: Text embedding backend (candle) for auto-embedded JSON collections.
+  - `lilia-analytics`: Vectorized analytics engine (Apache Arrow columnar segments, DataFusion), used by the `analytics` feature of `lilia-storage-sqlite`.
   - `lilia-ffi`: Universal C-ABI FFI wrapper for mobile and foreign language bindings.
   - `lilia-protocol`: Binary MessagePack IPC framing, handshake, and streaming request/response envelopes.
   - `lilia-plugin-api`: Plugin C-ABI, trust store, and ed25519 signature verification.

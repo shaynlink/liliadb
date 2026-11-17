@@ -324,7 +324,120 @@ Au-delà du KV, JSON, Graphe, FTS5 et SQL, LiliaDB intègre un sous-moteur vecto
    - Fonctions scalaires enregistrées : `lilia_vec_distance_cosine`, `lilia_vec_distance_l2`, `lilia_vec_distance_hamming`, `lilia_vec_quantize_sq8`, `lilia_vec_quantize_bit`, `lilia_vec_dimension`, `lilia_vec_to_json`, `lilia_vec_from_json`.
    - Vues SQL de supervision : `lilia_vectors` (vecteurs déchiffrés à la volée) et `lilia_vector_indexes` (métadonnées des index HNSW actifs).
 
-## Multi-Runtime Ecosystem (Node.js, Bun, Deno)
+6. **Embeddings calculés par le moteur (`auto_embed`, crate `lilia-embed`)** :
+   - Une collection JSON déclare le champ texte à embarquer (`CollectionOptions::auto_embed`, persisté dans `_lilia_catalog.auto_embed_json`). Le vecteur est rangé dans la collection vectorielle de même nom, sous l'id du document : le document n'est jamais réécrit, sa version ne change pas.
+   - **Écriture** : `put_json_doc` compare le texte source avant et après ; s'il a changé, le document est inscrit dans `_lilia_embed_queue` dans la même transaction. Une suppression l'inscrit aussi. `undo` et `redo`, qui rejouent des changesets bruts, réinscrivent les documents qu'ils touchent ; la file elle-même est exclue des changesets.
+   - **Worker `lilia-embed`** : un thread dédié lit les documents en attente, exécute l'inférence sans tenir aucun verrou, puis écrit en une transaction les `VectorSet` / `VectorDelete`, la mise à jour HNSW et le retrait de la file. Chaque résultat n'est appliqué que si le document contient encore le texte qui a été embarqué ; sinon l'entrée reste en file et le nouveau texte est traité au passage suivant. La cohérence est donc à terme : `wait_for_embeddings` permet d'attendre la convergence.
+   - **Échecs** : un lot en erreur est rejoué texte par texte ; un document fautif est retenté avec un délai exponentiel (`EmbedOptions`), puis signalé par `embed_status` sans bloquer les autres. Une nouvelle écriture du document le réarme.
+   - **Découplage** : le moteur ne dépend d'aucune bibliothèque d'inférence. Il pilote un `Embedder` (trait de `lilia-core`) injecté par `DatabaseOptions::with_embedder`. `lilia-embed` fournit `CandleEmbedder` (candle, pur Rust) pour `all-MiniLM-L6-v2` : pooling moyen pondéré par le masque d'attention, normalisation L2, 384 dimensions, troncature à 256 tokens. Les fichiers du modèle sont fournis par l'application.
+   - **Contraintes** : tier `Disk` obligatoire pour la collection JSON et sa collection vectorielle ; champ source non couvert par le chiffrement au niveau champ ; pas de worker sur `wasm32` (la déclaration y est refusée).
+
+## Cross-Model Integrity Contracts (Clés Étrangères Croisées & Contraintes CHECK)
+
+Le défi majeur d'une base de données multimodèle (KV, JSON, Graphe, Vecteur, Séries Temporelles, SQL) est de garantir la cohérence d'un modèle à l'autre sans désynchronisation silencieuse, sans processus asynchrone de réconciliation et sans lectures sales.
+
+LiliaDB intègre un sous-système déclaratif de contrats d'intégrité inter-modèles (`crates/lilia-core/src/integrity.rs`, `crates/lilia-core/src/json/expr/check.rs`, `crates/lilia-storage-sqlite/src/integrity.rs`) appliqué directement au sein de l'entonnoir transactionnel unique (`transaction::apply`) dans SQLite WAL.
+
+```mermaid
+flowchart TD
+    subgraph Write_Funnel["Entonnoir Transactionnel Unique (transaction::apply)"]
+        OP["BatchOperation (JsonPut, JsonDelete, GraphSetNode, KvSet)"]
+        GUARD{"Integrity Guard"}
+        CHECK{"CompiledCheck (Kleene 3VL)"}
+        CASCADE["Résolution Cascades (GraphDeleteNode, KvDelete)"]
+        SQLITE[("SQLite WAL (Transaction Atomique)")]
+    end
+
+    OP --> GUARD
+    GUARD -->|JsonPut| CHECK
+    CHECK -->|False| ERR["CONSTRAINT_VIOLATION (Rollback complet)"]
+    CHECK -->|True / Unknown| SQLITE
+    GUARD -->|JsonDelete (Parent)| CASCADE
+    CASCADE -->|Restrict & Enfants > 0| ERR
+    CASCADE -->|Cascade| SQLITE
+    GUARD -->|GraphSetNode / KvSet| REF_VAL{"Parent JSON existe ?"}
+    REF_VAL -->|Non| ERR
+    REF_VAL -->|Oui| SQLITE
+```
+
+### 1. Clés Étrangères Croisées Natives (Cross-Model Foreign Keys)
+
+Les clés étrangères inter-modèles permettent d'assujettir les entités d'un modèle (nœuds de graphe ou clés KV) à l'existence et au cycle de vie d'un document JSON parent.
+
+#### A. Liaisons Nœud de Graphe $\to$ Document JSON
+- **Déclaration** :
+  ```rust
+  db.integrity().add_reference(
+      Reference::graph_nodes("social", "users")
+          .on_delete(RefAction::Cascade)
+  )?;
+  ```
+- **Liaison explicite** :
+  Un nœud de graphe pointe vers un document JSON via `doc_space` et `doc_id` (dans `BatchOperation::GraphSetNode`). Si `doc_id` est omis, il prend par défaut la valeur de l'identifiant du nœud (`id`). L'ancien repli implicite sur le `kind` du nœud a été supprimé pour éliminer toute ambiguïté.
+- **Actions de cycle de vie (`RefAction`)** :
+  - `RefAction::Cascade` : La suppression d'un document JSON parent déclenche immédiatement et atomiquement la suppression du nœud dans le graphe (`GraphDeleteNode`), ce qui détruit également toutes ses arêtes incidentes entrantes et sortantes (`_lilia_graph_edges`).
+  - `RefAction::Restrict` : La suppression du document JSON est rejetée tant qu'un ou plusieurs nœuds enfants y font référence.
+  - `RefAction::SetNull` : La suppression du document détache les nœuds correspondants en mettant à jour leurs colonnes `doc_space` et `doc_id` à `NULL`, sans détruire le nœud ni ses arêtes.
+- **Option `required`** :
+  Lorsque `required: true`, chaque nœud créé dans le graphe doit obligatoirement être lié à un document existant de l'espace cible.
+
+#### B. Liaisons Clé KV $\to$ Document JSON
+- **Déclaration** :
+  ```rust
+  db.integrity().add_reference(
+      Reference::kv("sessions", "users")
+          .key(KeyMapping::Prefix { separator: ':' })
+          .on_delete(RefAction::Restrict)
+  )?;
+  ```
+- **Stratégies de mapping (`KeyMapping`)** :
+  - `KeyMapping::Whole` : La clé KV entière (en UTF-8) désigne l'identifiant du document parent.
+  - `KeyMapping::Prefix { separator }` : L'identifiant parent est extrait du préfixe de la clé précédant le premier séparateur (ex. `user_42:cart` avec `:` extrait `user_42`).
+- **Validation stricte UTF-8** :
+  Les identifiants de documents JSON étant textuels, toute clé KV binaire brute non décodable en UTF-8 insérée dans un namespace sous contrat KV $\to$ JSON est immédiatement rejetée avec `CONSTRAINT_VIOLATION`.
+- **Résolution des cascades KV** :
+  Lors de la suppression d'un document parent sous `RefAction::Cascade`, le moteur calcule l'intervalle lexicographique `[lower, upper)` correspondant à tous les enfants et génère les opérations `BatchOperation::KvDelete` correspondantes.
+
+### 2. Contraintes CHECK Déclaratives sur le JSON
+
+LiliaDB permet d'associer une contrainte d'intégrité forte à une collection JSON :
+```rust
+db.json().create_collection("accounts", CollectionOptions {
+    check: Some("$.balance >= 0.0 AND length($.iban) == 27".into()),
+    ..Default::default()
+})?;
+```
+
+- **Logique Ternaire Kleene (SQL 3-Valued Logic)** :
+  L'expression est analysée dans un AST dédié (`crates/lilia-core/src/json/expr/`) et évaluée selon la logique SQL standard à trois états : `True`, `False`, `Unknown`.
+  - Conformément à la norme SQL, une contrainte CHECK est satisfaite tant qu'elle n'évalue **pas** à `False`.
+  - Un champ manquant ou une valeur `null` produit `Unknown`, laissant le document être accepté (ce qui permet les attributs optionnels).
+  - Pour rendre un champ obligatoire, la contrainte doit spécifier explicitement `$.field IS NOT NULL`.
+- **Remplacement dynamique (`set_check`)** :
+  La contrainte peut être mise à jour via `db.json().set_check("accounts", Some(...))` ou supprimée avec `None`. Tous les documents existants de la collection sont validés au préalable.
+
+### 3. Garanties Fondamentales du Moteur & Protection Anti-Contournement
+
+1. **Entonnoir Transactionnel Unique (Write Funnel)** :
+   Toutes les mutations transitent par `transaction::apply`. Le `IntegrityRegistry` en mémoire intercepte les opérations via `integrity::guard` avant toute écriture. Toute violation interrompt immédiatement la transaction SQLite active et applique un rollback complet.
+2. **Code d'Erreur Structuré (`CONSTRAINT_VIOLATION`)** :
+   Les violations retournent `ErrorCode::ConstraintViolation` (code HTTP 409) avec un objet JSON détaillé :
+   ```json
+   {
+     "kind": "check",
+     "constraint": "check:accounts",
+     "model": "json",
+     "collection": "accounts",
+     "id": "acc_1",
+     "expression": "$.balance >= 0.0 AND length($.iban) == 27"
+   }
+   ```
+3. **Protection contre le Contournement SQL (`CONTRACT_TABLES`)** :
+   Pour éviter qu'une requête SQL brute n'insère des données en contournant les règles d'intégrité, le moteur bloque toute écriture SQL directe (`INSERT`, `UPDATE`, `DELETE`) sur les tables `_lilia_json`, `_lilia_kv` et `_lilia_graph_nodes` dès lors qu'un contrat d'intégrité est déclaré sur la base.
+4. **Validation Préalable à la Déclaration** :
+   L'enregistrement d'une nouvelle contrainte ou référence scanne l'existant (`check_offenders`, `reference_offenders`). Si des lignes en infraction sont détectées, l'enregistrement est refusé et jusqu'à 10 identifiants contrevenants sont rapportés.
+5. **Éligibilité des Tiers de Stockage** :
+   Les collections soumises à un contrat d'intégrité doivent impérativement résider sur le tier `StorageTier::Disk`. Les tiers `Memory` et `Buffered` sont refusés car ils ne garantissent pas l'atomicité synchrone dans le WAL SQLite.
 
 The `@liliadb/node` package is engineered for broad compatibility across modern server-side JavaScript runtimes:
 - **Node.js (>=22)**: Fully supports in-process embedded storage via Node-API precompiled binaries and daemon IPC via `node:net`.
@@ -361,5 +474,182 @@ Official VSCode extension offering developer tooling for local LiliaDB files:
 - SQL query editor with live table preview and schema inspection.
 - Integrated database health and doctor diagnostic tools.
 
+## Tiered Storage Engine & Multi-Tier Architecture
 
+Starting in v0.1.0-alpha.7, LiliaDB introduces a declarative multi-tier storage subsystem (`crates/lilia-core/src/tier.rs` and `crates/lilia-storage-sqlite/src/mem_engine.rs`, `ring_buffer.rs`, `catalog.rs`). Rather than treating all collections as monolithic disk-backed SQLite tables, developers configure per-collection storage tiers via `CollectionSpec`:
+
+### 1. The Three Storage Tiers
+1. **`StorageTier::Disk` (Default)**:
+   - Full ACID transactional durability backed by SQLite in WAL mode (`synchronous=FULL` or `NORMAL`).
+   - Mutations are immediately written to the WAL and fsynced based on the configured `Durability` profile.
+   - Ideal for authoritative business data, user state, and permanent records.
+
+2. **`StorageTier::Memory` (RAM Resident)**:
+   - Zero-copy, lock-free in-memory key-value engine (`mem_engine.rs`) operating directly in RAM.
+   - Bypasses disk I/O, SQLite query planning, and WAL frame serialization entirely.
+   - Delivers sub-microsecond latency ($p_{50}$ of **0.50 µs**) and throughput exceeding **1.57 million ops/sec**.
+   - Supports LRU (`EvictionPolicy::Lru { max_entries }`) and FIFO (`EvictionPolicy::DropOldest { max_entries }`) capacity caps as well as millisecond TTL expirations.
+   - Ideal for volatile session tokens, real-time gaming state, live device heartbeats, and high-frequency caches.
+
+3. **`StorageTier::Buffered` (Asynchronous RingBuffer)**:
+   - High-throughput asynchronous write-combining buffer (`ring_buffer.rs`) designed to decouple producer write latency from SQLite transaction commits.
+   - Producers enqueue mutations lock-free into a circular ring buffer at **~1.40 million ops/sec** ($p_{50}$ ~ 3.0 µs).
+   - An asynchronous background flusher coalesces queued operations into micro-batches, committing them to the underlying SQLite database when either `flush_interval_ms` or `watermark_trigger` is reached.
+   - Provides sequence-stamped RAM overlays ensuring immediate **Read-Your-Own-Writes** consistency before dirty batches hit disk.
+   - Configurable backpressure overflow policies: `OverflowPolicy::Block { timeout_ms }`, `OverflowPolicy::DropOldest`, or `OverflowPolicy::Reject`.
+
+### 2. GroupSync: Multi-Threaded Group Commit Architecture
+In standard SQLite, concurrent writes from multiple threads suffer severe mutex lock contention, stalling on individual sequential `fsync` calls.
+
+LiliaDB's `commit_group_batch` implements **GroupSync** (group commit):
+- When multiple threads enqueue write batches simultaneously, the writers join a shared barrier.
+- One designated worker thread flushes a consolidated transaction containing all pending mutations across all concurrent threads into a single WAL frame and issues a single `fsync`.
+- The worker then signals the waiting threads, unblocking all of them simultaneously with individual commit receipts.
+- Under an 8-thread concurrent write workload, GroupSync achieves **19,481 ops/sec** (compared to ~1,800 ops/sec serialized single-op durable writes), delivering a **10.8x throughput speedup** with zero compromise on data durability.
+
+### 3. Incremental View Maintenance (IVM)
+The IVM engine (`crates/lilia-storage-sqlite/src/ivm.rs`) provides fast declarative materialized views updated incrementally via SQLite triggers without rescanning full source tables:
+- **Supported Aggregates**: `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)`.
+- **Differential Triggers**: Automatically generates and mounts after-insert and after-delete triggers on source tables, updating aggregate counters in dedicated `_lilia_ivm_<name>` tables.
+- **Microsecond Aggregate Queries**: Queries against materialized views read directly from pre-aggregated summary tables in $O(1)$ time rather than computing full-table table scans.
+
+### 4. Differential Live Queries & Change Streams
+Built on SQLite's Session API (`crates/lilia-storage-sqlite/src/live_query.rs`), Live Queries provide reactive change notifications with row-level diffs (`LiveQueryDiff`):
+- Callers register declarative SQL queries (`db.subscribe_live_query`).
+- Pre-commit changelists generated by SQLite's changeset iterator are matched against query predicates in memory.
+- Observers receive typed `RowChange::Insert`, `RowChange::Update`, and `RowChange::Delete` events detailing old and new values without polling.
+
+### 5. Conflict-Free Replicated Data Types (CRDTs) & Hybrid Logical Clocks (HLC)
+Native distributed replication primitives (`crates/lilia-core/src/crdt/`, `crates/lilia-core/src/hlc.rs`, `crates/lilia-storage-sqlite/src/crdt.rs`):
+- **Hybrid Logical Clocks (HLC)**: Monotonically increasing physical-logical timestamps ensuring causal ordering across distributed nodes even under clock skew.
+- **PN-Counters**: Positive-Negative distributed counters supporting concurrent increments and decrements across replicas.
+- **Observed-Remove Sets (OR-Sets)**: Set data structures with element add/remove tracking that converge deterministically under out-of-order replication.
+- **LWW JSON Documents**: Last-Write-Wins JSON document trees resolving concurrent attribute-level field conflicts using HLC timestamps.
+
+### 6. Content Addressable Storage (CAS) Deduplication Engine & Atomic Blob GC
+
+Storing large binary objects (images, PDF documents, video clips, machine learning weights) directly in relational or document B-tree pages quickly causes severe page fragmentation, WAL write amplification, and degraded cache efficiency.
+
+Starting in v0.1.0-alpha.7, LiliaDB introduces a Content Addressable Storage (CAS) deduplication engine (`crates/lilia-core/src/cas.rs`, `crates/lilia-storage-sqlite/src/cas.rs`):
+
+#### Architecture & Storage Layout
+- **Two-Level Sharded Directory**:
+  Blobs are stored in a dedicated directory (by default `<db_path>.blobs/` or customizable via `DatabaseOptions::with_cas_dir(...)`), organized using two-level hexadecimal prefix subdirectories:
+  ```
+  <database.lilia>.blobs/
+  ├── .tmp/
+  │   └── 550e8400-e29b-41d4-a716-446655440000.tmp
+  ├── 3f/
+  │   └── 8a/
+  │       └── 3f8a9b2c4d5e6f70...blob (mode 0o444 / readonly)
+  └── a1/
+      └── b2/
+          └── a1b2c3d4e5f60718...blob (mode 0o444 / readonly)
+  ```
+  This partitioning guarantees filesystem responsiveness even when holding hundreds of thousands of distinct blobs.
+- **Cryptographic Content Addressing**:
+  Each blob is identified by its cryptographic digest (SHA-256 by default or BLAKE3, selectable via `CasOptions::hash_algorithm`).
+- **Atomic Writes & Immutability**:
+  Incoming blobs are streamed chunk-by-chunk (64 KB buffers) into `.tmp/<uuid>.tmp`, synced to durable media via `fsync` (`sync_all()`), and renamed into place. If the content hash already exists on disk, the temporary file is unlinked immediately, achieving zero redundant disk consumption.
+  Once committed, files are sealed with read-only permissions (`0o444` on Unix, `readonly` attribute on Windows).
+
+#### Transparent KV Payload Offloading
+For key-value operations (`kv.set` / `kv.get`):
+- Payloads exceeding `threshold_bytes` (default: 64 KB, configurable via `DatabaseOptions::with_cas_threshold(...)`) are automatically offloaded to the CAS store.
+- In SQLite's `_lilia_kv` table, the raw payload is replaced with a compact **45-byte pointer**:
+  - `0x4C, 0x42, 0x43, 0x01` (`LBC\x01` magic bytes: Lilia Blob CAS version 1)
+  - `0x01` (algorithm: 1 = SHA-256, 2 = BLAKE3)
+  - `u64` little-endian original size in bytes
+  - 32-byte raw cryptographic hash
+- Read queries (`kv_get`, `kv_scan`) detect the `LBC\x01` magic prefix and transparently reconstitute the payload from the CAS file.
+- Direct zero-copy readers (`kv_get_blob_reader`, `kv_get_blob_path`) allow streaming multigigabyte files without allocating the entire payload in memory.
+
+#### JSON Document `$blob` Descriptors & Reference Tracking
+JSON documents can reference blobs explicitly or via `db.blob_store(&data)`:
+```json
+{
+  "title": "Quarterly Report",
+  "document": {
+    "$blob": "3f8a9b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+    "size_bytes": 1048576,
+    "mime_type": "application/pdf"
+  }
+}
+```
+LiliaDB parses JSON trees recursively to extract `$blob` hashes and maintains reference counting in SQLite:
+- `_lilia_blobs`: tracks `(hash, size_bytes, mime_type, ref_count, created_at_ms, sealed)`.
+- `_lilia_blob_refs`: tracks `(ref_kind, space_or_ns, doc_or_key_id, blob_hash)`.
+- Differential updates: updating a JSON document automatically decrements the ref count of removed blobs and increments newly referenced blobs.
+
+#### Atomic Garbage Collection on WAL Checkpoint
+- When `kv.delete()` or `json.delete()` is executed, reference counts are decremented within the active SQLite transaction.
+- When `ref_count` reaches `0`, the blob enters an orphaned state indexed by `_lilia_blobs_orphan` (`WHERE ref_count = 0`).
+- Because readers might still be accessing older snapshot versions in the WAL, physical deletion is strictly deferred until a WAL checkpoint runs (`PRAGMA wal_checkpoint(PASSIVE)` or automatic background checkpointing).
+- When the checkpoint confirms that all log frames are committed (`copied >= log`), the background garbage collector unlinks orphaned physical files from disk and purges metadata rows from `_lilia_blobs`, guaranteeing ACID transactional consistency.
+
+---
+
+## Vectorized Analytics Engine (`lilia-analytics`, feature `analytics`)
+
+SQLite's B-tree is a row store, ideal for OLTP reads and writes but slow for scans: aggregating a few hundred thousand rows decodes every row to read one or two values. The analytics engine adds a columnar path next to it, in the same process and the same database file.
+
+```text
+Row store (B-tree)      [id, name, age, city] [id, name, age, city] ...   source of truth, OLTP
+Columnar segments       [age, age, age, ...] [city, city, city, ...]      derived, scanned in batches of 1,024
+```
+
+### 1. Layers
+
+| Layer | Crate | Responsibility |
+| :--- | :--- | :--- |
+| Engine | `lilia-analytics` | Arrow schema of a table, segment codec (one Arrow IPC chunk per column), zone maps, decoded-chunk cache, DataFusion `TableProvider`, query runtime. Storage-agnostic: a backend implements `ColumnarSource`. |
+| Store | `lilia-storage-sqlite::columnar` | Persistence of segments in SQLite, change tracking, merge-on-read scans, build and compaction, background worker, `Database::analytics()`. |
+
+The feature is opt-in (`analytics`, native targets only): DataFusion needs a multi-threaded runtime and noticeably grows the binary, so the Node, FFI, mobile and WebAssembly builds are unchanged.
+
+### 2. Columnar Tables
+
+A columnar table is a typed projection declared over a JSON collection (`ColumnarTableSpec::json`, keyed by document `id`) or a SQL table (`ColumnarTableSpec::sql`, keyed by `rowid`). Column types are `Int64`, `Float64`, `Boolean`, `Utf8` and `TimestampMillis`; a value that does not fit its column is stored as NULL, except integers in a `Float64` column.
+
+| Table | Content |
+| :--- | :--- |
+| `_lilia_col_tables` | Definition: source, columns, target segment size, state (`building` / `ready`), next segment id. |
+| `_lilia_col_segments` | One row per segment: row count and metadata (zone maps, key bounds). |
+| `_lilia_col_chunks` | One row per column of a segment: the Arrow IPC chunk. Reading a column never touches the others. |
+| `_lilia_col_delta` | Keys of the rows changed since the last compaction. |
+
+These tables are created on first use, so a database that never uses analytics keeps its schema. Segment metadata and chunks go through the database `ValueCodec`, zone maps included, and documents are decoded without the field-level key registry: values encrypted in the row store are never decrypted into segments.
+
+Invariant: the segments of a table are sorted by key and their key ranges do not overlap, which makes locating a changed key a pair of binary searches.
+
+### 3. Staying in Sync with the Row Store
+
+The row store is never bypassed and its write path is unchanged. Three `AFTER` triggers per columnar table record the key of every inserted, updated or deleted source row in `_lilia_col_delta`. Triggers cover every write path (batch API, transactions, ring-buffer flushes, CRDT merges, raw SQL, undo/redo) and keep working when the file is opened by a build without the feature: the delta just grows until an analytics-enabled process compacts it.
+
+- **Scan (merge-on-read)**: inside one read transaction, a scan returns the segments minus the rows whose key is in the delta, plus the current version of those rows read from the row store. A query is therefore always consistent with the row store, compacted or not.
+- **Initial build**: the definition and the triggers are committed first, then the source is read one segment at a time and each segment is committed in its own short write transaction. Writers are never blocked for the duration of the build; any row written meanwhile is in the delta. A build interrupted by a crash is detected (`building` state) and restarted when the engine starts.
+- **Compaction**: one atomic write transaction rewrites only the segments that own a changed key, splitting and merging to stay close to the target size, then clears the delta. It runs in a background worker once a table has `compaction_delta_rows` pending rows, or on demand with `Analytics::compact`.
+
+Undo/redo changesets exclude `_lilia_col_*`: applying a changeset fires the triggers again, which is what keeps the delta right.
+
+### 4. Query Execution
+
+`Analytics::query` hands the SQL to a DataFusion session that only knows the columnar tables. The engine is read-only by construction (DDL, DML and session statements are rejected, no file access).
+
+1. **Projection pushdown**: only the chunks of referenced columns are loaded; `count(*)` reads the key column alone.
+2. **Zone-map pruning**: `column <op> literal` filters skip the segments whose min/max cannot match. Pruning is inexact by design; DataFusion still filters rows.
+3. **Chunk cache**: decoded chunks are kept in a byte-bounded LRU (`cache_bytes`). Segment ids are never reused, so a cached chunk cannot go stale.
+4. **Vectorized execution**: rows reach the operators as zero-copy slices of `batch_size` rows (1,024 by default), spread over `target_partitions` partitions.
+
+The engine owns a dedicated runtime, so `query` is a plain blocking call that is safe from any thread, including one already running inside an async runtime.
+
+SIMD comes from the Arrow kernels and follows the target features of the build, with no runtime dispatch: NEON is always on for aarch64; x86_64 uses the SSE2 baseline unless the embedding application compiles with `-C target-cpu=x86-64-v3` (AVX2) or `x86-64-v4` (AVX-512).
+
+### 5. Limits
+
+- Rust API only; not yet exposed through the Node SDK, the daemon, the C ABI or WebAssembly.
+- No columnar table over a memory-tier collection (no persistent rows), a JSON collection under temporal sharding (rows live in attached files the triggers cannot see), or a `WITHOUT ROWID` SQL table.
+- A scan materializes the projected columns of the surviving segments for the duration of the query.
+- Tables created by another process become queryable after the engine restarts; the engine is meant for a single embedding process.
+- Dropping a source SQL table does not drop its columnar tables: drop them first.
 

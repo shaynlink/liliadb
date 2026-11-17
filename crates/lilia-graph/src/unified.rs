@@ -56,16 +56,9 @@ impl UnifiedNode {
 }
 
 pub fn resolve_node_document(db: &Database, node: &GraphNode) -> Result<Option<serde_json::Value>> {
-    // 1. Explicit doc_space
-    if let Some(ref space) = node.doc_space {
-        let doc_id = node.doc_id.as_deref().unwrap_or(&node.id);
-        return Ok(db.json_get(space, doc_id)?.map(|e| e.value));
-    }
-
-    // 2. Cascade resolution: fallback to node.kind if space exists and has matching id
-    if let Ok(Some(entry)) = db.json_get(&node.kind, &node.id) {
-        return Ok(Some(entry.value));
-    }
-
-    Ok(None)
+    let Some(space) = node.doc_space.as_deref() else {
+        return Ok(None);
+    };
+    let doc_id = node.doc_id.as_deref().unwrap_or(&node.id);
+    Ok(db.json_get(space, doc_id)?.map(|entry| entry.value()))
 }

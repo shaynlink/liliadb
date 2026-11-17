@@ -80,6 +80,22 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: HybridCommand,
     },
+    Crdt {
+        #[command(subcommand)]
+        command: CrdtCommand,
+    },
+    Blob {
+        #[command(subcommand)]
+        command: BlobCommand,
+    },
+    Integrity {
+        #[command(subcommand)]
+        command: IntegrityCommand,
+    },
+    Ledger {
+        #[command(subcommand)]
+        command: LedgerCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -180,6 +196,81 @@ pub(crate) enum JsonCommand {
         #[arg(long, default_value_t = 100)]
         limit: u32,
     },
+    CreateCollection {
+        space: String,
+        #[arg(long)]
+        check: Option<String>,
+    },
+    SetCheck {
+        space: String,
+        #[arg(long)]
+        check: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum IntegrityCommand {
+    AddGraphRef {
+        graph: String,
+        target: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value = "cascade")]
+        on_delete: String,
+        #[arg(long)]
+        required: bool,
+    },
+    AddKvRef {
+        namespace: String,
+        target: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value = "restrict")]
+        on_delete: String,
+        #[arg(long)]
+        prefix_separator: Option<char>,
+    },
+    DropRef {
+        name: String,
+    },
+    ListRefs,
+    ListChecks,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum LedgerCommand {
+    /// Show the current 32-byte cryptographic Merkle Root (BLAKE3) of the database
+    Root,
+    /// Show the latest commit block recorded in the Merkle Ledger
+    Latest,
+    /// Export a cryptographic Inclusion Proof for a JSON document
+    ProveDoc {
+        space: String,
+        id: String,
+        #[arg(long)]
+        version: Option<u64>,
+    },
+    /// Export a cryptographic Inclusion Proof for a KV key
+    ProveKv {
+        namespace: String,
+        key: String,
+        #[arg(long, default_value = "text")]
+        encoding: Encoding,
+        #[arg(long)]
+        version: Option<u64>,
+    },
+    /// Export a cryptographic Inclusion Proof for a commit sequence number
+    ProveCommit {
+        commit_seq: u64,
+    },
+    /// Mathematically verify a JSON inclusion proof against the current root or an expected root
+    VerifyProof {
+        proof_file: PathBuf,
+        #[arg(long)]
+        expected_root: Option<String>,
+    },
+    /// Verify the entire Merkle DAG and live records, checking for tampering or corruption
+    VerifyDb,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
@@ -246,6 +337,22 @@ pub(crate) enum FtsCommand {
         collection: String,
         doc_id: String,
         content: String,
+    },
+    Suggest {
+        collection: String,
+        prefix: String,
+        #[arg(long, default_value_t = 1)]
+        max_distance: u8,
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
+    },
+    Fuzzy {
+        collection: String,
+        query: String,
+        #[arg(long, default_value_t = 1)]
+        max_distance: u8,
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
     },
 }
 
@@ -442,6 +549,97 @@ pub(crate) enum PluginCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub(crate) enum CrdtCommand {
+    Counter {
+        #[command(subcommand)]
+        command: CrdtCounterCommand,
+    },
+    Set {
+        #[command(subcommand)]
+        command: CrdtSetCommand,
+    },
+    Json {
+        #[command(subcommand)]
+        command: CrdtJsonCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum CrdtCounterCommand {
+    /// Read the current value of a PN-Counter.
+    Get { space: String, id: String },
+    /// Increment a PN-Counter by `amount` on behalf of `actor_id`.
+    Inc {
+        space: String,
+        id: String,
+        actor_id: String,
+        #[arg(default_value_t = 1)]
+        amount: u64,
+    },
+    /// Decrement a PN-Counter by `amount` on behalf of `actor_id`.
+    Dec {
+        space: String,
+        id: String,
+        actor_id: String,
+        #[arg(default_value_t = 1)]
+        amount: u64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum CrdtSetCommand {
+    /// Read all live elements of an OR-Set.
+    Get { space: String, id: String },
+    /// Test whether an element is in an OR-Set.
+    Contains {
+        space: String,
+        id: String,
+        element: String,
+    },
+    /// Add an element to an OR-Set on behalf of `actor_id`.
+    Add {
+        space: String,
+        id: String,
+        actor_id: String,
+        element: String,
+    },
+    /// Remove an element from an OR-Set (tombstones all its tags).
+    Remove {
+        space: String,
+        id: String,
+        element: String,
+    },
+    /// Prune tombstones older than `cutoff_ms` from an OR-Set.
+    Prune {
+        space: String,
+        id: String,
+        cutoff_ms: i64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum CrdtJsonCommand {
+    /// Read the materialised JSON document.
+    Get { space: String, id: String },
+    /// Set a field (dot-separated path) in an LWW-JSON document.
+    SetField {
+        space: String,
+        id: String,
+        actor_id: String,
+        path: String,
+        /// JSON-encoded value (e.g. `'"hello"'` or `'42'`).
+        value: String,
+    },
+    /// Delete a field from an LWW-JSON document.
+    DeleteField {
+        space: String,
+        id: String,
+        actor_id: String,
+        path: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub(crate) enum TrustCommand {
     Add {
         key: String,
@@ -465,4 +663,30 @@ pub(crate) enum TrustCommand {
         #[arg(long)]
         development: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum BlobCommand {
+    /// Store a local file in the Content Addressable Storage (CAS)
+    Put {
+        file: PathBuf,
+        #[arg(long)]
+        mime_type: Option<String>,
+    },
+    /// Retrieve a blob by its cryptographic hash
+    Get {
+        hash: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the local physical file path of a stored blob
+    Path {
+        hash: String,
+    },
+    /// Check whether a blob exists in the CAS store
+    Exists {
+        hash: String,
+    },
+    /// Trigger atomic garbage collection of orphaned blobs
+    Gc,
 }

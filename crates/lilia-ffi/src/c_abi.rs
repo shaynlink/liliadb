@@ -797,6 +797,70 @@ pub unsafe extern "C" fn lilia_c_fts_search(
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_fts_suggest(
+    handle: *mut LiliaHandle,
+    collection: *const c_char,
+    prefix: *const c_char,
+    max_distance: u8,
+    limit: u32,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if handle.is_null() || collection.is_null() || prefix.is_null() || out_json.is_null() {
+        return -1;
+    }
+    let col = match str_from_ptr(collection) {
+        Some(s) => s.to_string(),
+        None => return -1,
+    };
+    let p = match str_from_ptr(prefix) {
+        Some(s) => s.to_string(),
+        None => return -1,
+    };
+    let h = &*handle;
+
+    match h.db.fts_suggest_sync(col, p, max_distance, limit) {
+        Ok(suggestions) => {
+            let json = serde_json::to_string(&suggestions).unwrap_or_else(|_| "[]".into());
+            *out_json = to_c_string(json);
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_fts_fuzzy_search(
+    handle: *mut LiliaHandle,
+    collection: *const c_char,
+    query: *const c_char,
+    max_distance: u8,
+    limit: u32,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if handle.is_null() || collection.is_null() || query.is_null() || out_json.is_null() {
+        return -1;
+    }
+    let col = match str_from_ptr(collection) {
+        Some(s) => s.to_string(),
+        None => return -1,
+    };
+    let q = match str_from_ptr(query) {
+        Some(s) => s.to_string(),
+        None => return -1,
+    };
+    let h = &*handle;
+
+    match h.db.fts_fuzzy_search_sync(col, q, max_distance, limit) {
+        Ok(hits) => {
+            let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
+            *out_json = to_c_string(json);
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
 // ==========================================
 // SQL ANALYTICS ENGINE
 // ==========================================

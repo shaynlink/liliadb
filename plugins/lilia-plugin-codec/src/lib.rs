@@ -324,29 +324,27 @@ mod tests {
         assert_eq!(kv_entry.value, b"top_secret_aes_payload");
 
         let json_entry = db.json_get("identities", "user42").unwrap().unwrap();
-        assert_eq!(json_entry.value["role"], "admin");
-        assert_eq!(json_entry.value["token"], "xyz");
+        assert_eq!(json_entry.value()["role"], "admin");
+        assert_eq!(json_entry.value()["token"], "xyz");
 
         drop(db);
 
         // Verify SQLite raw database contains encrypted bytes and envelopes
-        let raw_conn = rusqlite::Connection::open(&db_path).unwrap();
-        let raw_kv: Vec<u8> = raw_conn
-            .query_row(
-                "SELECT value FROM _lilia_kv WHERE namespace = 'vault' AND key = ?1",
-                [b"secret_key"],
-                |row| row.get(0),
-            )
+        let raw_conn =
+            lilia_sqlite_native::NativeConnection::open_file(&db_path).unwrap();
+        let mut stmt = raw_conn
+            .prepare("SELECT value FROM _lilia_kv WHERE namespace = 'vault' AND key = ?1")
             .unwrap();
+        stmt.bind_blob_static(1, b"secret_key").unwrap();
+        assert!(stmt.step().unwrap());
+        let raw_kv = stmt.column_blob(0).to_vec();
         assert_ne!(raw_kv, b"top_secret_aes_payload");
 
-        let raw_json: String = raw_conn
-            .query_row(
-                "SELECT value FROM _lilia_json WHERE space = 'identities' AND id = 'user42'",
-                [],
-                |row| row.get(0),
-            )
+        let mut stmt = raw_conn
+            .prepare("SELECT value FROM _lilia_json WHERE space = 'identities' AND id = 'user42'")
             .unwrap();
+        assert!(stmt.step().unwrap());
+        let raw_json = stmt.column_text(0).to_string();
         assert!(!raw_json.contains("top_secret_aes_payload"));
         assert!(!raw_json.contains("admin"));
         assert!(raw_json.contains("$codec"));

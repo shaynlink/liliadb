@@ -1,52 +1,9 @@
 use std::collections::VecDeque;
 
+pub use lilia_core::PageRankConfig;
 use lilia_core::{Direction, NodeScore};
-use serde::{Deserialize, Serialize};
 
 use crate::snapshot::GraphView;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PageRankConfig {
-    #[serde(default = "default_damping")]
-    pub damping_factor: f64,
-    #[serde(default = "default_iterations")]
-    pub max_iterations: usize,
-    #[serde(default = "default_tolerance")]
-    pub tolerance: f64,
-    pub seeds: Option<Vec<String>>,
-    #[serde(default = "default_direction")]
-    pub direction: Direction,
-    pub edge_kind: Option<String>,
-}
-
-fn default_damping() -> f64 {
-    0.85
-}
-
-const fn default_iterations() -> usize {
-    50
-}
-
-fn default_tolerance() -> f64 {
-    1e-6
-}
-
-const fn default_direction() -> Direction {
-    Direction::Outgoing
-}
-
-impl Default for PageRankConfig {
-    fn default() -> Self {
-        Self {
-            damping_factor: 0.85,
-            max_iterations: 50,
-            tolerance: 1e-6,
-            seeds: None,
-            direction: Direction::Outgoing,
-            edge_kind: None,
-        }
-    }
-}
 
 pub fn pagerank(view: &GraphView, config: &PageRankConfig) -> Vec<NodeScore> {
     let n = view.node_count();

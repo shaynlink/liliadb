@@ -15,21 +15,13 @@ pub use algorithms::{
 };
 pub use cypher::{execute_cypher, CypherResult};
 pub use lilia_core::{
-    CentralityType, ComponentType, Direction, GraphEdge, GraphNode, NodeScore, PathEdge, Result,
-    WeightedPath,
+    CentralityType, ComponentType, Direction, GraphEdge, GraphNode, ImpactAnalysis, NodeScore,
+    PathEdge, Result, WeightedPath,
 };
 pub use lilia_storage_sqlite::Database;
-use serde::{Deserialize, Serialize};
 pub use snapshot::{GraphView, ViewEdge};
 pub use traversal::GraphTraversal;
 pub use unified::{resolve_node_document, UnifiedNode};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImpactAnalysis {
-    pub direct: Vec<String>,
-    pub dependants: Vec<String>,
-    pub total_affected: usize,
-}
 
 pub trait DatabaseGraphExt {
     fn graph<'a>(&'a self, graph_id: impl Into<String>) -> GraphStore<'a>;
@@ -655,20 +647,16 @@ mod tests {
 
         let graph = db.graph("social");
 
-        // 2. Create nodes referencing the documents (ZERO DUPLICATION)
-        // Auto-resolution cascade: kind = "users" automatically maps to space "users"
-        graph.set_node("user_alice", "users", &json!({})).unwrap();
-        graph.set_node("user_bob", "users", &json!({})).unwrap();
-        // Explicit doc_space: kind = "content", doc_space = "posts"
-        graph
-            .set_node_doc(
-                "post_101",
-                "content",
-                Some("posts"),
-                Some("post_101"),
-                &json!({}),
-            )
-            .unwrap();
+        // 2. Create nodes referencing the documents (ZERO DUPLICATION) through explicit links
+        for (id, kind, space) in [
+            ("user_alice", "users", "users"),
+            ("user_bob", "users", "users"),
+            ("post_101", "content", "posts"),
+        ] {
+            graph
+                .set_node_doc(id, kind, Some(space), Some(id), &json!({}))
+                .unwrap();
+        }
 
         // 3. Connect them: alice -FRIEND-> bob -LIKES-> post_101
         graph.add_edge("user_alice", "user_bob", "FRIEND").unwrap();

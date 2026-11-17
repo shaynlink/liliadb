@@ -1,5 +1,6 @@
 import os from "node:os";
 import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { runRustBenchmark } from "./drivers/rust_embedded.js";
@@ -27,8 +28,11 @@ function parseArgs(): CliOptions {
   let workload: "10k" | "100k" | "all" = "10k";
   let surfaces = ["rust", "node", "ipc", "http"];
   let codecs: ("cleartext" | "aes-256-gcm")[] = ["cleartext", "aes-256-gcm"];
-  let markdownPath = resolve(process.cwd(), "../../docs/benchmarks.md");
-  let jsonPath = resolve(process.cwd(), "../../target/benchmark-results.json");
+  const repoRoot = existsSync(resolve(process.cwd(), "docs"))
+    ? process.cwd()
+    : resolve(process.cwd(), "../..");
+  let markdownPath = resolve(repoRoot, "docs/benchmarks.md");
+  let jsonPath = resolve(repoRoot, "target/benchmark-results.json");
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];

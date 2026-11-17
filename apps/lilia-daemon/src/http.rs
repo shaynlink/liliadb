@@ -104,6 +104,8 @@ pub struct JsonCreateIndexRequest {
     pub space: String,
     pub name: String,
     pub path: String,
+    #[serde(default)]
+    pub filter: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,6 +201,26 @@ pub struct FtsSearchRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FtsSuggestRequest {
+    pub collection: String,
+    pub prefix: String,
+    #[serde(default)]
+    pub max_distance: Option<u8>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FtsFuzzySearchRequest {
+    pub collection: String,
+    pub query: String,
+    #[serde(default)]
+    pub max_distance: Option<u8>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HttpBatchOperation {
     KvSet {
@@ -285,6 +307,54 @@ pub enum HttpBatchOperation {
         collection: String,
         id: String,
     },
+    CrdtPnCounterIncrement {
+        space: String,
+        id: String,
+        actor_id: String,
+        amount: u64,
+    },
+    CrdtPnCounterDecrement {
+        space: String,
+        id: String,
+        actor_id: String,
+        amount: u64,
+    },
+    CrdtOrSetAdd {
+        space: String,
+        id: String,
+        actor_id: String,
+        element: String,
+    },
+    CrdtOrSetRemove {
+        space: String,
+        id: String,
+        element: String,
+        #[serde(default)]
+        timestamp_ms: Option<i64>,
+    },
+    CrdtJsonSetField {
+        space: String,
+        id: String,
+        actor_id: String,
+        path: String,
+        value: Value,
+        #[serde(default)]
+        timestamp_ms: Option<i64>,
+    },
+    CrdtJsonDeleteField {
+        space: String,
+        id: String,
+        actor_id: String,
+        path: String,
+        #[serde(default)]
+        timestamp_ms: Option<i64>,
+    },
+    CrdtJsonMerge {
+        space: String,
+        id: String,
+        #[serde(with = "serde_bytes")]
+        state: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -362,7 +432,7 @@ fn map_error(error: LiliaError) -> (StatusCode, Json<Value>) {
     let status = match error.code {
         ErrorCode::InvalidInput => StatusCode::BAD_REQUEST,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
-        ErrorCode::Conflict => StatusCode::CONFLICT,
+        ErrorCode::Conflict | ErrorCode::ConstraintViolation => StatusCode::CONFLICT,
         ErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
         ErrorCode::Unsupported => StatusCode::NOT_IMPLEMENTED,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -646,7 +716,7 @@ async fn json_get_path_handler(
             "document": {
                 "space": doc.space,
                 "id": doc.id,
-                "value": doc.value,
+                "value": doc.value(),
                 "version": doc.version.to_string()
             }
         }))),
@@ -686,7 +756,7 @@ async fn json_get_post_handler(
             "document": {
                 "space": doc.space,
                 "id": doc.id,
-                "value": doc.value,
+                "value": doc.value(),
                 "version": doc.version.to_string()
             }
         }))),
@@ -785,7 +855,7 @@ async fn json_scan_handler(
             json!({
                 "space": d.space,
                 "id": d.id,
-                "value": d.value,
+                "value": d.value(),
                 "version": d.version.to_string()
             })
         })
@@ -804,7 +874,10 @@ async fn json_create_index_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let db = state.database.clone();
     tokio::task::spawn_blocking(move || {
-        db.create_json_index(&payload.space, &payload.name, &payload.path)
+        let options = lilia_core::IndexOptions {
+            filter: payload.filter,
+        };
+        db.create_json_index_with_options(&payload.space, &payload.name, &payload.path, options)
     })
     .await
     .map_err(|_| {
@@ -900,7 +973,7 @@ async fn json_scan_by_index_handler(
             json!({
                 "space": d.space,
                 "id": d.id,
-                "value": d.value,
+                "value": d.value(),
                 "version": d.version.to_string()
             })
         })
@@ -943,7 +1016,7 @@ async fn json_find_handler(
             json!({
                 "space": d.space,
                 "id": d.id,
-                "value": d.value,
+                "value": d.value(),
                 "version": d.version.to_string()
             })
         })
@@ -1129,6 +1202,93 @@ async fn batch_handler(
             }
             HttpBatchOperation::VectorDelete { collection, id } => {
                 ops.push(BatchOperation::VectorDelete { collection, id });
+            }
+            HttpBatchOperation::CrdtPnCounterIncrement {
+                space,
+                id,
+                actor_id,
+                amount,
+            } => {
+                ops.push(BatchOperation::CrdtPnCounterIncrement {
+                    space,
+                    id,
+                    actor_id,
+                    amount,
+                });
+            }
+            HttpBatchOperation::CrdtPnCounterDecrement {
+                space,
+                id,
+                actor_id,
+                amount,
+            } => {
+                ops.push(BatchOperation::CrdtPnCounterDecrement {
+                    space,
+                    id,
+                    actor_id,
+                    amount,
+                });
+            }
+            HttpBatchOperation::CrdtOrSetAdd {
+                space,
+                id,
+                actor_id,
+                element,
+            } => {
+                ops.push(BatchOperation::CrdtOrSetAdd {
+                    space,
+                    id,
+                    actor_id,
+                    element,
+                });
+            }
+            HttpBatchOperation::CrdtOrSetRemove {
+                space,
+                id,
+                element,
+                timestamp_ms,
+            } => {
+                ops.push(BatchOperation::CrdtOrSetRemove {
+                    space,
+                    id,
+                    element,
+                    timestamp_ms,
+                });
+            }
+            HttpBatchOperation::CrdtJsonSetField {
+                space,
+                id,
+                actor_id,
+                path,
+                value,
+                timestamp_ms,
+            } => {
+                ops.push(BatchOperation::CrdtJsonSetField {
+                    space,
+                    id,
+                    actor_id,
+                    path,
+                    value,
+                    timestamp_ms,
+                });
+            }
+            HttpBatchOperation::CrdtJsonDeleteField {
+                space,
+                id,
+                actor_id,
+                path,
+                timestamp_ms,
+            } => {
+                ops.push(BatchOperation::CrdtJsonDeleteField {
+                    space,
+                    id,
+                    actor_id,
+                    path,
+                    timestamp_ms,
+                });
+            }
+            HttpBatchOperation::CrdtJsonMerge { space, id, state } => {
+                ops.push(BatchOperation::CrdtJsonMerge { space, id, state });
             }
         }
     }
@@ -1322,6 +1482,52 @@ async fn fts_search_handler(
     let limit = payload.limit.unwrap_or(10);
     let hits = tokio::task::spawn_blocking(move || {
         db.fts_search(&payload.collection, &payload.query, limit)
+    })
+    .await
+    .map_err(|_| {
+        map_error(LiliaError::new(
+            ErrorCode::Storage,
+            "worker task failed",
+            false,
+        ))
+    })?
+    .map_err(map_error)?;
+
+    Ok(Json(json!({ "ok": true, "hits": hits })))
+}
+
+async fn fts_suggest_handler(
+    State(state): State<HttpState>,
+    Json(payload): Json<FtsSuggestRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let db = state.database.clone();
+    let limit = payload.limit.unwrap_or(10);
+    let max_distance = payload.max_distance.unwrap_or(1);
+    let suggestions = tokio::task::spawn_blocking(move || {
+        db.fts_suggest(&payload.collection, &payload.prefix, max_distance, limit)
+    })
+    .await
+    .map_err(|_| {
+        map_error(LiliaError::new(
+            ErrorCode::Storage,
+            "worker task failed",
+            false,
+        ))
+    })?
+    .map_err(map_error)?;
+
+    Ok(Json(json!({ "ok": true, "suggestions": suggestions })))
+}
+
+async fn fts_fuzzy_search_handler(
+    State(state): State<HttpState>,
+    Json(payload): Json<FtsFuzzySearchRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let db = state.database.clone();
+    let limit = payload.limit.unwrap_or(10);
+    let max_distance = payload.max_distance.unwrap_or(1);
+    let hits = tokio::task::spawn_blocking(move || {
+        db.fts_fuzzy_search(&payload.collection, &payload.query, max_distance, limit)
     })
     .await
     .map_err(|_| {
@@ -1638,6 +1844,8 @@ pub fn router(state: HttpState) -> Router {
         // FTS
         .route("/v1/fts/index", post(fts_index_handler))
         .route("/v1/fts/search", post(fts_search_handler))
+        .route("/v1/fts/suggest", post(fts_suggest_handler))
+        .route("/v1/fts/fuzzy-search", post(fts_fuzzy_search_handler))
         // Vector & Hybrid
         .route("/v1/vector/set", post(vector_set_handler))
         .route("/v1/vector/get", post(vector_get_handler))
@@ -1683,4 +1891,19 @@ pub async fn serve_http(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod error_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn constraint_violation_maps_to_conflict_and_keeps_details() {
+        let error = LiliaError::new(ErrorCode::ConstraintViolation, "rejected", false)
+            .details(json!({ "kind": "check", "constraint": "check:accounts" }));
+        let (status, Json(body)) = map_error(error);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "CONSTRAINT_VIOLATION");
+        assert_eq!(body["error"]["details"]["kind"], "check");
+    }
 }

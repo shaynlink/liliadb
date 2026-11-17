@@ -464,7 +464,7 @@ fn test_multimodel_killed_process_atomicity() {
             .json_get("chaos_json", &format!("doc_{i}"))
             .unwrap()
             .unwrap();
-        assert_eq!(doc.value["val"], i);
+        assert_eq!(doc.value()["val"], i);
 
         let node = db
             .graph_get_node("chaos_graph", &format!("node_{i}"))
@@ -597,7 +597,7 @@ fn test_enospc_batch_rollback_and_healing() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("enospc_test.lilia");
 
-    let db = Database::open(DatabaseOptions::durable(&db_path)).unwrap();
+    let db = Database::open(DatabaseOptions::durable(&db_path).with_cas_enabled(false)).unwrap();
     db.batch(&multi_model_batch("initial", 1)).unwrap();
 
     // Restrict max page quota to simulate out-of-disk condition

@@ -104,6 +104,7 @@ impl TimeSeriesWorker {
 
 #[cfg(target_arch = "wasm32")]
 impl TimeSeriesWorker {
+    #[allow(dead_code)]
     pub(crate) fn start(_options: TimeSeriesOptions) -> Result<Self> {
         Ok(Self)
     }

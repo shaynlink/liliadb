@@ -1,32 +1,112 @@
+pub mod aggregation;
+pub mod autotune;
+pub mod cas;
 mod codec;
 pub mod compression;
+pub mod crdt;
+pub mod embed;
 mod error;
+pub mod fle;
 pub mod geo;
+pub mod hlc;
 pub mod hnsw;
+pub mod integrity;
+pub mod json;
 pub mod json_patch;
+pub mod ledger;
+pub mod levenshtein;
 pub mod quantization;
+pub mod rules;
+pub mod sharding;
+pub mod tier;
 pub mod timeseries;
 mod types;
 mod version;
 
+pub use aggregation::{
+    accumulators::{
+        AnomalyAccumulator, Centroid, CountAccumulator, HyperLogLog, MaxAccumulator,
+        MinAccumulator, SumAccumulator, TDigest, WelfordAccumulator,
+    },
+    filter::FilterExpr,
+    types::{Aggregate, Sort, SortDirection},
+};
+pub use autotune::{
+    composite_expression, index_fields, index_name, normalize_sql, plan as plan_autotune,
+    AutotuneCollector, AutotuneOptions, AutotuneReport, CycleReport, IndexLookups, IndexOrigin,
+    IndexPhase, IndexRef, IndexUsageView, JsonQueryReport, PruneScope, QueryFingerprint,
+    QueryObservation, QueryStats, Recommendation, SqlObservation, SqlQueryReport, SqlQueryStats,
+    TrackedIndex,
+};
+pub use cas::{
+    compute_hash, decode_kv_pointer, encode_kv_pointer, extract_blob_hashes_from_binary_doc,
+    extract_blob_hashes_from_value, is_kv_pointer, BlobDescriptor, BlobGcStats, CasHashAlgorithm,
+    CasHasher, CasOptions, CAS_KV_MAGIC, CAS_KV_POINTER_LEN,
+};
 pub use codec::{Aes256GcmCodec, IdentityCodec, ValueCodec};
+pub use compression::dict::{
+    compress_with_dict, decompress_with_dict, train_dictionary, CollectionDictionary,
+    DictionaryRegistry,
+};
 pub use compression::{compress_bytes, decompress_bytes};
-pub use error::{ErrorCode, LiliaError, Result};
+pub use crdt::{
+    CvRdt, LogicalClock, LwwClock, LwwField, LwwJsonDocument, LwwRegister, OrSet, PNCounter,
+};
+pub use embed::{AutoEmbedConfig, BuiltinModel, EmbedOptions, EmbedStatus, Embedder};
+pub use error::{ConstraintKind, ErrorCode, LiliaError, Result};
+pub use fle::{
+    decrypt_gcm, decrypt_json_fields, decrypt_siv, encrypt_gcm, encrypt_json_fields, encrypt_siv,
+    CompartmentInfo, DecryptionMode, EncryptedEnvelope, FieldCipherAlgorithm, FieldEncryptionRule,
+    FlePolicy, KeyMaterial, KeyRegistry, ENC_PREFIX,
+};
 pub use geo::{
     circle_to_geopoly_json, coords_to_geopoly_json, haversine_distance_meters, GeofenceMatch,
     GpsPoint, EARTH_RADIUS_METERS,
 };
+pub use hlc::{
+    detect_causality, three_way_merge, CausalRelation, ConflictRecord, ConflictResolutionStrategy,
+    FieldConflict, Hlc, HlcError, HybridClock, ThreeWayMergeResult, DEFAULT_MAX_DRIFT_MS,
+};
 pub use hnsw::{HnswIndex, HnswNode};
+pub use integrity::{
+    paths_overlap, CollectionOptions, KeyMapping, RefAction, Reference, ReferenceSource,
+};
+pub use ledger::{
+    compute_commit_hash, hash_internal_node, verify_audit_path, AuditHop, InclusionProof,
+    LedgerAccumulator, LedgerAction, LedgerCommit, LedgerDeltaEntry, LedgerVerificationReport,
+    LedgerVerifyMode, MerkleTree, DOMAIN_COMMIT, DOMAIN_LEAF, DOMAIN_NODE,
+};
+pub use levenshtein::{LevenshteinAutomaton, LevenshteinState, TermTrie};
+pub use json::{
+    eval_check, eval_expr, eval_filter_predicate, parse_expr, referenced_paths, validate_check_expr, CheckOutcome, parse_json_bytes_to_binary,
+    parse_json_slice_to_binary, BinaryArrayRef, BinaryDoc, BinaryDocBuilder, BinaryObjectRef,
+    BinaryValueRef, EvaluatedValue, Expr, LiteralValue, MAGIC, MAGIC_ZSTD,
+};
+pub use rules::{
+    eval_rule_condition_json, eval_rule_condition_kv, eval_rule_condition_value,
+    infer_target_collection, interpolate_string, interpolate_value, Action, Rule, RuleBuilder,
+    RuleContext, SlidingWindow, TriggerMode, WindowCondition,
+};
+pub use sharding::{
+    ShardArchiveResult, ShardGranularity, ShardInfo, ShardStatus, ShardingConfig,
+};
+pub use tier::{
+    CollectionKind, CollectionSpec, CollectionTierEntry, CommitMode, EvictionPolicy,
+    MemoryTierStats, OverflowPolicy, RingBufferConfig, RingBufferStats, StorageTier,
+};
 pub use timeseries::{
     compress_timeseries, decompress_timeseries, downsample_points, pattern_matches, BitReader,
     BitWriter, DownsampleAggregation, TimeSeriesLifecyclePolicy, TimeSeriesPoint,
     TimeSeriesRetentionRule, TimeSeriesRetentionStats, TimeSeriesStats,
 };
 pub use types::{
-    BatchOperation, CentralityType, ComponentType, DatabaseEvent, Direction, Durability, FtsHit,
-    GraphEdge, GraphNode, HnswConfig, HybridHit, JsonEntry, JsonIndexInfo, JsonRevisionInfo,
-    KvEntry, MutationResult, NodeScore, PathEdge, RedoResult, SqlQueryResult, UndoEntry,
-    UndoResult, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric, Version, WeightedPath,
+    BatchOperation, CentralityType, CheckpointStats, ComponentType, CypherResult, DatabaseEvent,
+    DictStats, Direction, Durability, FtsFuzzyHit, FtsFuzzyOptions, FtsHit, FtsSuggestion,
+    GraphEdge, GraphNode, HlcMutationOutcome, HlcRecord,
+    HnswConfig, HybridHit, ImpactAnalysis, IndexOptions, JsonEntry, JsonIndexInfo, JsonRevisionInfo, KvEntry,
+    LiveQueryDiff, MaterializedViewInfo, MutationResult, NodeScore, PageRankConfig, PathEdge,
+    RedoResult, ResourceProfile, SqlQueryResult, TableStorageStat, UndoEntry, UndoResult,
+    VectorElementType, VectorHit, VectorIndexInfo, VectorMetric, Version, WeightedPath,
 };
 
 #[cfg(windows)]

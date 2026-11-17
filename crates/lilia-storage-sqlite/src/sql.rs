@@ -6,12 +6,17 @@
 
 use std::sync::Arc;
 
-use lilia_core::{ErrorCode, LiliaError, Result, SqlQueryResult, ValueCodec};
+use lilia_core::{
+    CollectionKind, CollectionSpec, Durability, ErrorCode, EvictionPolicy, LiliaError, Result,
+    SqlQueryResult, StorageTier, ValueCodec,
+};
 use lilia_sqlite_native::{ffi, NativeConnection, NativeStatement};
 
 pub(crate) fn register_sql_functions(
     conn: &NativeConnection,
     codec: &Arc<dyn ValueCodec>,
+    dict_registry: &Arc<lilia_core::DictionaryRegistry>,
+    key_registry: &Arc<lilia_core::KeyRegistry>,
 ) -> Result<()> {
     let codec_kv = Arc::clone(codec);
     conn.register_scalar_function("lilia_decode_kv", 1, move |ctx, args| {
@@ -30,12 +35,68 @@ pub(crate) fn register_sql_functions(
     })?;
 
     let codec_json = Arc::clone(codec);
+    let dict_reg_decode = Arc::clone(dict_registry);
+    let key_reg_decode = Arc::clone(key_registry);
     conn.register_scalar_function("lilia_decode_json", 1, move |ctx, args| {
         if args.is_empty() || args[0].is_null() {
             ctx.set_result_null();
             return Ok(());
         }
+
+        if args[0].is_blob() {
+            let blob = args[0].as_blob();
+            if blob.starts_with(b"LBJ\x01") {
+                if let Ok(root) = lilia_core::json::BinaryDoc::read_root_from_slice(blob) {
+                    let mut val = root.to_json_value();
+                    let _ = lilia_core::decrypt_json_fields(
+                        &mut val,
+                        &key_reg_decode,
+                        lilia_core::DecryptionMode::Tolerant,
+                    );
+                    let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                    ctx.set_result_text(&json_str);
+                    return Ok(());
+                }
+            } else if blob.starts_with(b"LBZ\x01") && blob.len() >= 8 {
+                let dict_id = u32::from_le_bytes(blob[4..8].try_into().unwrap());
+                if let Some(dict) = dict_reg_decode.get_by_id(dict_id) {
+                    if let Ok(decompressed) = lilia_core::compression::dict::decompress_with_dict(&blob[8..], &dict.raw_bytes) {
+                        if let Ok(root) = lilia_core::json::BinaryDoc::read_root_from_slice(&decompressed) {
+                            let mut val = root.to_json_value();
+                            let _ = lilia_core::decrypt_json_fields(
+                                &mut val,
+                                &key_reg_decode,
+                                lilia_core::DecryptionMode::Tolerant,
+                            );
+                            let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                            ctx.set_result_text(&json_str);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            // Decrypt with codec if not identity
+            if let Ok(plain) = codec_json.decode(blob) {
+                if plain.starts_with(b"LBJ\x01") {
+                    if let Ok(root) = lilia_core::json::BinaryDoc::read_root_from_slice(&plain) {
+                        let mut val = root.to_json_value();
+                        let _ = lilia_core::decrypt_json_fields(
+                            &mut val,
+                            &key_reg_decode,
+                            lilia_core::DecryptionMode::Tolerant,
+                        );
+                        let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                        ctx.set_result_text(&json_str);
+                        return Ok(());
+                    }
+                }
+            }
+            ctx.set_result_null();
+            return Ok(());
+        }
+
         let text = args[0].as_text();
+        let mut resolved_str = text.to_string();
 
         if text.starts_with("{\"$codec\":") {
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(text) {
@@ -44,8 +105,7 @@ pub(crate) fn register_sql_functions(
                     if let Ok(ciphertext) = base64::engine::general_purpose::STANDARD.decode(b64) {
                         if let Ok(plaintext) = codec_json.decode(&ciphertext) {
                             if let Ok(plain_str) = String::from_utf8(plaintext) {
-                                ctx.set_result_text(&plain_str);
-                                return Ok(());
+                                resolved_str = plain_str;
                             }
                         }
                     }
@@ -53,7 +113,275 @@ pub(crate) fn register_sql_functions(
             }
         }
 
-        ctx.set_result_text(text);
+        if resolved_str.contains(lilia_core::ENC_PREFIX) {
+            if let Ok(mut json_val) = serde_json::from_str::<serde_json::Value>(&resolved_str) {
+                let _ = lilia_core::decrypt_json_fields(
+                    &mut json_val,
+                    &key_reg_decode,
+                    lilia_core::DecryptionMode::Tolerant,
+                );
+                if let Ok(dec_str) = serde_json::to_string(&json_val) {
+                    ctx.set_result_text(&dec_str);
+                    return Ok(());
+                }
+            }
+        }
+
+        ctx.set_result_text(&resolved_str);
+        Ok(())
+    })?;
+
+    let key_reg_siv_enc = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_encrypt_siv", -1, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let plaintext = args[0].as_text();
+        let key_id = args[1].as_text();
+        let path = if args.len() >= 3 && !args[2].is_null() {
+            Some(args[2].as_text().trim_start_matches("$.").trim_start_matches('/'))
+        } else {
+            None
+        };
+        let Some(key) = key_reg_siv_enc.get_key(key_id) else {
+            return Err(LiliaError::new(ErrorCode::Unauthorized, format!("compartment key '{key_id}' not found or locked"), false));
+        };
+        let plain_bytes = serde_json::to_vec(plaintext).map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
+        let ad = path.map(str::as_bytes);
+        let ct = lilia_core::encrypt_siv(&plain_bytes, key.siv_key(), ad)?;
+        let env_str = lilia_core::EncryptedEnvelope::new(lilia_core::FieldCipherAlgorithm::DeterministicSiv, key_id, ct).encode();
+        ctx.set_result_text(&env_str);
+        Ok(())
+    })?;
+
+    let key_reg_siv_dec = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_decrypt_siv", -1, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let ct_str = args[0].as_text();
+        let key_id = args[1].as_text();
+        let path = if args.len() >= 3 && !args[2].is_null() {
+            Some(args[2].as_text().trim_start_matches("$.").trim_start_matches('/'))
+        } else {
+            None
+        };
+        let Some(env) = lilia_core::EncryptedEnvelope::parse(ct_str) else {
+            ctx.set_result_text(ct_str);
+            return Ok(());
+        };
+        let Some(key) = key_reg_siv_dec.get_key(key_id) else {
+            return Err(LiliaError::new(ErrorCode::Unauthorized, format!("compartment key '{key_id}' not found or locked"), false));
+        };
+        let ad = path.map(str::as_bytes);
+        let plain_bytes = lilia_core::decrypt_siv(&env.ciphertext, key.siv_key(), ad)?;
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&plain_bytes) {
+            if let Some(s) = val.as_str() {
+                ctx.set_result_text(s);
+            } else {
+                ctx.set_result_text(&val.to_string());
+            }
+        } else if let Ok(s) = String::from_utf8(plain_bytes) {
+            ctx.set_result_text(&s);
+        } else {
+            ctx.set_result_null();
+        }
+        Ok(())
+    })?;
+
+    let key_reg_gcm_enc = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_encrypt_gcm", -1, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let plaintext = args[0].as_text();
+        let key_id = args[1].as_text();
+        let path = if args.len() >= 3 && !args[2].is_null() {
+            Some(args[2].as_text().trim_start_matches("$.").trim_start_matches('/'))
+        } else {
+            None
+        };
+        let Some(key) = key_reg_gcm_enc.get_key(key_id) else {
+            return Err(LiliaError::new(ErrorCode::Unauthorized, format!("compartment key '{key_id}' not found or locked"), false));
+        };
+        let plain_bytes = serde_json::to_vec(plaintext).map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
+        let ad = path.map(str::as_bytes);
+        let ct = lilia_core::encrypt_gcm(&plain_bytes, key.gcm_key(), ad)?;
+        let env_str = lilia_core::EncryptedEnvelope::new(lilia_core::FieldCipherAlgorithm::RandomizedGcm, key_id, ct).encode();
+        ctx.set_result_text(&env_str);
+        Ok(())
+    })?;
+
+    let key_reg_gcm_dec = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_decrypt_gcm", -1, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let ct_str = args[0].as_text();
+        let key_id = args[1].as_text();
+        let path = if args.len() >= 3 && !args[2].is_null() {
+            Some(args[2].as_text().trim_start_matches("$.").trim_start_matches('/'))
+        } else {
+            None
+        };
+        let Some(env) = lilia_core::EncryptedEnvelope::parse(ct_str) else {
+            ctx.set_result_text(ct_str);
+            return Ok(());
+        };
+        let Some(key) = key_reg_gcm_dec.get_key(key_id) else {
+            return Err(LiliaError::new(ErrorCode::Unauthorized, format!("compartment key '{key_id}' not found or locked"), false));
+        };
+        let ad = path.map(str::as_bytes);
+        let plain_bytes = lilia_core::decrypt_gcm(&env.ciphertext, key.gcm_key(), ad)?;
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&plain_bytes) {
+            if let Some(s) = val.as_str() {
+                ctx.set_result_text(s);
+            } else {
+                ctx.set_result_text(&val.to_string());
+            }
+        } else if let Ok(s) = String::from_utf8(plain_bytes) {
+            ctx.set_result_text(&s);
+        } else {
+            ctx.set_result_null();
+        }
+        Ok(())
+    })?;
+
+    let key_reg_fle_dec = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_fle_decrypt", 1, move |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let text = args[0].as_text();
+        if let Some(env) = lilia_core::EncryptedEnvelope::parse(text) {
+            if let Some(key) = key_reg_fle_dec.get_key(&env.key_id) {
+                let plain = match env.algorithm {
+                    lilia_core::FieldCipherAlgorithm::RandomizedGcm => {
+                        lilia_core::decrypt_gcm(&env.ciphertext, key.gcm_key(), None)
+                    }
+                    lilia_core::FieldCipherAlgorithm::DeterministicSiv => {
+                        lilia_core::decrypt_siv(&env.ciphertext, key.siv_key(), None)
+                    }
+                };
+                if let Ok(plain_bytes) = plain {
+                    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&plain_bytes) {
+                        if let Some(s) = val.as_str() {
+                            ctx.set_result_text(s);
+                        } else {
+                            ctx.set_result_text(&val.to_string());
+                        }
+                    } else if let Ok(s) = String::from_utf8(plain_bytes) {
+                        ctx.set_result_text(&s);
+                    } else {
+                        ctx.set_result_text(text);
+                    }
+                    return Ok(());
+                }
+            }
+            ctx.set_result_text(text);
+        } else if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(text) {
+            let _ = lilia_core::decrypt_json_fields(
+                &mut val,
+                &key_reg_fle_dec,
+                lilia_core::DecryptionMode::Tolerant,
+            );
+            let s = serde_json::to_string(&val).unwrap_or_else(|_| text.to_string());
+            ctx.set_result_text(&s);
+        } else {
+            ctx.set_result_text(text);
+        }
+        Ok(())
+    })?;
+
+    let dict_reg_extract = Arc::clone(dict_registry);
+    conn.register_scalar_function("lilia_extract", 2, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let path = args[1].as_text();
+        if args[0].is_blob() {
+            let blob = args[0].as_blob();
+            if blob.starts_with(b"LBJ\x01") {
+                if let Ok(root) = lilia_core::json::BinaryDoc::read_root_from_slice(blob) {
+                    if let Some(target) = root.extract(path) {
+                        match target {
+                            lilia_core::json::BinaryValueRef::Null => ctx.set_result_null(),
+                            lilia_core::json::BinaryValueRef::Bool(b) => ctx.set_result_int64(if b { 1 } else { 0 }),
+                            lilia_core::json::BinaryValueRef::Int64(i) => ctx.set_result_int64(i),
+                            lilia_core::json::BinaryValueRef::Float64(f) => ctx.set_result_double(f),
+                            lilia_core::json::BinaryValueRef::String(s) => ctx.set_result_text(s),
+                            _ => {
+                                let val = target.to_json_value();
+                                let s = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                                ctx.set_result_text(&s);
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+            } else if blob.starts_with(b"LBZ\x01") && blob.len() >= 8 {
+                let dict_id = u32::from_le_bytes(blob[4..8].try_into().unwrap());
+                if let Some(dict) = dict_reg_extract.get_by_id(dict_id) {
+                    if let Ok(decompressed) = lilia_core::compression::dict::decompress_with_dict(&blob[8..], &dict.raw_bytes) {
+                        if let Ok(root) = lilia_core::json::BinaryDoc::read_root_from_slice(&decompressed) {
+                            if let Some(target) = root.extract(path) {
+                                match target {
+                                    lilia_core::json::BinaryValueRef::Null => ctx.set_result_null(),
+                                    lilia_core::json::BinaryValueRef::Bool(b) => ctx.set_result_int64(if b { 1 } else { 0 }),
+                                    lilia_core::json::BinaryValueRef::Int64(i) => ctx.set_result_int64(i),
+                                    lilia_core::json::BinaryValueRef::Float64(f) => ctx.set_result_double(f),
+                                    lilia_core::json::BinaryValueRef::String(s) => ctx.set_result_text(s),
+                                    _ => {
+                                        let val = target.to_json_value();
+                                        let s = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                                        ctx.set_result_text(&s);
+                                    }
+                                }
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        } else if args[0].is_text() {
+            let text = args[0].as_text();
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+                let ptr = if let Some(stripped) = path.strip_prefix("$.") {
+                    format!("/{}", stripped.replace('.', "/"))
+                } else if path.contains('.') {
+                    format!("/{}", path.replace('.', "/"))
+                } else if path.starts_with('/') {
+                    path.to_string()
+                } else {
+                    format!("/{path}")
+                };
+                if let Some(target) = val.pointer(&ptr) {
+                    match target {
+                        serde_json::Value::Null => ctx.set_result_null(),
+                        serde_json::Value::Bool(b) => ctx.set_result_int64(if *b { 1 } else { 0 }),
+                        serde_json::Value::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                ctx.set_result_int64(i);
+                            } else if let Some(f) = n.as_f64() {
+                                ctx.set_result_double(f);
+                            } else {
+                                ctx.set_result_text(&n.to_string());
+                            }
+                        }
+                        serde_json::Value::String(s) => ctx.set_result_text(s),
+                        _ => ctx.set_result_text(&target.to_string()),
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        ctx.set_result_null();
         Ok(())
     })?;
 
@@ -265,6 +593,27 @@ pub(crate) fn register_sql_functions(
         Ok(())
     })?;
 
+    conn.register_scalar_function("lilia_crdt_json_extract", 2, |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let blob = args[0].as_blob();
+        let path = args[1].as_text();
+        if let Ok(raw) = lilia_core::compression::decompress_bytes(blob) {
+            if let Ok(doc) = serde_json::from_slice::<lilia_core::crdt::LwwJsonDocument>(&raw) {
+                if let Some(val) = doc.get_field(path) {
+                    let json_str =
+                        serde_json::to_string(val).unwrap_or_else(|_| "null".to_string());
+                    ctx.set_result_text(&json_str);
+                    return Ok(());
+                }
+            }
+        }
+        ctx.set_result_null();
+        Ok(())
+    })?;
+
     Ok(())
 }
 
@@ -405,7 +754,7 @@ impl crate::Database {
                     entries.push((
                         space,
                         id,
-                        serde_json::to_string(&entry.value).unwrap_or_else(|_| "{}".to_string()),
+                        serde_json::to_string(&entry.value()).unwrap_or_else(|_| "{}".to_string()),
                         entry.version,
                     ));
                 }
@@ -433,7 +782,7 @@ impl crate::Database {
                         entries.push((
                             space.clone(),
                             id,
-                            serde_json::to_string(&entry.value)
+                            serde_json::to_string(&entry.value())
                                 .unwrap_or_else(|_| "{}".to_string()),
                             entry.version,
                         ));
@@ -455,7 +804,7 @@ impl crate::Database {
 
         let cte_body = if docs.is_empty() {
             if is_global {
-                format!("{table_name}(space, id, value, version) AS (SELECT '' AS space, '' AS id, '{{}}' AS value, 0 AS version WHERE 0)")
+                format!("{table_name}(space, id, value, version, tier) AS (SELECT '' AS space, '' AS id, '{{}}' AS value, 0 AS version, 'disk' AS tier WHERE 0)")
             } else {
                 format!("{table_name}(id, value, version) AS (SELECT '' AS id, '{{}}' AS value, 0 AS version WHERE 0)")
             }
@@ -467,14 +816,14 @@ impl crate::Database {
                 let esc_json = json_str.replace('\'', "''");
                 if is_global {
                     select_clauses.push(format!(
-                        "SELECT '{esc_space}', '{esc_id}', '{esc_json}', {ver}"
+                        "SELECT '{esc_space}', '{esc_id}', '{esc_json}', {ver}, 'disk'"
                     ));
                 } else {
                     select_clauses.push(format!("SELECT '{esc_id}', '{esc_json}', {ver}"));
                 }
             }
             let cols = if is_global {
-                "(space, id, value, version)"
+                "(space, id, value, version, tier)"
             } else {
                 "(id, value, version)"
             };
@@ -511,6 +860,51 @@ impl crate::Database {
             });
         }
 
+        if let Some(res) = self.try_execute_extended_ddl(trimmed)? {
+            return Ok(res);
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("create materialized view ") {
+            let after = trimmed["create materialized view ".len()..].trim();
+            let after_if_not_exists = if after.to_ascii_lowercase().starts_with("if not exists ") {
+                after["if not exists ".len()..].trim()
+            } else {
+                after
+            };
+            if let Some(as_idx) = after_if_not_exists.to_ascii_lowercase().find(" as ") {
+                let name = after_if_not_exists[..as_idx]
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('`');
+                let query = after_if_not_exists[as_idx + 4..].trim();
+                self.create_materialized_view(name, query)?;
+                return Ok(SqlQueryResult {
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    rows_affected: 0,
+                });
+            }
+        } else if lower.starts_with("drop materialized view ") {
+            let after = trimmed["drop materialized view ".len()..].trim();
+            let after_if_exists = if after.to_ascii_lowercase().starts_with("if exists ") {
+                after["if exists ".len()..].trim()
+            } else {
+                after
+            };
+            let name = after_if_exists
+                .trim_end_matches(';')
+                .trim()
+                .trim_matches('"')
+                .trim_matches('`');
+            self.drop_materialized_view(name)?;
+            return Ok(SqlQueryResult {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                rows_affected: 0,
+            });
+        }
+
         let is_readonly = {
             let conn = self.read_lock()?;
             let stmt = conn.prepare(trimmed)?;
@@ -529,6 +923,7 @@ impl crate::Database {
             let mut string_cache = Vec::new();
             bind_json_params(&mut stmt, params, &mut string_cache)?;
 
+            let started = std::time::Instant::now();
             let mut rows = Vec::new();
             while stmt.step()? {
                 let mut row_vals = Vec::with_capacity(col_count);
@@ -537,6 +932,11 @@ impl crate::Database {
                 }
                 rows.push(row_vals);
             }
+            self.autotune.record_sql(
+                trimmed,
+                started.elapsed(),
+                stmt.status(lilia_sqlite_native::StmtStatus::FullscanStep, false),
+            );
 
             Ok(SqlQueryResult {
                 columns,
@@ -545,8 +945,23 @@ impl crate::Database {
             })
         } else {
             let mut writer = self.lock_writer()?;
+            let session = if self.has_live_subscribers() || self.undo_log_capacity > 0 {
+                if let Ok(sess) = lilia_sqlite_native::NativeSession::create(&writer, "main") {
+                    let _ = sess.attach_all();
+                    Some(sess)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             let tx = writer.transaction()?;
-            let mut stmt = tx.prepare(trimmed)?;
+            let mut stmt = if self.integrity.is_empty() {
+                tx.prepare(trimmed)?
+            } else {
+                tx.prepare_denying_writes(trimmed, crate::integrity::CONTRACT_TABLES)?
+            };
             let col_count = stmt.column_count();
             let mut columns = Vec::with_capacity(col_count);
             for i in 0..col_count {
@@ -556,6 +971,7 @@ impl crate::Database {
             let mut string_cache = Vec::new();
             bind_json_params(&mut stmt, params, &mut string_cache)?;
 
+            let started = std::time::Instant::now();
             let mut rows = Vec::new();
             let rows_affected = if col_count > 0 {
                 while stmt.step()? {
@@ -570,8 +986,24 @@ impl crate::Database {
                 stmt.step()?;
                 u64::try_from(tx.conn().changes()).unwrap_or(0)
             };
+            self.autotune.record_sql(
+                trimmed,
+                started.elapsed(),
+                stmt.status(lilia_sqlite_native::StmtStatus::FullscanStep, false),
+            );
             drop(stmt);
             tx.commit()?;
+
+            if let Some(sess) = session {
+                if !sess.is_empty() {
+                    if let Ok(changeset) = sess.changeset() {
+                        if !changeset.is_empty() {
+                            self.live_query_manager
+                                .process_changeset(&changeset, &writer);
+                        }
+                    }
+                }
+            }
 
             Ok(SqlQueryResult {
                 columns,
@@ -580,4 +1012,325 @@ impl crate::Database {
             })
         }
     }
+
+    fn try_execute_extended_ddl(&self, trimmed: &str) -> Result<Option<SqlQueryResult>> {
+        let Some((w1, r1)) = take_ddl_token(trimmed) else {
+            return Ok(None);
+        };
+        if !w1.eq_ignore_ascii_case("CREATE") {
+            return Ok(None);
+        }
+        let Some((w2, r2)) = take_ddl_token(r1) else {
+            return Ok(None);
+        };
+        if w2.eq_ignore_ascii_case("EPHEMERAL") {
+            if let Some((w3, _)) = take_ddl_token(r2) {
+                if w3.eq_ignore_ascii_case("TABLE") {
+                    self.create_memory_table(trimmed)?;
+                    return Ok(Some(SqlQueryResult {
+                        columns: Vec::new(),
+                        rows: Vec::new(),
+                        rows_affected: 0,
+                    }));
+                }
+            }
+            return Ok(None);
+        }
+        if !w2.eq_ignore_ascii_case("COLLECTION") {
+            return Ok(None);
+        }
+
+        let mut rest = r2;
+        let mut if_not_exists = false;
+        let (mut name_tok, next_rest) = take_ddl_token(rest).ok_or_else(|| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                "CREATE COLLECTION requires a collection name",
+                false,
+            )
+        })?;
+        rest = next_rest;
+        if name_tok.eq_ignore_ascii_case("IF") {
+            let (kw_not, r_not) = take_ddl_token(rest).ok_or_else(|| {
+                LiliaError::new(ErrorCode::InvalidInput, "incomplete IF NOT EXISTS clause", false)
+            })?;
+            let (kw_exists, r_ex) = take_ddl_token(r_not).ok_or_else(|| {
+                LiliaError::new(ErrorCode::InvalidInput, "incomplete IF NOT EXISTS clause", false)
+            })?;
+            if !kw_not.eq_ignore_ascii_case("NOT") || !kw_exists.eq_ignore_ascii_case("EXISTS") {
+                return Err(LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    "expected IF NOT EXISTS in CREATE COLLECTION",
+                    false,
+                ));
+            }
+            if_not_exists = true;
+            let (actual_name, after_name) = take_ddl_token(r_ex).ok_or_else(|| {
+                LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    "CREATE COLLECTION requires a collection name",
+                    false,
+                )
+            })?;
+            name_tok = actual_name;
+            rest = after_name;
+        }
+
+        crate::storage::validate_name("collection", &name_tok)?;
+        let opts_str = extract_collection_options_body(rest)?;
+        let spec = parse_collection_spec_ddl(&name_tok, opts_str)?;
+
+        if if_not_exists
+            && self
+                .catalog
+                .list_specs()
+                .iter()
+                .any(|s| s.kind == spec.kind && s.name == spec.name)
+        {
+            return Ok(Some(SqlQueryResult {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                rows_affected: 0,
+            }));
+        }
+
+        self.set_collection_spec(spec)?;
+        Ok(Some(SqlQueryResult {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            rows_affected: 0,
+        }))
+    }
 }
+
+fn take_ddl_token(input: &str) -> Option<(String, &str)> {
+    let mut s = input.trim_start();
+    while s.starts_with(',') || s.starts_with('=') || s.starts_with(';') {
+        s = s[1..].trim_start();
+    }
+    if s.is_empty() {
+        return None;
+    }
+    let first = s.as_bytes()[0];
+    if first == b'\'' || first == b'"' || first == b'`' {
+        let quote = first as char;
+        let rest = &s[1..];
+        for (idx, ch) in rest.char_indices() {
+            if ch == quote {
+                return Some((rest[..idx].to_owned(), &rest[idx + ch.len_utf8()..]));
+            }
+        }
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut end = s.len();
+    for (idx, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    end = idx;
+                    break;
+                }
+                depth -= 1;
+            }
+            ',' | '=' | ';' if depth == 0 => {
+                end = idx;
+                break;
+            }
+            c if c.is_ascii_whitespace() && depth == 0 => {
+                end = idx;
+                break;
+            }
+            _ => {}
+        }
+    }
+    if end == 0 {
+        let ch = s.chars().next()?;
+        let len = ch.len_utf8();
+        return Some((ch.to_string(), &s[len..]));
+    }
+    Some((s[..end].to_owned(), &s[end..]))
+}
+
+fn extract_collection_options_body(rest: &str) -> Result<&str> {
+    let trimmed = rest.trim();
+    let no_semi = trimmed.strip_suffix(';').unwrap_or(trimmed).trim();
+    if let Some(after_open) = no_semi.strip_prefix('(') {
+        let inner = after_open.strip_suffix(')').ok_or_else(|| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                "unclosed '(' in CREATE COLLECTION options",
+                false,
+            )
+        })?;
+        return Ok(inner.trim());
+    }
+    Ok(no_semi)
+}
+
+fn parse_collection_spec_ddl(name: &str, body: &str) -> Result<CollectionSpec> {
+    let mut kind: Option<CollectionKind> = None;
+    let mut tier: Option<StorageTier> = None;
+    let mut ttl_ms: Option<u64> = None;
+    let mut eviction: Option<EvictionPolicy> = None;
+    let mut durability: Option<Durability> = None;
+
+    let mut cur = body;
+    while let Some((key, after_key)) = take_ddl_token(cur) {
+        let (mut val, after_val) = take_ddl_token(after_key).ok_or_else(|| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("missing value for CREATE COLLECTION option '{key}'"),
+                false,
+            )
+        })?;
+        cur = after_val;
+        if let Some(stripped) = cur.trim_start().strip_prefix('(') {
+            if let Some(close_idx) = stripped.find(')') {
+                val.push('(');
+                val.push_str(stripped[..close_idx].trim());
+                val.push(')');
+                cur = &stripped[close_idx + 1..];
+            }
+        }
+        match key.to_ascii_lowercase().as_str() {
+            "kind" => {
+                kind = Some(CollectionKind::parse(&val).ok_or_else(|| {
+                    LiliaError::new(
+                        ErrorCode::InvalidInput,
+                        format!("unknown collection KIND '{val}'"),
+                        false,
+                    )
+                })?);
+            }
+            "tier" => {
+                tier = Some(StorageTier::parse(&val).ok_or_else(|| {
+                    LiliaError::new(
+                        ErrorCode::InvalidInput,
+                        format!("unknown collection TIER '{val}'"),
+                        false,
+                    )
+                })?);
+            }
+            "ttl" | "ttl_ms" => {
+                ttl_ms = parse_ddl_ttl_ms(&val)?;
+            }
+            "eviction" => {
+                eviction = Some(parse_ddl_eviction(&val)?);
+            }
+            "durability" => {
+                durability = parse_ddl_durability(&val)?;
+            }
+            other => {
+                return Err(LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    format!("unknown CREATE COLLECTION option '{other}'"),
+                    false,
+                ));
+            }
+        }
+    }
+
+    let kind = kind.ok_or_else(|| {
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            "CREATE COLLECTION requires a KIND option",
+            false,
+        )
+    })?;
+    let mut spec = CollectionSpec::new(kind, name, tier.unwrap_or(StorageTier::Disk));
+    if let Some(ttl) = ttl_ms {
+        spec = spec.with_ttl_ms(ttl);
+    }
+    if let Some(ev) = eviction {
+        spec = spec.with_eviction(ev);
+    }
+    if let Some(dur) = durability {
+        spec = spec.with_durability(dur);
+    }
+    Ok(spec)
+}
+
+fn parse_ddl_ttl_ms(raw: &str) -> Result<Option<u64>> {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower == "none" || lower == "null" {
+        return Ok(None);
+    }
+    if let Some(num) = lower.strip_suffix("ms") {
+        let val = num.trim().parse::<u64>().map_err(|e| {
+            LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+        })?;
+        return Ok(Some(val));
+    }
+    if let Some(num) = lower.strip_suffix('s') {
+        let val = num.trim().parse::<u64>().map_err(|e| {
+            LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+        })?;
+        return Ok(Some(val.saturating_mul(1_000)));
+    }
+    if let Some(num) = lower.strip_suffix('m') {
+        let val = num.trim().parse::<u64>().map_err(|e| {
+            LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+        })?;
+        return Ok(Some(val.saturating_mul(60_000)));
+    }
+    if let Some(num) = lower.strip_suffix('h') {
+        let val = num.trim().parse::<u64>().map_err(|e| {
+            LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+        })?;
+        return Ok(Some(val.saturating_mul(3_600_000)));
+    }
+    let val = lower.parse::<u64>().map_err(|e| {
+        LiliaError::new(ErrorCode::InvalidInput, format!("invalid TTL '{raw}': {e}"), false)
+    })?;
+    Ok(Some(val))
+}
+
+fn parse_ddl_eviction(raw: &str) -> Result<EvictionPolicy> {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower == "none" {
+        return Ok(EvictionPolicy::None);
+    }
+    if let Some(arg) = lower.strip_prefix("lru(").and_then(|s| s.strip_suffix(')')) {
+        let max_entries = arg.trim().parse::<usize>().map_err(|e| {
+            LiliaError::new(ErrorCode::InvalidInput, format!("invalid LRU cap '{raw}': {e}"), false)
+        })?;
+        return Ok(EvictionPolicy::Lru { max_entries });
+    }
+    if let Some(arg) = lower
+        .strip_prefix("drop_oldest(")
+        .or_else(|| lower.strip_prefix("fifo("))
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let max_entries = arg.trim().parse::<usize>().map_err(|e| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid DropOldest cap '{raw}': {e}"),
+                false,
+            )
+        })?;
+        return Ok(EvictionPolicy::DropOldest { max_entries });
+    }
+    Err(LiliaError::new(
+        ErrorCode::InvalidInput,
+        format!("invalid EVICTION policy '{raw}'"),
+        false,
+    ))
+}
+
+fn parse_ddl_durability(raw: &str) -> Result<Option<Durability>> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "none" | "default" => Ok(None),
+        "durable" => Ok(Some(Durability::Durable)),
+        "balanced" => Ok(Some(Durability::Balanced)),
+        "performance" => Ok(Some(Durability::Performance)),
+        _ => Err(LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("unknown DURABILITY '{raw}'"),
+            false,
+        )),
+    }
+}
+
+

@@ -89,6 +89,18 @@ impl NativeValue {
 
     #[inline]
     #[must_use]
+    pub fn is_blob(&self) -> bool {
+        unsafe { ffi::sqlite3_value_type(self.0) == ffi::SQLITE_BLOB }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn is_text(&self) -> bool {
+        unsafe { ffi::sqlite3_value_type(self.0) == ffi::SQLITE_TEXT }
+    }
+
+    #[inline]
+    #[must_use]
     pub fn as_blob(&self) -> &[u8] {
         let ptr = unsafe { ffi::sqlite3_value_blob(self.0) };
         let len = unsafe { ffi::sqlite3_value_bytes(self.0) };

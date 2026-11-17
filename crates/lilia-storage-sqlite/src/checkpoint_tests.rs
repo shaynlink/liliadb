@@ -38,6 +38,7 @@ fn interval_flushes_small_wal_without_new_notifications() {
             interval_ms: 20,
         },
         "FULL",
+        None,
     )
     .unwrap();
     connection.exec("INSERT INTO data VALUES(1)").unwrap();
@@ -88,6 +89,7 @@ fn reader_starvation_does_not_block_writes_and_retries_on_interval() {
             interval_ms: 20,
         },
         "FULL",
+        None,
     )
     .unwrap();
     wait_stats(&service, |stats| stats.incomplete > 0);
@@ -116,6 +118,7 @@ fn disconnect_stops_worker_even_with_long_interval() {
             interval_ms: 60_000,
         },
         "FULL",
+        None,
     )
     .unwrap();
     let stats = Arc::clone(&service.stats);

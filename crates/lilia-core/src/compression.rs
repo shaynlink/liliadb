@@ -1,3 +1,5 @@
+pub mod dict;
+
 use crate::{ErrorCode, LiliaError, Result};
 
 /// Compress arbitrary bytes using Deflate (miniz_oxide level 6).

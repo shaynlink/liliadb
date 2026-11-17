@@ -19,7 +19,18 @@ fn readers_continue_and_expired_queued_batch_never_mutates() {
     database.batch(&[put(1)]).unwrap();
     let mut writer = database.lock_writer().unwrap();
     let mut transaction = writer.transaction().unwrap();
-    apply(&mut transaction, &put(2), &lilia_core::IdentityCodec).unwrap();
+    apply(
+        &mut transaction,
+        &put(2),
+        &lilia_core::IdentityCodec,
+        &lilia_core::DictionaryRegistry::new(),
+        &crate::engine::JsonOptions::default(),
+        database.hlc().as_ref(),
+        database.cas(),
+        None,
+        None,
+    )
+    .unwrap();
     std::thread::scope(|scope| {
         let reader = scope.spawn(|| database.kv_get("queue", b"key").unwrap().unwrap());
         assert_eq!(reader.join().unwrap().value, vec![1]);

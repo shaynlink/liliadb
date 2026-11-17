@@ -40,6 +40,7 @@ export interface JsonIndexInfo {
 export interface CreateIndexOptions {
   name?: string;
   path?: string;
+  filter?: string;
 }
 
 export interface JsonFindOptions {

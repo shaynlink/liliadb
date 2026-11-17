@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Vectorized in-process analytics (new `lilia-analytics`, `lilia-storage-sqlite` feature `analytics`)**: analytical SQL over persistent Apache Arrow columnar segments, executed by DataFusion 55 in vectorized batches of 1,024 rows without leaving the process.
+  - `db.analytics()?.create_table(ColumnarTableSpec::json("users_col", "users").column("age", "$.age", ColumnType::Int64))` projects typed columns out of a JSON collection (keyed by `id`) or a SQL table (`ColumnarTableSpec::sql`, keyed by `rowid`). `query(sql)` returns Arrow record batches, `query_json(sql)` the same shape as `sql_query`.
+  - Segments are immutable, stored in the database file as one Arrow IPC chunk per column (`_lilia_col_segments`, `_lilia_col_chunks`) with zone maps for segment pruning, and pass through the configured `ValueCodec`. Field-level encrypted values are never decrypted into segments.
+  - The row store stays the source of truth: triggers record the key of every changed row (`_lilia_col_delta`) on every write path, scans overlay those rows on read, and compaction (background worker or `compact(name)`) folds them back into segments. The initial build does not block writers.
+  - Read-only by construction: DDL, DML and session statements are rejected by the engine.
+  - On 500,000 rows (Apple M3 Max): filter + `sum`/`avg` in 0.97 ms and `GROUP BY` in 1.37 ms with a warm cache, against 18.9 ms and 117.6 ms for SQLite on a typed table. See `docs/benchmarks.md`.
+  - Rust API only for now, native targets only. Not available for memory-tier collections, JSON collections under temporal sharding, or `WITHOUT ROWID` SQL tables.
+- **Cross-model integrity contracts (`lilia-core`, `lilia-storage-sqlite`)**: declarative contracts enforced inside the write transaction, rejected with the structured `CONSTRAINT_VIOLATION` error code (`details`: `constraint`, `kind`, `model`, `collection`, `id`).
+  - JSON `CHECK` constraints in SQL three-valued logic: `db.json().create_collection("accounts", CollectionOptions { check: Some("$.balance >= 0.0 AND length($.iban) == 27".into()) })`, `db.json().set_check(..)`.
+  - Cross-model references `db.integrity().add_reference(Reference::graph_nodes(..) | Reference::kv(..))` with `CASCADE`, `RESTRICT` and `SET NULL` on parent deletion.
+  - Declared contracts are validated against existing data, persisted in the catalog (`_lilia_catalog.check_expr`, `_lilia_references`) and require the `Disk` tier.
+- `SQLITE_CONSTRAINT` is now reported as `CONSTRAINT_VIOLATION` (HTTP 409); protocol minor version bumped to 2.
+- **In-database embeddings (`lilia-core`, `lilia-storage-sqlite`, new `lilia-embed`)**: a JSON collection can keep the vector collection of the same name in sync with one of its text fields, with no embedding code in the application.
+  - `db.json().create_collection("articles", CollectionOptions { auto_embed: Some(AutoEmbedConfig::new("content", BuiltinModel::MiniLmL6V2)), ..Default::default() })`, or `db.json().set_auto_embed(..)` on an existing collection (its documents are embedded in the background).
+  - Writes only queue the documents whose source text changed (`_lilia_embed_queue`, same transaction); the `lilia-embed` worker thread runs inference outside any lock and stores the vector under the document id. Documents are never rewritten, so their version and `if_version` writes are unaffected. Deletions, undo and redo keep the vectors in step.
+  - `db.vector_search_text(collection, text, limit)` embeds the query with the model of the collection; `db.wait_for_embeddings(timeout)`, `db.json().embed_status(..)` and `db.json().reembed(..)` cover read-your-writes, monitoring and repair.
+  - `lilia-embed` provides `CandleEmbedder` (pure Rust, candle): `all-MiniLM-L6-v2`, 384 dimensions, mean pooling and L2 normalisation, optional `metal` and `accelerate` features. The model files (about 90 MB, fp32) are supplied by the application as a folder; nothing is downloaded or bundled. The backend is registered with `DatabaseOptions::with_embedder`, so the storage engine gains no inference dependency.
+  - Rust API only for now; auto-embedded collections and their vector collection must stay on the `Disk` tier and the source field cannot be covered by field-level encryption.
+
+### Changed
+- Toolchain and minimum supported Rust version raised from 1.91.1 to **1.100.0** (required by DataFusion 55).
+- Undo/redo changesets no longer record the columnar store's bookkeeping tables (`_lilia_col_*`); they are maintained by triggers when the changeset is applied.
+- **Breaking (alpha)**: graph nodes link to JSON documents only through an explicit `doc_space` / `doc_id`; the implicit fallback to a JSON space named after the node `kind` was removed (including in `lilia_graph_unified`). `doc_id` defaults to the node id when only `doc_space` is given.
+- Raw SQL writes to `_lilia_json`, `_lilia_kv` and `_lilia_graph_nodes` are refused while integrity contracts or auto-embedded collections are declared; use batch operations.
+- Integer arithmetic in JSON expressions no longer overflows: it evaluates to `NULL`.
+
+---
+
 ## [0.1.0-alpha.7] - 2026-11-10
 
 ### Added

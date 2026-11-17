@@ -374,3 +374,185 @@ fn wasm_plugin_sql_query_validation() {
         .expect_err("DROP query must be rejected");
     assert!(err.to_string().contains("rejected with code 1"));
 }
+
+#[test]
+fn test_wasm_plugin_trap_savepoint_isolation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let wasm_file = temp.path().join("crash_trap.wasm");
+    fs::write(&wasm_file, CRASH_TRAP_WAT.as_bytes()).expect("write wasm file");
+
+    let loaded = unsafe { load_plugin(&wasm_file).expect("load crash plugin") };
+    assert!(loaded.is_sandboxed());
+    let crash_codec = loaded.codec().expect("codec");
+
+    let db_path = temp.path().join("wasm_trap_isolation.lilia");
+    let db = Database::open(DatabaseOptions::durable(&db_path)).expect("open database");
+
+    // Host opens a transaction and writes host data
+    let mut tx = db.transaction().expect("begin tx");
+    tx.json()
+        .put(
+            "users",
+            "host_admin",
+            &serde_json::json!({"role": "superadmin", "status": "active"}),
+        )
+        .expect("put host_admin");
+
+    // Execute sandboxed Wasm plugin inside its own savepoint
+    let plugin_result = tx.execute_sandboxed_plugin("crash_plugin", |sub_tx| {
+        // Plugin sub-transaction writes some speculative enrichment
+        sub_tx
+            .graph()
+            .add_edge("host_admin", "bad_node", "EXPLOIT")
+            .expect("add edge");
+
+        assert!(
+            sub_tx
+                .graph()
+                .has_edge("host_admin", "bad_node", "EXPLOIT")
+                .unwrap(),
+            "edge must exist in speculative savepoint"
+        );
+
+        // Guest triggers out-of-bounds memory trap
+        crash_codec.encode(b"trigger segfault trap")?;
+        Ok(())
+    });
+
+    assert!(plugin_result.is_err(), "Wasm trap must return error");
+    let err_str = plugin_result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("out of bounds") || err_str.contains("memory"),
+        "error must indicate memory trap: {err_str}"
+    );
+
+    // Savepoint was rolled back in O(1):
+    // 1. The speculative edge is GONE
+    assert!(
+        !tx.graph()
+            .has_edge("host_admin", "bad_node", "EXPLOIT")
+            .unwrap(),
+        "plugin speculative edge must be cleanly rolled back"
+    );
+
+    // 2. The host document is PRESERVED
+    assert!(
+        tx.json().get("users", "host_admin").unwrap().is_some(),
+        "host_admin document must be preserved"
+    );
+
+    // 3. The transaction can continue and commit
+    tx.commit().expect("commit host transaction");
+
+    // 4. Verify persistent database state
+    assert!(db.json_get("users", "host_admin").unwrap().is_some());
+    let edges = db
+        .graph_list_edges(
+            "default",
+            Some("host_admin"),
+            Some("bad_node"),
+            Some("EXPLOIT"),
+            10,
+        )
+        .expect("list edges");
+    assert!(edges.is_empty(), "trapped edge must not exist in db");
+}
+
+#[test]
+fn test_wasm_plugin_fuel_exhaustion_savepoint_isolation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let wasm_file = temp.path().join("infinite_loop.wasm");
+    fs::write(&wasm_file, INFINITE_LOOP_WAT.as_bytes()).expect("write wasm file");
+
+    let config = WasmPluginConfig {
+        memory_limit_bytes: 64 * 1024 * 1024,
+        fuel_limit: 50_000,
+    };
+
+    let loaded = unsafe {
+        lilia_plugin_api::load_plugin_with_config(&wasm_file, config)
+            .expect("load wasm plugin with fuel limit")
+    };
+    let loop_codec = loaded.codec().expect("codec");
+
+    let db_path = temp.path().join("wasm_fuel_isolation.lilia");
+    let db = Database::open(DatabaseOptions::durable(&db_path)).expect("open database");
+
+    let mut tx = db.transaction().expect("begin tx");
+    tx.json()
+        .put("orders", "ord_100", &serde_json::json!({"amount": 250}))
+        .unwrap();
+
+    let plugin_result = tx.execute_sandboxed_plugin("looping_plugin", |sub_tx| {
+        sub_tx
+            .json()
+            .put("orders", "ord_speculative", &serde_json::json!({"amount": 9999}))
+            .unwrap();
+
+        // Infinite loop triggers fuel exhaustion
+        loop_codec.encode(b"trigger infinite loop")?;
+        Ok(())
+    });
+
+    assert!(plugin_result.is_err(), "fuel exhaustion must fail");
+    assert_eq!(
+        plugin_result.unwrap_err().code,
+        lilia_core::ErrorCode::Timeout
+    );
+
+    // Savepoint rolled back in O(1)
+    assert!(tx.json().get("orders", "ord_speculative").unwrap().is_none());
+    assert!(tx.json().get("orders", "ord_100").unwrap().is_some());
+
+    tx.commit().expect("commit");
+
+    assert!(db.json_get("orders", "ord_100").unwrap().is_some());
+    assert!(db.json_get("orders", "ord_speculative").unwrap().is_none());
+}
+
+#[test]
+fn test_wasm_plugin_oom_quota_savepoint_isolation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let wasm_file = temp.path().join("oom_quota.wasm");
+    fs::write(&wasm_file, OOM_ALLOC_WAT.as_bytes()).expect("write wasm file");
+
+    let config = WasmPluginConfig {
+        memory_limit_bytes: 64 * 1024,
+        fuel_limit: 1_000_000,
+    };
+
+    let loaded = unsafe {
+        lilia_plugin_api::load_plugin_with_config(&wasm_file, config)
+            .expect("load wasm plugin with 64KB memory limit")
+    };
+    let oom_codec = loaded.codec().expect("codec");
+
+    let db_path = temp.path().join("wasm_oom_isolation.lilia");
+    let db = Database::open(DatabaseOptions::durable(&db_path)).expect("open database");
+
+    let mut tx = db.transaction().expect("begin tx");
+    tx.kv().set("auth", b"token_1", b"valid_session").unwrap();
+
+    let plugin_result = tx.execute_sandboxed_plugin("oom_plugin", |sub_tx| {
+        sub_tx
+            .kv()
+            .set("auth", b"speculative_token", b"bad_session")
+            .unwrap();
+
+        // OOM triggers allocation failure
+        oom_codec.encode(b"large data exceeding memory quota")?;
+        Ok(())
+    });
+
+    assert!(plugin_result.is_err(), "OOM allocation must fail");
+
+    // Savepoint rolled back in O(1)
+    assert!(tx.kv().get("auth", b"speculative_token").unwrap().is_none());
+    assert!(tx.kv().get("auth", b"token_1").unwrap().is_some());
+
+    tx.commit().expect("commit");
+
+    assert!(db.kv_get("auth", b"token_1").unwrap().is_some());
+    assert!(db.kv_get("auth", b"speculative_token").unwrap().is_none());
+}
+

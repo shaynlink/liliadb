@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use lilia_core::{ErrorCode, LiliaError};
+use lilia_core::{CentralityType, ComponentType, ErrorCode, LiliaError};
+use lilia_graph::DatabaseGraphExt;
 use lilia_protocol::{
     read_frame, write_frame, Operation, Request, Response, ResponseValue, PROTOCOL_MAJOR,
     PROTOCOL_MINOR,
@@ -343,6 +344,39 @@ async fn close_database(database: Arc<Database>) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn verify_stream_token<S>(
+    stream: &mut S,
+    request_id: &str,
+    supplied_token: &str,
+    expected_token: &str,
+    request_uuid: Uuid,
+) -> std::io::Result<bool>
+where
+    S: AsyncWrite + Unpin,
+{
+    if bool::from(supplied_token.as_bytes().ct_eq(expected_token.as_bytes())) {
+        return Ok(true);
+    }
+    let err = LiliaError::new(ErrorCode::Unauthorized, "invalid daemon token", false)
+        .with_request_id(request_uuid);
+    write_frame(
+        stream,
+        &Response {
+            id: request_id.to_owned(),
+            result: Err(err),
+        },
+    )
+    .await?;
+    Ok(false)
+}
+
+fn current_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 #[allow(clippy::too_many_lines)]
 async fn handle_stream<S>(
     mut stream: S,
@@ -370,18 +404,15 @@ where
         let request_uuid = Uuid::parse_str(&request.id).unwrap_or_else(|_| Uuid::new_v4());
 
         if let Operation::Subscribe { namespace } = request.operation {
-            let authorized = bool::from(request.token.as_bytes().ct_eq(token.as_bytes()));
-            if !authorized {
-                let err = LiliaError::new(ErrorCode::Unauthorized, "invalid daemon token", false)
-                    .with_request_id(request_uuid);
-                write_frame(
-                    &mut stream,
-                    &Response {
-                        id: request.id,
-                        result: Err(err),
-                    },
-                )
-                .await?;
+            if !verify_stream_token(
+                &mut stream,
+                &request.id,
+                &request.token,
+                token,
+                request_uuid,
+            )
+            .await?
+            {
                 return Ok(());
             }
             write_frame(
@@ -435,6 +466,107 @@ where
                 }
             }
             info!(request_id, "client subscription closed");
+            return Ok(());
+        }
+
+        if let Operation::LiveQuerySubscribe { sql, params } = request.operation {
+            if !verify_stream_token(
+                &mut stream,
+                &request.id,
+                &request.token,
+                token,
+                request_uuid,
+            )
+            .await?
+            {
+                return Ok(());
+            }
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let db_for_live = Arc::clone(&database);
+            let handle = match tokio::task::spawn_blocking(move || {
+                db_for_live.live_query(&sql, &params, move |diff| {
+                    let _ = tx.send(diff);
+                })
+            })
+            .await
+            {
+                Ok(Ok(handle)) => handle,
+                Ok(Err(err)) => {
+                    write_frame(
+                        &mut stream,
+                        &Response {
+                            id: request.id,
+                            result: Err(err.with_request_id(request_uuid)),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                Err(join_err) => {
+                    let err = LiliaError::new(
+                        ErrorCode::Storage,
+                        format!("live query worker panicked: {join_err}"),
+                        false,
+                    )
+                    .with_request_id(request_uuid);
+                    write_frame(
+                        &mut stream,
+                        &Response {
+                            id: request.id,
+                            result: Err(err),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+            write_frame(
+                &mut stream,
+                &Response {
+                    id: request.id.clone(),
+                    result: Ok(ResponseValue::Ack),
+                },
+            )
+            .await?;
+            info!(
+                request_id,
+                operation = "live_query_subscribe",
+                subscription_id = handle.id,
+                "live query subscription started"
+            );
+            let mut read_buf = [0u8; 1];
+            loop {
+                tokio::select! {
+                    diff = rx.recv() => {
+                        match diff {
+                            Some(diff) => {
+                                if write_frame(
+                                    &mut stream,
+                                    &Response {
+                                        id: request.id.clone(),
+                                        result: Ok(ResponseValue::LiveQueryDiff(diff)),
+                                    },
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    res = stream.read(&mut read_buf) => {
+                        match res {
+                            Ok(0) | Err(_) => break,
+                            _ => {}
+                        }
+                    }
+                    () = shutdown.notified() => break,
+                }
+            }
+            handle.unsubscribe();
+            info!(request_id, subscription_id = handle.id, "live query subscription closed");
             return Ok(());
         }
 
@@ -512,6 +644,7 @@ async fn execute(
     .map_err(|_| LiliaError::new(ErrorCode::Storage, "request worker failed", false))?
 }
 
+#[allow(clippy::too_many_lines)]
 fn operation_name(operation: &Operation) -> &'static str {
     match operation {
         Operation::Handshake { .. } => "handshake",
@@ -536,6 +669,84 @@ fn operation_name(operation: &Operation) -> &'static str {
         Operation::VectorSearch { .. } => "vector_search",
         Operation::HybridSearch { .. } => "hybrid_search",
         Operation::Subscribe { .. } => "subscribe",
+        Operation::CrdtCounterGet { .. } => "crdt_counter_get",
+        Operation::CrdtSetGet { .. } => "crdt_set_get",
+        Operation::CrdtJsonGet { .. } => "crdt_json_get",
+        Operation::QuickCheck => "quick_check",
+        Operation::Checkpoint => "checkpoint",
+        Operation::CheckpointStats => "checkpoint_stats",
+        Operation::StorageStats => "storage_stats",
+        Operation::FtsDelete { .. } => "fts_delete",
+        Operation::JsonExtract { .. } => "json_extract",
+        Operation::JsonScanPrefix { .. } => "json_scan_prefix",
+        Operation::JsonGetAtVersion { .. } => "json_get_at_version",
+        Operation::JsonGetAtTimestamp { .. } => "json_get_at_timestamp",
+        Operation::JsonHistory { .. } => "json_history",
+        Operation::JsonDiff { .. } => "json_diff",
+        Operation::JsonTrainDictionary { .. } => "json_train_dictionary",
+        Operation::JsonSetAutoTrain { .. } => "json_set_auto_train",
+        Operation::JsonIsAutoTrainEnabled { .. } => "json_is_auto_train_enabled",
+        Operation::JsonPutHlc { .. } => "json_put_hlc",
+        Operation::JsonGetHlc { .. } => "json_get_hlc",
+        Operation::GraphGetNode { .. } => "graph_get_node",
+        Operation::GraphGetNodeDocument { .. } => "graph_get_node_document",
+        Operation::GraphDeleteNode { .. } => "graph_delete_node",
+        Operation::GraphListNodes { .. } => "graph_list_nodes",
+        Operation::GraphRemoveEdge { .. } => "graph_remove_edge",
+        Operation::GraphListEdges { .. } => "graph_list_edges",
+        Operation::GraphImpactAnalysis { .. } => "graph_impact_analysis",
+        Operation::GraphShortestPath { .. } => "graph_shortest_path",
+        Operation::GraphDijkstra { .. } => "graph_dijkstra",
+        Operation::GraphAllShortestPaths { .. } => "graph_all_shortest_paths",
+        Operation::GraphAstarSpatial { .. } => "graph_astar_spatial",
+        Operation::GraphPageRank { .. } => "graph_pagerank",
+        Operation::GraphCentrality { .. } => "graph_centrality",
+        Operation::GraphHasCycle { .. } => "graph_has_cycle",
+        Operation::GraphFindCycles { .. } => "graph_find_cycles",
+        Operation::GraphConnectedComponents { .. } => "graph_connected_components",
+        Operation::GraphCypher { .. } => "graph_cypher",
+        Operation::VectorCreateIndex { .. } => "vector_create_index",
+        Operation::VectorGetIndexInfo { .. } => "vector_get_index_info",
+        Operation::VectorDropIndex { .. } => "vector_drop_index",
+        Operation::VectorSearchFiltered { .. } => "vector_search_filtered",
+        Operation::VectorSearchInGraphNeighbors { .. } => "vector_search_in_graph_neighbors",
+        Operation::VectorSearchByJsonIndex { .. } => "vector_search_by_json_index",
+        Operation::TsAppendPoints { .. } => "ts_append_points",
+        Operation::TsQueryRange { .. } => "ts_query_range",
+        Operation::TsQueryAuto { .. } => "ts_query_auto",
+        Operation::TsQueryStats { .. } => "ts_query_stats",
+        Operation::TsSetPolicy { .. } => "ts_set_policy",
+        Operation::TsGetPolicy { .. } => "ts_get_policy",
+        Operation::TsListPolicies => "ts_list_policies",
+        Operation::TsDeletePolicy { .. } => "ts_delete_policy",
+        Operation::TsApplyRetention { .. } => "ts_apply_retention",
+        Operation::GeoAddFence { .. } => "geo_add_fence",
+        Operation::GeoRemoveFence { .. } => "geo_remove_fence",
+        Operation::GeoContainsPoint { .. } => "geo_contains_point",
+        Operation::GeoFindFencesForPoint { .. } => "geo_find_fences_for_point",
+        Operation::GeoRecordGpsPoints { .. } => "geo_record_gps_points",
+        Operation::GeoGetTrackPoints { .. } => "geo_get_track_points",
+        Operation::GeoTrackDistance { .. } => "geo_track_distance",
+        Operation::CrdtCounterState { .. } => "crdt_counter_state",
+        Operation::CrdtCounterMerge { .. } => "crdt_counter_merge",
+        Operation::CrdtSetContains { .. } => "crdt_set_contains",
+        Operation::CrdtSetState { .. } => "crdt_set_state",
+        Operation::CrdtSetPrune { .. } => "crdt_set_prune",
+        Operation::CrdtSetMerge { .. } => "crdt_set_merge",
+        Operation::CrdtJsonState { .. } => "crdt_json_state",
+        Operation::CrdtJsonMerge { .. } => "crdt_json_merge",
+        Operation::HlcNext => "hlc_next",
+        Operation::HlcObserve { .. } => "hlc_observe",
+        Operation::ListConflicts { .. } => "list_conflicts",
+        Operation::ResolveConflict { .. } => "resolve_conflict",
+        Operation::Undo => "undo",
+        Operation::Redo => "redo",
+        Operation::UndoHistory => "undo_history",
+        Operation::CreateMaterializedView { .. } => "create_materialized_view",
+        Operation::DropMaterializedView { .. } => "drop_materialized_view",
+        Operation::RefreshMaterializedView { .. } => "refresh_materialized_view",
+        Operation::ListMaterializedViews => "list_materialized_views",
+        Operation::LiveQuerySubscribe { .. } => "live_query_subscribe",
     }
 }
 
@@ -556,6 +767,14 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
                     "vector".into(),
                     "hybrid".into(),
                     "watch".into(),
+                    "crdt".into(),
+                    "timeseries".into(),
+                    "geo".into(),
+                    "hlc".into(),
+                    "undo".into(),
+                    "ivm".into(),
+                    "live_query".into(),
+                    "diagnostics".into(),
                 ],
             }
         }
@@ -572,7 +791,7 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             database.backup(destination)?;
             ResponseValue::Ack
         }
-        Operation::Subscribe { .. } => ResponseValue::Ack,
+        Operation::Subscribe { .. } | Operation::LiveQuerySubscribe { .. } => ResponseValue::Ack,
         Operation::KvGet { namespace, key } => {
             ResponseValue::Kv(database.kv_get(&namespace, &key)?)
         }
@@ -587,8 +806,14 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             after,
             limit,
         } => ResponseValue::JsonPage(database.json_scan(&space, after.as_deref(), limit)?),
-        Operation::JsonCreateIndex { space, name, path } => {
-            database.create_json_index(&space, &name, &path)?;
+        Operation::JsonCreateIndex {
+            space,
+            name,
+            path,
+            filter,
+        } => {
+            let options = lilia_core::IndexOptions { filter };
+            database.create_json_index_with_options(&space, &name, &path, options)?;
             ResponseValue::Ack
         }
         Operation::JsonDropIndex { space, name } => {
@@ -708,6 +933,484 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
                 vector_weight,
                 limit,
             )?)
+        }
+        Operation::CrdtCounterGet { space, id } => {
+            ResponseValue::CrdtCounter(database.crdt().counter(&space, &id).get()?)
+        }
+        Operation::CrdtSetGet { space, id } => {
+            let elements = database.crdt().set(&space, &id).read()?.into_iter().collect();
+            ResponseValue::CrdtSet(elements)
+        }
+        Operation::CrdtJsonGet { space, id } => {
+            ResponseValue::CrdtJson(database.crdt().doc(&space, &id).get()?)
+        }
+        Operation::QuickCheck => ResponseValue::Bool(database.quick_check()?),
+        Operation::Checkpoint => {
+            database.checkpoint()?;
+            ResponseValue::Ack
+        }
+        Operation::CheckpointStats => ResponseValue::CheckpointStats(database.checkpoint_stats()),
+        Operation::StorageStats => ResponseValue::TableStorageStats(database.storage_stats()?),
+        Operation::FtsDelete { collection, doc_id } => {
+            ResponseValue::Bool(database.fts_delete(&collection, &doc_id)?)
+        }
+        Operation::JsonExtract { space, id, path } => {
+            ResponseValue::JsonExtracted(database.json_extract(&space, &id, &path)?)
+        }
+        Operation::JsonScanPrefix {
+            space,
+            prefix,
+            after_id,
+            limit,
+        } => ResponseValue::JsonPage(database.json_scan_prefix(
+            &space,
+            &prefix,
+            after_id.as_deref(),
+            limit,
+        )?),
+        Operation::JsonGetAtVersion { space, id, version } => {
+            ResponseValue::Json(database.json_get_at_version(&space, &id, version)?)
+        }
+        Operation::JsonGetAtTimestamp {
+            space,
+            id,
+            timestamp_ms,
+        } => ResponseValue::Json(database.json_get_at_timestamp(&space, &id, timestamp_ms)?),
+        Operation::JsonHistory { space, id } => {
+            ResponseValue::JsonRevisions(database.json_history(&space, &id)?)
+        }
+        Operation::JsonDiff {
+            space,
+            id,
+            from_version,
+            to_version,
+        } => ResponseValue::JsonValue(database.json_diff(&space, &id, from_version, to_version)?),
+        Operation::JsonTrainDictionary {
+            space,
+            sample_count,
+            dict_size,
+        } => ResponseValue::DictStats(database.train_json_dictionary(
+            &space,
+            sample_count,
+            dict_size,
+        )?),
+        Operation::JsonSetAutoTrain { space, enabled } => {
+            database.set_space_auto_train(&space, enabled)?;
+            ResponseValue::Ack
+        }
+        Operation::JsonIsAutoTrainEnabled { space } => {
+            ResponseValue::Bool(database.is_space_auto_train_enabled(&space))
+        }
+        Operation::JsonPutHlc {
+            space,
+            id,
+            value,
+            hlc,
+            parent_hlc,
+            strategy,
+        } => ResponseValue::HlcOutcome(
+            database.json_put_hlc(&space, &id, value, hlc, parent_hlc, strategy)?,
+        ),
+        Operation::JsonGetHlc { space, id } => {
+            ResponseValue::HlcRecord(database.json_get_hlc(&space, &id)?)
+        }
+        Operation::GraphGetNode { graph, id } => {
+            ResponseValue::GraphNode(database.graph_get_node(&graph, &id)?)
+        }
+        Operation::GraphGetNodeDocument { graph, id } => {
+            ResponseValue::JsonExtracted(database.graph_get_node_document(&graph, &id)?)
+        }
+        Operation::GraphDeleteNode { graph, id } => {
+            ResponseValue::Bool(database.graph_delete_node(&graph, &id)?)
+        }
+        Operation::GraphListNodes { graph, kind, limit } => {
+            ResponseValue::GraphNodes(database.graph_list_nodes(&graph, kind.as_deref(), limit)?)
+        }
+        Operation::GraphRemoveEdge {
+            graph,
+            source,
+            target,
+            kind,
+        } => ResponseValue::Bool(database.graph_remove_edge(&graph, &source, &target, &kind)?),
+        Operation::GraphListEdges {
+            graph,
+            source,
+            target,
+            kind,
+            limit,
+        } => ResponseValue::GraphEdges(database.graph_list_edges(
+            &graph,
+            source.as_deref(),
+            target.as_deref(),
+            kind.as_deref(),
+            limit,
+        )?),
+        Operation::GraphImpactAnalysis {
+            graph,
+            changed_nodes,
+        } => ResponseValue::GraphImpact(database.graph(&graph).impact_analysis(&changed_nodes)?),
+        Operation::GraphShortestPath {
+            graph,
+            start,
+            target,
+            direction,
+            kind_filter,
+        } => ResponseValue::WeightedPath(database.graph(&graph).shortest_path(
+            &start,
+            &target,
+            direction,
+            kind_filter.as_deref(),
+        )?),
+        Operation::GraphDijkstra {
+            graph,
+            start,
+            target,
+            direction,
+            kind_filter,
+        } => ResponseValue::WeightedPath(database.graph(&graph).dijkstra(
+            &start,
+            target.as_deref(),
+            direction,
+            kind_filter.as_deref(),
+        )?),
+        Operation::GraphAllShortestPaths {
+            graph,
+            start,
+            direction,
+            kind_filter,
+        } => ResponseValue::WeightedPathMap(database.graph(&graph).all_shortest_paths(
+            &start,
+            direction,
+            kind_filter.as_deref(),
+        )?),
+        Operation::GraphAstarSpatial {
+            graph,
+            start,
+            target,
+            direction,
+            kind_filter,
+        } => ResponseValue::WeightedPath(database.graph(&graph).astar_spatial(
+            &start,
+            &target,
+            direction,
+            kind_filter.as_deref(),
+        )?),
+        Operation::GraphPageRank { graph, config } => {
+            ResponseValue::NodeScores(database.graph(&graph).pagerank(&config)?)
+        }
+        Operation::GraphCentrality {
+            graph,
+            centrality,
+            direction,
+            kind_filter,
+            normalized,
+        } => {
+            let store = database.graph(&graph);
+            let scores = match centrality {
+                CentralityType::Betweenness => {
+                    store.betweenness_centrality(direction, kind_filter.as_deref(), normalized)?
+                }
+                CentralityType::Closeness => {
+                    store.closeness_centrality(direction, kind_filter.as_deref())?
+                }
+                CentralityType::Degree => {
+                    store.degree_centrality(direction, kind_filter.as_deref())?
+                }
+            };
+            ResponseValue::NodeScores(scores)
+        }
+        Operation::GraphHasCycle {
+            graph,
+            direction,
+            kind_filter,
+        } => ResponseValue::Bool(
+            database
+                .graph(&graph)
+                .has_cycle(direction, kind_filter.as_deref())?,
+        ),
+        Operation::GraphFindCycles {
+            graph,
+            max_cycles,
+            kind_filter,
+        } => ResponseValue::CycleList(
+            database
+                .graph(&graph)
+                .find_cycles(max_cycles, kind_filter.as_deref())?,
+        ),
+        Operation::GraphConnectedComponents {
+            graph,
+            component_type,
+            kind_filter,
+        } => {
+            let store = database.graph(&graph);
+            let components = match component_type {
+                ComponentType::StronglyConnected => {
+                    store.strongly_connected_components(kind_filter.as_deref())?
+                }
+                ComponentType::WeaklyConnected => {
+                    store.weakly_connected_components(kind_filter.as_deref())?
+                }
+            };
+            ResponseValue::CycleList(components)
+        }
+        Operation::GraphCypher { graph, query } => {
+            ResponseValue::CypherResult(database.graph(&graph).cypher(&query)?)
+        }
+        Operation::VectorCreateIndex { collection, config } => {
+            database.vector_create_index(&collection, config)?;
+            ResponseValue::Ack
+        }
+        Operation::VectorGetIndexInfo { collection } => {
+            ResponseValue::VectorIndexInfo(database.vector_get_index_info(&collection)?)
+        }
+        Operation::VectorDropIndex { collection } => {
+            ResponseValue::Bool(database.vector_drop_index(&collection)?)
+        }
+        Operation::VectorSearchFiltered {
+            collection,
+            query_vector,
+            dim,
+            element_type,
+            metric,
+            candidate_ids,
+            limit,
+        } => {
+            let refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+            ResponseValue::VectorHits(database.vector_search_filtered(
+                &collection,
+                &query_vector,
+                dim,
+                element_type,
+                metric,
+                &refs,
+                limit,
+            )?)
+        }
+        Operation::VectorSearchInGraphNeighbors {
+            collection,
+            graph,
+            start_node,
+            direction,
+            query_vector,
+            dim,
+            element_type,
+            metric,
+            limit,
+        } => ResponseValue::VectorHits(database.vector_search_in_graph_neighbors(
+            &collection,
+            &graph,
+            &start_node,
+            direction,
+            &query_vector,
+            dim,
+            element_type,
+            metric,
+            limit,
+        )?),
+        Operation::VectorSearchByJsonIndex {
+            collection,
+            space,
+            index_name,
+            index_value,
+            query_vector,
+            dim,
+            element_type,
+            metric,
+            limit,
+        } => ResponseValue::VectorHits(database.vector_search_by_json_index(
+            &collection,
+            &space,
+            &index_name,
+            &index_value,
+            &query_vector,
+            dim,
+            element_type,
+            metric,
+            limit,
+        )?),
+        Operation::TsAppendPoints {
+            series_id,
+            points,
+            resolution_ms,
+        } => {
+            if let Some(res_ms) = resolution_ms {
+                database.ts_append_chunk(&series_id, res_ms, &points)?;
+            } else {
+                database.ts_append_points(&series_id, &points)?;
+            }
+            ResponseValue::Ack
+        }
+        Operation::TsQueryRange {
+            series_id,
+            start_time,
+            end_time,
+            resolution_ms,
+        } => {
+            let points = match resolution_ms {
+                Some(res_ms) => database.ts_query_range_with_resolution(
+                    &series_id,
+                    res_ms,
+                    start_time,
+                    end_time,
+                )?,
+                None => database.ts_query_range(&series_id, start_time, end_time)?,
+            };
+            ResponseValue::TsPoints(points)
+        }
+        Operation::TsQueryAuto {
+            series_id,
+            start_time,
+            end_time,
+            max_points,
+        } => ResponseValue::TsPoints(database.ts_query_auto(
+            &series_id,
+            start_time,
+            end_time,
+            max_points,
+        )?),
+        Operation::TsQueryStats {
+            series_id,
+            start_time,
+            end_time,
+            resolution_ms,
+        } => {
+            let stats = match resolution_ms {
+                Some(res_ms) => database.ts_query_stats_with_resolution(
+                    &series_id,
+                    res_ms,
+                    start_time,
+                    end_time,
+                )?,
+                None => database.ts_query_stats(&series_id, start_time, end_time)?,
+            };
+            ResponseValue::TsStats(stats)
+        }
+        Operation::TsSetPolicy { policy } => {
+            database.ts_set_policy(&policy)?;
+            ResponseValue::Ack
+        }
+        Operation::TsGetPolicy { series_pattern } => {
+            ResponseValue::TsPolicy(database.ts_get_policy(&series_pattern)?)
+        }
+        Operation::TsListPolicies => ResponseValue::TsPolicies(database.ts_list_policies()?),
+        Operation::TsDeletePolicy { series_pattern } => {
+            ResponseValue::Bool(database.ts_delete_policy(&series_pattern)?)
+        }
+        Operation::TsApplyRetention {
+            series_id,
+            policy,
+            now_ms,
+        } => {
+            let stats = match (series_id, policy) {
+                (Some(sid), Some(pol)) => database.ts_apply_retention_for_series(
+                    &sid,
+                    &pol,
+                    now_ms.unwrap_or_else(current_epoch_ms),
+                )?,
+                (Some(_), None) | (None, Some(_)) => {
+                    return Err(LiliaError::new(
+                        ErrorCode::InvalidInput,
+                        "ts_apply_retention requires both series_id and policy together, or neither",
+                        false,
+                    ));
+                }
+                (None, None) => match now_ms {
+                    Some(now) => database.ts_apply_retention_at(now)?,
+                    None => database.ts_apply_retention()?,
+                },
+            };
+            ResponseValue::TsRetentionStats(stats)
+        }
+        Operation::GeoAddFence {
+            id,
+            name,
+            category,
+            polygon_json,
+            metadata,
+        } => {
+            database.geo_add_fence(&id, &name, &category, &polygon_json, metadata.as_deref())?;
+            ResponseValue::Ack
+        }
+        Operation::GeoRemoveFence { id } => ResponseValue::Bool(database.geo_remove_fence(&id)?),
+        Operation::GeoContainsPoint {
+            polygon_json,
+            lon,
+            lat,
+        } => ResponseValue::Bool(database.geo_contains_point(&polygon_json, lon, lat)?),
+        Operation::GeoFindFencesForPoint { lon, lat } => {
+            ResponseValue::GeofenceMatches(database.geo_find_fences_for_point(lon, lat)?)
+        }
+        Operation::GeoRecordGpsPoints { track_id, points } => {
+            ResponseValue::GeofenceMatches(database.geo_record_gps_points(&track_id, &points)?)
+        }
+        Operation::GeoGetTrackPoints {
+            track_id,
+            start_time,
+            end_time,
+        } => ResponseValue::GpsPoints(database.geo_get_track_points(
+            &track_id,
+            start_time,
+            end_time,
+        )?),
+        Operation::GeoTrackDistance { track_id } => {
+            ResponseValue::F64(database.geo_track_distance_meters(&track_id)?)
+        }
+        Operation::CrdtCounterState { space, id } => {
+            ResponseValue::CrdtCounterState(database.crdt().counter(&space, &id).state()?)
+        }
+        Operation::CrdtCounterMerge { space, id, remote } => {
+            ResponseValue::CrdtCounter(database.crdt().counter(&space, &id).merge(&remote)?)
+        }
+        Operation::CrdtSetContains { space, id, element } => {
+            ResponseValue::Bool(database.crdt().set(&space, &id).contains(&element)?)
+        }
+        Operation::CrdtSetState { space, id } => {
+            ResponseValue::CrdtSetState(database.crdt().set(&space, &id).state()?)
+        }
+        Operation::CrdtSetPrune {
+            space,
+            id,
+            cutoff_ms,
+        } => ResponseValue::Usize(database.crdt().set(&space, &id).prune(cutoff_ms)?),
+        Operation::CrdtSetMerge { space, id, remote } => {
+            database.crdt().set(&space, &id).merge(&remote)?;
+            ResponseValue::Ack
+        }
+        Operation::CrdtJsonState { space, id } => {
+            ResponseValue::CrdtJsonState(database.crdt().doc(&space, &id).state()?)
+        }
+        Operation::CrdtJsonMerge { space, id, remote } => {
+            ResponseValue::U64(database.crdt().doc(&space, &id).merge(&remote)?)
+        }
+        Operation::HlcNext => ResponseValue::Hlc(database.next_hlc()),
+        Operation::HlcObserve { remote } => ResponseValue::Hlc(database.observe_hlc(&remote)?),
+        Operation::ListConflicts { space } => {
+            ResponseValue::Conflicts(database.list_conflicts(space.as_deref())?)
+        }
+        Operation::ResolveConflict {
+            conflict_id,
+            resolved_value,
+        } => {
+            database.resolve_conflict(conflict_id, resolved_value)?;
+            ResponseValue::Ack
+        }
+        Operation::Undo => ResponseValue::UndoResult(database.undo()?),
+        Operation::Redo => ResponseValue::RedoResult(database.redo()?),
+        Operation::UndoHistory => ResponseValue::UndoEntries(database.undo_history()?),
+        Operation::CreateMaterializedView { name, query } => {
+            database.create_materialized_view(&name, &query)?;
+            ResponseValue::Ack
+        }
+        Operation::DropMaterializedView { name } => {
+            database.drop_materialized_view(&name)?;
+            ResponseValue::Ack
+        }
+        Operation::RefreshMaterializedView { name } => {
+            database.refresh_materialized_view(&name)?;
+            ResponseValue::Ack
+        }
+        Operation::ListMaterializedViews => {
+            ResponseValue::MaterializedViews(database.list_materialized_views()?)
         }
     })
 }

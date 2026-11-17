@@ -591,6 +591,40 @@ async fn http_gateway_kv_json_sql_lifecycle() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0]["doc_id"], "doc1");
 
+    // FTS Suggest (typo: "liliad" -> "liliadb")
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/fts/suggest")
+        .header("Authorization", &auth_header)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"collection":"docs","prefix":"liliad","max_distance":1}"#,
+        ))
+        .unwrap();
+    let (status, body) = send(req).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    let suggs = body["suggestions"].as_array().unwrap();
+    assert!(!suggs.is_empty());
+    assert_eq!(suggs[0]["term"], "liliadb");
+
+    // FTS Fuzzy Search (typo: "liliad" finds "doc1")
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/fts/fuzzy-search")
+        .header("Authorization", &auth_header)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"collection":"docs","query":"liliad","max_distance":1}"#,
+        ))
+        .unwrap();
+    let (status, body) = send(req).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    let fuzzy_hits = body["hits"].as_array().unwrap();
+    assert_eq!(fuzzy_hits.len(), 1);
+    assert_eq!(fuzzy_hits[0]["doc_id"], "doc1");
+
     // 6. DOCTOR
     let req = axum::http::Request::builder()
         .method("GET")
@@ -850,4 +884,722 @@ fn require_sandboxed_plugins_rejects_native_plugin() {
             .contains("requires WebAssembly sandboxed plugins"),
         "error should reject native plugin: {err}"
     );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_ipc_extended_multimodel_dispatch() {
+    use lilia_core::{
+        circle_to_geopoly_json, BatchOperation, CentralityType, ComponentType,
+        ConflictResolutionStrategy, Direction, GpsPoint, HnswConfig, PageRankConfig,
+        TimeSeriesPoint, VectorElementType, VectorMetric,
+    };
+    use lilia_protocol::{Operation, ResponseValue};
+
+    let (_dir, db) = database();
+    let shutdown = Arc::new(Notify::new());
+    let (mut client, server) = tokio::io::duplex(65_536);
+    let handler = tokio::spawn(handle_stream(
+        server,
+        Arc::clone(&db),
+        TOKEN,
+        Arc::clone(&shutdown),
+    ));
+
+    // 1. Diagnostics
+    assert!(matches!(
+        exchange(&mut client, TOKEN, Operation::QuickCheck, None)
+            .await
+            .result
+            .unwrap(),
+        ResponseValue::Bool(true)
+    ));
+    assert!(matches!(
+        exchange(&mut client, TOKEN, Operation::Checkpoint, None)
+            .await
+            .result
+            .unwrap(),
+        ResponseValue::Ack
+    ));
+    assert!(matches!(
+        exchange(&mut client, TOKEN, Operation::CheckpointStats, None)
+            .await
+            .result
+            .unwrap(),
+        ResponseValue::CheckpointStats(_)
+    ));
+    assert!(matches!(
+        exchange(&mut client, TOKEN, Operation::StorageStats, None)
+            .await
+            .result
+            .unwrap(),
+        ResponseValue::TableStorageStats(stats) if !stats.is_empty()
+    ));
+
+    // 2. JSON Extended + Time-Travel + Zstd Dict + Undo/Redo + FTS Delete
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::Batch {
+            operations: vec![
+                BatchOperation::JsonPut {
+                    space: "users".into(),
+                    id: "u1".into(),
+                    value: serde_json::json!({"name": "Alice", "role": "admin", "city": "Paris"}),
+                    if_version: None,
+                },
+                BatchOperation::JsonPut {
+                    space: "users".into(),
+                    id: "u1".into(),
+                    value: serde_json::json!({"name": "Alice", "role": "owner", "city": "Paris"}),
+                    if_version: None,
+                },
+            ],
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+
+    match exchange(
+        &mut client,
+        TOKEN,
+        Operation::JsonExtract {
+            space: "users".into(),
+            id: "u1".into(),
+            path: "$.role".into(),
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap()
+    {
+        ResponseValue::JsonExtracted(Some(v)) => assert_eq!(v, serde_json::json!("owner")),
+        other => panic!("unexpected json extract: {other:?}"),
+    }
+    match exchange(
+        &mut client,
+        TOKEN,
+        Operation::JsonScanPrefix {
+            space: "users".into(),
+            prefix: "u".into(),
+            after_id: None,
+            limit: 10,
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap()
+    {
+        ResponseValue::JsonPage(page) => assert_eq!(page.len(), 1),
+        other => panic!("unexpected scan prefix: {other:?}"),
+    }
+    match exchange(
+        &mut client,
+        TOKEN,
+        Operation::JsonGetAtVersion {
+            space: "users".into(),
+            id: "u1".into(),
+            version: 1,
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap()
+    {
+        ResponseValue::Json(Some(entry)) => {
+            assert_eq!(entry.value()["role"], serde_json::json!("admin"));
+        }
+        other => panic!("unexpected get_at_version: {other:?}"),
+    }
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::JsonHistory {
+                space: "users".into(),
+                id: "u1".into()
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::JsonRevisions(revs) if revs.len() == 2
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::JsonDiff {
+                space: "users".into(),
+                id: "u1".into(),
+                from_version: 1,
+                to_version: 2,
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::JsonValue(diff) if diff.as_array().is_some_and(|a| !a.is_empty())
+    ));
+    assert!(matches!(
+        exchange(&mut client, TOKEN, Operation::UndoHistory, None)
+            .await
+            .result
+            .unwrap(),
+        ResponseValue::UndoEntries(entries) if !entries.is_empty()
+    ));
+    assert!(matches!(
+        exchange(&mut client, TOKEN, Operation::Undo, None)
+            .await
+            .result
+            .unwrap(),
+        ResponseValue::UndoResult(Some(_))
+    ));
+    assert!(matches!(
+        exchange(&mut client, TOKEN, Operation::Redo, None)
+            .await
+            .result
+            .unwrap(),
+        ResponseValue::RedoResult(Some(_))
+    ));
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::Batch {
+            operations: vec![BatchOperation::FtsIndex {
+                collection: "docs".into(),
+                doc_id: "d1".into(),
+                content: "lilia rust sqlite multimodel".into(),
+            }],
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::FtsDelete {
+                collection: "docs".into(),
+                doc_id: "d1".into(),
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::Bool(true)
+    ));
+
+    // 3. Graph Extended, Analytics & Cypher + Vector HNSW & Filtered
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::Batch {
+            operations: vec![
+                BatchOperation::GraphSetNode {
+                    graph: "g1".into(),
+                    id: "a".into(),
+                    kind: "service".into(),
+                    metadata: serde_json::json!({"x": 0.0, "y": 0.0}),
+                    doc_space: Some("users".into()),
+                    doc_id: Some("u1".into()),
+                },
+                BatchOperation::GraphSetNode {
+                    graph: "g1".into(),
+                    id: "b".into(),
+                    kind: "service".into(),
+                    metadata: serde_json::json!({"x": 1.0, "y": 1.0}),
+                    doc_space: None,
+                    doc_id: None,
+                },
+                BatchOperation::GraphAddEdge {
+                    graph: "g1".into(),
+                    source: "a".into(),
+                    target: "b".into(),
+                    kind: "calls".into(),
+                    weight: 2.5,
+                },
+            ],
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::GraphGetNodeDocument {
+                graph: "g1".into(),
+                id: "a".into(),
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::JsonExtracted(Some(_))
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::GraphShortestPath {
+                graph: "g1".into(),
+                start: "a".into(),
+                target: "b".into(),
+                direction: Direction::Outgoing,
+                kind_filter: None,
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::WeightedPath(Some(p)) if (p.total_weight - 2.5).abs() < 1e-6
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::GraphPageRank {
+                graph: "g1".into(),
+                config: PageRankConfig::default(),
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::NodeScores(scores) if scores.len() == 2
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::GraphCentrality {
+                graph: "g1".into(),
+                centrality: CentralityType::Degree,
+                direction: Direction::Outgoing,
+                kind_filter: None,
+                normalized: false,
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::NodeScores(scores) if scores.len() == 2
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::GraphConnectedComponents {
+                graph: "g1".into(),
+                component_type: ComponentType::WeaklyConnected,
+                kind_filter: None,
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::CycleList(comps) if comps.len() == 1
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::GraphCypher {
+                graph: "g1".into(),
+                query: "MATCH (n:service) RETURN n.id".into(),
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::CypherResult(res) if res.row_count() == 2
+    ));
+
+    let v0 = [1.0_f32, 0.0].iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::Batch {
+            operations: vec![BatchOperation::VectorSet {
+                collection: "emb".into(),
+                id: "b".into(),
+                dim: 2,
+                element_type: VectorElementType::Float32,
+                vector: v0.clone(),
+            }],
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::VectorCreateIndex {
+            collection: "emb".into(),
+            config: HnswConfig {
+                dim: 2,
+                element_type: VectorElementType::Float32,
+                metric: VectorMetric::Cosine,
+                ..HnswConfig::default()
+            },
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::VectorGetIndexInfo {
+                collection: "emb".into(),
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::VectorIndexInfo(Some(_))
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::VectorSearchInGraphNeighbors {
+                collection: "emb".into(),
+                graph: "g1".into(),
+                start_node: "a".into(),
+                direction: Direction::Outgoing,
+                query_vector: v0,
+                dim: 2,
+                element_type: VectorElementType::Float32,
+                metric: VectorMetric::Cosine,
+                limit: 5,
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::VectorHits(hits) if hits.len() == 1 && hits[0].id == "b"
+    ));
+
+    // 4. Time-Series, Geo, CRDT, HLC & IVM
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::TsAppendPoints {
+            series_id: "cpu.0".into(),
+            points: vec![
+                TimeSeriesPoint {
+                    timestamp: 1_000,
+                    value: 10.0,
+                },
+                TimeSeriesPoint {
+                    timestamp: 2_000,
+                    value: 20.0,
+                },
+            ],
+            resolution_ms: None,
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::TsQueryRange {
+                series_id: "cpu.0".into(),
+                start_time: 0,
+                end_time: 5_000,
+                resolution_ms: None,
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::TsPoints(pts) if pts.len() == 2
+    ));
+
+    let poly = circle_to_geopoly_json(2.3522, 48.8566, 500.0, 12);
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::GeoAddFence {
+            id: "paris".into(),
+            name: "Paris Center".into(),
+            category: "city".into(),
+            polygon_json: poly,
+            metadata: None,
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::GeoRecordGpsPoints {
+                track_id: "trk1".into(),
+                points: vec![
+                    GpsPoint {
+                        timestamp: 1_000,
+                        latitude: 48.8566,
+                        longitude: 2.3522,
+                        altitude: None,
+                        speed: None,
+                        accuracy: None,
+                    },
+                ],
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::GeofenceMatches(matches) if !matches.is_empty()
+    ));
+
+    let hlc1 = match exchange(&mut client, TOKEN, Operation::HlcNext, None)
+        .await
+        .result
+        .unwrap()
+    {
+        ResponseValue::Hlc(hlc) => hlc,
+        other => panic!("unexpected Hlc: {other:?}"),
+    };
+    let hlc2 = lilia_core::Hlc::new(hlc1.millis + 1, 0, "remote");
+    let outcome = exchange(
+        &mut client,
+        TOKEN,
+        Operation::JsonPutHlc {
+            space: "collab".into(),
+            id: "doc1".into(),
+            value: serde_json::json!({"v": 1}),
+            hlc: Some(hlc1),
+            parent_hlc: None,
+            strategy: ConflictResolutionStrategy::Manual,
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    assert!(matches!(outcome, ResponseValue::HlcOutcome(_)));
+    let _ = exchange(
+        &mut client,
+        TOKEN,
+        Operation::JsonPutHlc {
+            space: "collab".into(),
+            id: "doc1".into(),
+            value: serde_json::json!({"v": 2}),
+            hlc: Some(hlc2),
+            parent_hlc: None,
+            strategy: ConflictResolutionStrategy::Manual,
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    let conflicts = match exchange(
+        &mut client,
+        TOKEN,
+        Operation::ListConflicts {
+            space: Some("collab".into()),
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap()
+    {
+        ResponseValue::Conflicts(c) => c,
+        other => panic!("unexpected conflicts: {other:?}"),
+    };
+    assert_eq!(conflicts.len(), 1);
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::ResolveConflict {
+            conflict_id: conflicts[0].id.expect("conflict id"),
+            resolved_value: serde_json::json!({"v": 3}),
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+
+    exchange(
+        &mut client,
+        TOKEN,
+        Operation::Batch {
+            operations: vec![
+                BatchOperation::CrdtPnCounterIncrement {
+                    space: "metrics".into(),
+                    id: "hits".into(),
+                    actor_id: "n1".into(),
+                    amount: 3,
+                },
+                BatchOperation::CrdtOrSetAdd {
+                    space: "tags".into(),
+                    id: "t1".into(),
+                    actor_id: "n1".into(),
+                    element: "rust".into(),
+                },
+                BatchOperation::CrdtJsonSetField {
+                    space: "cfg".into(),
+                    id: "c1".into(),
+                    actor_id: "n1".into(),
+                    path: "mode".into(),
+                    value: serde_json::json!("fast"),
+                    timestamp_ms: Some(1_000),
+                },
+            ],
+        },
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::CrdtCounterState {
+                space: "metrics".into(),
+                id: "hits".into(),
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::CrdtCounterState(state) if state.value() == 3
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::CrdtSetContains {
+                space: "tags".into(),
+                id: "t1".into(),
+                element: "rust".into(),
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::Bool(true)
+    ));
+    assert!(matches!(
+        exchange(
+            &mut client,
+            TOKEN,
+            Operation::CrdtJsonState {
+                space: "cfg".into(),
+                id: "c1".into(),
+            },
+            None
+        )
+        .await
+        .result
+        .unwrap(),
+        ResponseValue::CrdtJsonState(Some(_))
+    ));
+
+    drop(client);
+    shutdown.notify_waiters();
+    handler.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn test_ipc_live_query_streaming() {
+    use lilia_core::BatchOperation;
+    use lilia_protocol::{read_frame, write_frame, Operation, Request, Response, ResponseValue};
+
+    let (_dir, db) = database();
+    let shutdown = Arc::new(Notify::new());
+    let (mut client, server) = tokio::io::duplex(16_384);
+    let db_clone = Arc::clone(&db);
+    let shutdown_clone = Arc::clone(&shutdown);
+    let handler = tokio::spawn(async move {
+        let _ = handle_stream(server, db_clone, TOKEN, shutdown_clone).await;
+    });
+
+    write_frame(
+        &mut client,
+        &Request {
+            id: "lq-1".into(),
+            token: TOKEN.into(),
+            deadline_ms: None,
+            operation: Operation::LiveQuerySubscribe {
+                sql: "SELECT id, value FROM lilia_json WHERE space = 'tasks'".into(),
+                params: Vec::new(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+
+    let ack: Response = read_frame(&mut client).await.unwrap();
+    assert!(matches!(ack.result.unwrap(), ResponseValue::Ack));
+
+    let init_frame: Response = read_frame(&mut client).await.unwrap();
+    match init_frame.result.unwrap() {
+        ResponseValue::LiveQueryDiff(diff) => assert!(diff.is_initial),
+        other => panic!("expected initial LiveQueryDiff, got {other:?}"),
+    }
+
+    db.batch(&[BatchOperation::JsonPut {
+        space: "tasks".into(),
+        id: "t1".into(),
+        value: serde_json::json!({"title": "Ship SDK"}),
+        if_version: None,
+    }])
+    .unwrap();
+
+    let delta_frame: Response = read_frame(&mut client).await.unwrap();
+    match delta_frame.result.unwrap() {
+        ResponseValue::LiveQueryDiff(diff) => {
+            assert!(!diff.is_initial);
+            assert_eq!(diff.added.len(), 1);
+        }
+        other => panic!("expected delta LiveQueryDiff, got {other:?}"),
+    }
+
+    drop(client);
+    shutdown.notify_one();
+    let _ = handler.await;
 }
