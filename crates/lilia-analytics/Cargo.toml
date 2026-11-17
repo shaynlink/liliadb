@@ -1,0 +1,19 @@
+[package]
+name = "lilia-analytics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lilia-core = { path = "../lilia-core" }
+async-trait = "0.1.89"
+datafusion = { workspace = true, features = ["parquet"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { version = "1.52", default-features = false, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true

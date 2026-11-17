@@ -1,15 +1,24 @@
+use std::collections::HashMap;
 use std::io;
 
+use lilia_core::crdt::{LwwJsonDocument, OrSet, PNCounter};
 use lilia_core::{
-    BatchOperation, DatabaseEvent, Direction, FtsHit, HybridHit, JsonEntry, JsonIndexInfo, KvEntry,
-    LiliaError, MutationResult, VectorElementType, VectorHit, VectorMetric,
+    BatchOperation, CentralityType, CheckpointStats, ComponentType, ConflictRecord,
+    ConflictResolutionStrategy, CypherResult, DatabaseEvent, DictStats, Direction, FtsHit,
+    GeofenceMatch, GpsPoint, GraphEdge, GraphNode, Hlc, HlcMutationOutcome, HlcRecord, HnswConfig,
+    HybridHit, ImpactAnalysis, InvertibleBloomFilter, JsonEntry, JsonIndexInfo, JsonRevisionInfo,
+    KvEntry, LiliaError, LiveQueryDiff, MaterializedViewInfo, MutationResult, NodeScore,
+    P2pDocumentPayload, PageRankConfig, ReconciliationSummary, RedoResult, StrataEstimator,
+    TableStorageStat, TimeSeriesLifecyclePolicy, TimeSeriesPoint, TimeSeriesRetentionStats,
+    TimeSeriesStats, UndoEntry, UndoResult, VectorElementType, VectorHit, VectorIndexInfo,
+    VectorMetric, WeightedPath,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 pub use serde_bytes::ByteBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 0;
+pub const PROTOCOL_MINOR: u16 = 2;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +66,8 @@ pub enum Operation {
         space: String,
         name: String,
         path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<String>,
     },
     JsonDropIndex {
         space: String,
@@ -130,6 +141,413 @@ pub enum Operation {
     Subscribe {
         namespace: Option<String>,
     },
+    CrdtCounterGet {
+        space: String,
+        id: String,
+    },
+    CrdtSetGet {
+        space: String,
+        id: String,
+    },
+    CrdtJsonGet {
+        space: String,
+        id: String,
+    },
+    QuickCheck,
+    Checkpoint,
+    CheckpointStats,
+    StorageStats,
+    FtsDelete {
+        collection: String,
+        doc_id: String,
+    },
+    JsonExtract {
+        space: String,
+        id: String,
+        path: String,
+    },
+    JsonScanPrefix {
+        space: String,
+        prefix: String,
+        #[serde(default)]
+        after_id: Option<String>,
+        limit: u32,
+    },
+    JsonGetAtVersion {
+        space: String,
+        id: String,
+        version: u64,
+    },
+    JsonGetAtTimestamp {
+        space: String,
+        id: String,
+        timestamp_ms: i64,
+    },
+    JsonHistory {
+        space: String,
+        id: String,
+    },
+    JsonDiff {
+        space: String,
+        id: String,
+        from_version: u64,
+        to_version: u64,
+    },
+    JsonTrainDictionary {
+        space: String,
+        sample_count: usize,
+        dict_size: usize,
+    },
+    JsonSetAutoTrain {
+        space: String,
+        enabled: bool,
+    },
+    JsonIsAutoTrainEnabled {
+        space: String,
+    },
+    JsonPutHlc {
+        space: String,
+        id: String,
+        value: serde_json::Value,
+        #[serde(default)]
+        hlc: Option<Hlc>,
+        #[serde(default)]
+        parent_hlc: Option<Hlc>,
+        #[serde(default)]
+        strategy: ConflictResolutionStrategy,
+    },
+    JsonGetHlc {
+        space: String,
+        id: String,
+    },
+    GraphGetNode {
+        graph: String,
+        id: String,
+    },
+    GraphGetNodeDocument {
+        graph: String,
+        id: String,
+    },
+    GraphDeleteNode {
+        graph: String,
+        id: String,
+    },
+    GraphListNodes {
+        graph: String,
+        #[serde(default)]
+        kind: Option<String>,
+        limit: u32,
+    },
+    GraphRemoveEdge {
+        graph: String,
+        source: String,
+        target: String,
+        kind: String,
+    },
+    GraphListEdges {
+        graph: String,
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        kind: Option<String>,
+        limit: u32,
+    },
+    GraphImpactAnalysis {
+        graph: String,
+        changed_nodes: Vec<String>,
+    },
+    GraphShortestPath {
+        graph: String,
+        start: String,
+        target: String,
+        direction: Direction,
+        #[serde(default)]
+        kind_filter: Option<String>,
+    },
+    GraphDijkstra {
+        graph: String,
+        start: String,
+        #[serde(default)]
+        target: Option<String>,
+        direction: Direction,
+        #[serde(default)]
+        kind_filter: Option<String>,
+    },
+    GraphAllShortestPaths {
+        graph: String,
+        start: String,
+        direction: Direction,
+        #[serde(default)]
+        kind_filter: Option<String>,
+    },
+    GraphAstarSpatial {
+        graph: String,
+        start: String,
+        target: String,
+        direction: Direction,
+        #[serde(default)]
+        kind_filter: Option<String>,
+    },
+    GraphPageRank {
+        graph: String,
+        #[serde(default)]
+        config: PageRankConfig,
+    },
+    GraphCentrality {
+        graph: String,
+        centrality: CentralityType,
+        direction: Direction,
+        #[serde(default)]
+        kind_filter: Option<String>,
+        #[serde(default)]
+        normalized: bool,
+    },
+    GraphHasCycle {
+        graph: String,
+        direction: Direction,
+        #[serde(default)]
+        kind_filter: Option<String>,
+    },
+    GraphFindCycles {
+        graph: String,
+        max_cycles: usize,
+        #[serde(default)]
+        kind_filter: Option<String>,
+    },
+    GraphConnectedComponents {
+        graph: String,
+        component_type: ComponentType,
+        #[serde(default)]
+        kind_filter: Option<String>,
+    },
+    GraphCypher {
+        graph: String,
+        query: String,
+    },
+    VectorCreateIndex {
+        collection: String,
+        config: HnswConfig,
+    },
+    VectorGetIndexInfo {
+        collection: String,
+    },
+    VectorDropIndex {
+        collection: String,
+    },
+    VectorSearchFiltered {
+        collection: String,
+        #[serde(with = "serde_bytes")]
+        query_vector: Vec<u8>,
+        dim: u32,
+        element_type: VectorElementType,
+        metric: VectorMetric,
+        candidate_ids: Vec<String>,
+        limit: u32,
+    },
+    VectorSearchInGraphNeighbors {
+        collection: String,
+        graph: String,
+        start_node: String,
+        direction: Direction,
+        #[serde(with = "serde_bytes")]
+        query_vector: Vec<u8>,
+        dim: u32,
+        element_type: VectorElementType,
+        metric: VectorMetric,
+        limit: u32,
+    },
+    VectorSearchByJsonIndex {
+        collection: String,
+        space: String,
+        index_name: String,
+        index_value: String,
+        #[serde(with = "serde_bytes")]
+        query_vector: Vec<u8>,
+        dim: u32,
+        element_type: VectorElementType,
+        metric: VectorMetric,
+        limit: u32,
+    },
+    TsAppendPoints {
+        series_id: String,
+        points: Vec<TimeSeriesPoint>,
+        #[serde(default)]
+        resolution_ms: Option<i64>,
+    },
+    TsQueryRange {
+        series_id: String,
+        start_time: i64,
+        end_time: i64,
+        #[serde(default)]
+        resolution_ms: Option<i64>,
+    },
+    TsQueryAuto {
+        series_id: String,
+        start_time: i64,
+        end_time: i64,
+        max_points: usize,
+    },
+    TsQueryStats {
+        series_id: String,
+        start_time: i64,
+        end_time: i64,
+        #[serde(default)]
+        resolution_ms: Option<i64>,
+    },
+    TsSetPolicy {
+        policy: TimeSeriesLifecyclePolicy,
+    },
+    TsGetPolicy {
+        series_pattern: String,
+    },
+    TsListPolicies,
+    TsDeletePolicy {
+        series_pattern: String,
+    },
+    TsApplyRetention {
+        #[serde(default)]
+        series_id: Option<String>,
+        #[serde(default)]
+        policy: Option<TimeSeriesLifecyclePolicy>,
+        #[serde(default)]
+        now_ms: Option<i64>,
+    },
+    GeoAddFence {
+        id: String,
+        name: String,
+        category: String,
+        polygon_json: String,
+        #[serde(default)]
+        metadata: Option<String>,
+    },
+    GeoRemoveFence {
+        id: String,
+    },
+    GeoContainsPoint {
+        polygon_json: String,
+        lon: f64,
+        lat: f64,
+    },
+    GeoFindFencesForPoint {
+        lon: f64,
+        lat: f64,
+    },
+    GeoRecordGpsPoints {
+        track_id: String,
+        points: Vec<GpsPoint>,
+    },
+    GeoGetTrackPoints {
+        track_id: String,
+        #[serde(default)]
+        start_time: Option<i64>,
+        #[serde(default)]
+        end_time: Option<i64>,
+    },
+    GeoTrackDistance {
+        track_id: String,
+    },
+    CrdtCounterState {
+        space: String,
+        id: String,
+    },
+    CrdtCounterMerge {
+        space: String,
+        id: String,
+        remote: PNCounter,
+    },
+    CrdtSetContains {
+        space: String,
+        id: String,
+        element: String,
+    },
+    CrdtSetState {
+        space: String,
+        id: String,
+    },
+    CrdtSetPrune {
+        space: String,
+        id: String,
+        cutoff_ms: i64,
+    },
+    CrdtSetMerge {
+        space: String,
+        id: String,
+        remote: OrSet<String>,
+    },
+    CrdtJsonState {
+        space: String,
+        id: String,
+    },
+    CrdtJsonMerge {
+        space: String,
+        id: String,
+        remote: LwwJsonDocument,
+    },
+    HlcNext,
+    HlcObserve {
+        remote: Hlc,
+    },
+    ListConflicts {
+        #[serde(default)]
+        space: Option<String>,
+    },
+    ResolveConflict {
+        conflict_id: i64,
+        resolved_value: serde_json::Value,
+    },
+    Undo,
+    Redo,
+    UndoHistory,
+    CreateMaterializedView {
+        name: String,
+        query: String,
+    },
+    DropMaterializedView {
+        name: String,
+    },
+    RefreshMaterializedView {
+        name: String,
+    },
+    ListMaterializedViews,
+    LiveQuerySubscribe {
+        sql: String,
+        #[serde(default)]
+        params: Vec<serde_json::Value>,
+    },
+    P2pSync {
+        message: P2pSyncMessage,
+    },
+}
+
+/// Decentralized P2P Set Reconciliation protocol messages using Strata Estimators and IBFs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum P2pSyncMessage {
+    EstimateRequest {
+        space: Option<String>,
+        strata: StrataEstimator,
+    },
+    FastReconcileResponse {
+        space: Option<String>,
+        changesets: Vec<P2pDocumentPayload>,
+        requested_id_hashes: Vec<u64>,
+    },
+    IbfNegotiation {
+        space: Option<String>,
+        estimated_diff: usize,
+        ibf: InvertibleBloomFilter,
+    },
+    IbfReconcileResponse {
+        space: Option<String>,
+        changesets: Vec<P2pDocumentPayload>,
+        requested_id_hashes: Vec<u64>,
+    },
+    ChangesetDelivery {
+        space: Option<String>,
+        changesets: Vec<P2pDocumentPayload>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +582,50 @@ pub enum ResponseValue {
     VectorHits(Vec<VectorHit>),
     HybridHits(Vec<HybridHit>),
     Event(DatabaseEvent),
+    CrdtCounter(i64),
+    CrdtSet(Vec<String>),
+    CrdtJson(Option<serde_json::Value>),
+    Bool(bool),
+    F64(f64),
+    Usize(usize),
+    U64(u64),
+    CheckpointStats(CheckpointStats),
+    TableStorageStats(Vec<TableStorageStat>),
+    JsonExtracted(Option<serde_json::Value>),
+    JsonValue(serde_json::Value),
+    JsonRevisions(Vec<JsonRevisionInfo>),
+    DictStats(DictStats),
+    Hlc(Hlc),
+    HlcRecord(Option<HlcRecord>),
+    HlcOutcome(HlcMutationOutcome),
+    Conflicts(Vec<ConflictRecord>),
+    GraphNode(Option<GraphNode>),
+    GraphNodes(Vec<GraphNode>),
+    GraphEdges(Vec<GraphEdge>),
+    GraphImpact(ImpactAnalysis),
+    WeightedPath(Option<WeightedPath>),
+    WeightedPathMap(HashMap<String, WeightedPath>),
+    NodeScores(Vec<NodeScore>),
+    CycleList(Vec<Vec<String>>),
+    CypherResult(CypherResult),
+    VectorIndexInfo(Option<VectorIndexInfo>),
+    TsPoints(Vec<TimeSeriesPoint>),
+    TsStats(Option<TimeSeriesStats>),
+    TsPolicy(Option<TimeSeriesLifecyclePolicy>),
+    TsPolicies(Vec<TimeSeriesLifecyclePolicy>),
+    TsRetentionStats(TimeSeriesRetentionStats),
+    GeofenceMatches(Vec<GeofenceMatch>),
+    GpsPoints(Vec<GpsPoint>),
+    CrdtCounterState(PNCounter),
+    CrdtSetState(OrSet<String>),
+    CrdtJsonState(Option<LwwJsonDocument>),
+    UndoResult(Option<UndoResult>),
+    RedoResult(Option<RedoResult>),
+    UndoEntries(Vec<UndoEntry>),
+    MaterializedViews(Vec<MaterializedViewInfo>),
+    LiveQueryDiff(LiveQueryDiff),
+    P2pSync(P2pSyncMessage),
+    ReconciliationSummary(ReconciliationSummary),
 }
 
 /// Decode one size-prefixed `MessagePack` frame.

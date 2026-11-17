@@ -26,6 +26,31 @@ impl<'a> NativeTransaction<'a> {
         })
     }
 
+    /// Wraps an already-active connection (e.g. inside an outer transaction or savepoint)
+    /// without issuing `BEGIN IMMEDIATE;`. Dropping this wrapper will not issue a rollback.
+    #[inline]
+    pub fn wrap_active(conn: &'a mut NativeConnection) -> Self {
+        Self {
+            conn,
+            committed: true,
+        }
+    }
+
+    #[inline]
+    pub fn savepoint(&mut self, name: &str) -> Result<()> {
+        self.conn.savepoint(name)
+    }
+
+    #[inline]
+    pub fn release_savepoint(&mut self, name: &str) -> Result<()> {
+        self.conn.release_savepoint(name)
+    }
+
+    #[inline]
+    pub fn rollback_to_savepoint(&mut self, name: &str) -> Result<()> {
+        self.conn.rollback_to_savepoint(name)
+    }
+
     #[inline]
     pub fn cache_flush(&self) -> Result<()> {
         self.conn.cache_flush()
@@ -53,6 +78,15 @@ impl<'a> NativeTransaction<'a> {
     #[inline]
     pub fn prepare(&self, sql: &str) -> Result<NativeStatement> {
         self.conn.prepare(sql)
+    }
+
+    /// See [`NativeConnection::prepare_denying_writes`].
+    pub fn prepare_denying_writes(
+        &self,
+        sql: &str,
+        protected_tables: &[&str],
+    ) -> Result<NativeStatement> {
+        self.conn.prepare_denying_writes(sql, protected_tables)
     }
 
     #[inline]

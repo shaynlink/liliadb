@@ -10,3 +10,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 lilia-plugin-api = { path = "../../crates/lilia-plugin-api" }
+
+[lints]
+workspace = true

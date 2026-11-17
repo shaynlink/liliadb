@@ -24,7 +24,7 @@ pub fn manifest(library_bytes: &[u8]) -> PluginManifest {
         version: "1.0.0".into(),
         abi_major: ABI_MAJOR,
         abi_minor: ABI_MINOR,
-        engine_requirement: ">=0.1.0-alpha.1,<0.2.0".into(),
+        engine_requirement: ">=0.1.0-alpha.1,<0.3.0".into(),
         target: host_target().into(),
         library: library_name().into(),
         library_sha256: hex::encode(Sha256::digest(library_bytes)),

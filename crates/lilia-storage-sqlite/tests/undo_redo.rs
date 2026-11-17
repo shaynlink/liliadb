@@ -30,7 +30,7 @@ fn test_native_transactional_undo_redo() {
     .unwrap();
 
     assert_eq!(
-        db.json_get("users", "user_1").unwrap().unwrap().value["name"],
+        db.json_get("users", "user_1").unwrap().unwrap().value()["name"],
         "Ada"
     );
     assert_eq!(
@@ -57,7 +57,7 @@ fn test_native_transactional_undo_redo() {
     .unwrap();
 
     assert_eq!(
-        db.json_get("users", "user_1").unwrap().unwrap().value["role"],
+        db.json_get("users", "user_1").unwrap().unwrap().value()["role"],
         "superadmin"
     );
     assert_eq!(
@@ -74,7 +74,7 @@ fn test_native_transactional_undo_redo() {
 
     // State must be cleanly restored to Mutation 1!
     assert_eq!(
-        db.json_get("users", "user_1").unwrap().unwrap().value["role"],
+        db.json_get("users", "user_1").unwrap().unwrap().value()["role"],
         "admin"
     );
     assert_eq!(
@@ -87,7 +87,7 @@ fn test_native_transactional_undo_redo() {
     assert!(redo_res.summary.contains("batch"));
 
     assert_eq!(
-        db.json_get("users", "user_1").unwrap().unwrap().value["role"],
+        db.json_get("users", "user_1").unwrap().unwrap().value()["role"],
         "superadmin"
     );
     assert_eq!(
@@ -98,7 +98,7 @@ fn test_native_transactional_undo_redo() {
     // 5. Roll back mutation 2 and then mutation 1
     db.undo().unwrap().expect("undo 2");
     assert_eq!(
-        db.json_get("users", "user_1").unwrap().unwrap().value["role"],
+        db.json_get("users", "user_1").unwrap().unwrap().value()["role"],
         "admin"
     );
 

@@ -1,6 +1,6 @@
 {
   "name": "@liliadb/react-native",
-  "version": "0.1.0-alpha.6",
+  "version": "0.2.0",
   "description": "Local-first multimodel embedded database (KV, JSON, Graph, FTS5, SQL) for React Native and Expo with transparent AES-256-GCM hardware encryption",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

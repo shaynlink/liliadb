@@ -35,7 +35,8 @@ pub unsafe extern "C" fn lilia_c_free_string(ptr: *mut c_char) {
 #[no_mangle]
 pub unsafe extern "C" fn lilia_c_free_bytes(ptr: *mut c_uchar, len: usize) {
     if !ptr.is_null() && len > 0 {
-        drop(Vec::from_raw_parts(ptr, len, len));
+        // Buffers are handed out as boxed slices (`lilia_c_kv_get`).
+        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
     }
 }
 
@@ -55,14 +56,13 @@ pub unsafe extern "C" fn lilia_c_open(
     passphrase: *const c_char,
     out_err: *mut *mut c_char,
 ) -> *mut LiliaHandle {
-    let path_str = match str_from_ptr(path) {
-        Some(p) => p.to_string(),
-        None => {
-            if !out_err.is_null() {
-                *out_err = to_c_string("Path is required".into());
-            }
-            return std::ptr::null_mut();
+    let path_str = if let Some(p) = str_from_ptr(path) {
+        p.to_string()
+    } else {
+        if !out_err.is_null() {
+            *out_err = to_c_string("Path is required".into());
         }
+        return std::ptr::null_mut();
     };
 
     let profile = match profile_code {
@@ -102,7 +102,7 @@ pub unsafe extern "C" fn lilia_c_close(handle: *mut LiliaHandle, timeout_ms: u64
     }
     let h = &*handle;
     match h.db.close_sync(timeout_ms) {
-        Ok(_) => 0,
+        Ok(()) => 0,
         Err(_) => -1,
     }
 }
@@ -114,7 +114,7 @@ pub unsafe extern "C" fn lilia_c_prepare_for_background(handle: *mut LiliaHandle
     }
     let h = &*handle;
     match h.db.prepare_for_background() {
-        Ok(_) => 0,
+        Ok(()) => 0,
         Err(_) => -1,
     }
 }
@@ -126,7 +126,7 @@ pub unsafe extern "C" fn lilia_c_checkpoint(handle: *mut LiliaHandle) -> c_int {
     }
     let h = &*handle;
     match h.db.checkpoint_sync() {
-        Ok(_) => 0,
+        Ok(()) => 0,
         Err(_) => -1,
     }
 }
@@ -154,13 +154,9 @@ pub unsafe extern "C" fn lilia_c_get_file_size(
         return -1;
     }
     let h = &*handle;
-    let main_len = std::fs::metadata(&h.path).map(|m| m.len()).unwrap_or(0);
-    let wal_len = std::fs::metadata(format!("{}-wal", h.path))
-        .map(|m| m.len())
-        .unwrap_or(0);
-    let shm_len = std::fs::metadata(format!("{}-shm", h.path))
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let main_len = std::fs::metadata(&h.path).map_or(0, |m| m.len());
+    let wal_len = std::fs::metadata(format!("{}-wal", h.path)).map_or(0, |m| m.len());
+    let shm_len = std::fs::metadata(format!("{}-shm", h.path)).map_or(0, |m| m.len());
 
     if !out_main.is_null() {
         *out_main = main_len;
@@ -179,13 +175,12 @@ pub unsafe extern "C" fn lilia_c_backup(handle: *mut LiliaHandle, dest: *const c
     if handle.is_null() {
         return -1;
     }
-    let dest_str = match str_from_ptr(dest) {
-        Some(s) => s,
-        None => return -1,
+    let Some(dest_str) = str_from_ptr(dest) else {
+        return -1;
     };
     let h = &*handle;
     match h.db.backup_sync(dest_str.to_string()) {
-        Ok(_) => 0,
+        Ok(()) => 0,
         Err(_) => -1,
     }
 }
@@ -207,9 +202,8 @@ pub unsafe extern "C" fn lilia_c_kv_get(
     if handle.is_null() || ns.is_null() || key.is_null() {
         return std::ptr::null_mut();
     }
-    let ns_str = match str_from_ptr(ns) {
-        Some(s) => s.to_string(),
-        None => return std::ptr::null_mut(),
+    let Some(ns_str) = str_from_ptr(ns).map(str::to_owned) else {
+        return std::ptr::null_mut();
     };
     let key_vec = std::slice::from_raw_parts(key, key_len).to_vec();
     let h = &*handle;
@@ -225,10 +219,7 @@ pub unsafe extern "C" fn lilia_c_kv_get(
             if !out_val_len.is_null() {
                 *out_val_len = entry.value.len();
             }
-            let mut val_bytes = entry.value.into_boxed_slice();
-            let ptr = val_bytes.as_mut_ptr();
-            std::mem::forget(val_bytes);
-            ptr
+            Box::into_raw(entry.value.into_boxed_slice()).cast::<c_uchar>()
         }
         _ => std::ptr::null_mut(),
     }
@@ -248,9 +239,8 @@ pub unsafe extern "C" fn lilia_c_kv_set(
     if handle.is_null() || ns.is_null() || key.is_null() || val.is_null() {
         return -1;
     }
-    let ns_str = match str_from_ptr(ns) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(ns_str) = str_from_ptr(ns).map(str::to_owned) else {
+        return -1;
     };
     let key_vec = std::slice::from_raw_parts(key, key_len).to_vec();
     let val_vec = std::slice::from_raw_parts(val, val_len).to_vec();
@@ -283,9 +273,8 @@ pub unsafe extern "C" fn lilia_c_kv_delete(
     if handle.is_null() || ns.is_null() || key.is_null() {
         return -1;
     }
-    let ns_str = match str_from_ptr(ns) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(ns_str) = str_from_ptr(ns).map(str::to_owned) else {
+        return -1;
     };
     let key_vec = std::slice::from_raw_parts(key, key_len).to_vec();
     let h = &*handle;
@@ -293,7 +282,7 @@ pub unsafe extern "C" fn lilia_c_kv_delete(
     match h.db.kv_delete_sync(ns_str, key_vec) {
         Ok(deleted) => {
             if !out_deleted.is_null() {
-                *out_deleted = if deleted { 1 } else { 0 };
+                *out_deleted = i32::from(deleted);
             }
             0
         }
@@ -315,13 +304,11 @@ pub unsafe extern "C" fn lilia_c_json_get(
     if handle.is_null() || space.is_null() || id.is_null() {
         return std::ptr::null_mut();
     }
-    let space_str = match str_from_ptr(space) {
-        Some(s) => s.to_string(),
-        None => return std::ptr::null_mut(),
+    let Some(space_str) = str_from_ptr(space).map(str::to_owned) else {
+        return std::ptr::null_mut();
     };
-    let id_str = match str_from_ptr(id) {
-        Some(s) => s.to_string(),
-        None => return std::ptr::null_mut(),
+    let Some(id_str) = str_from_ptr(id).map(str::to_owned) else {
+        return std::ptr::null_mut();
     };
     let h = &*handle;
 
@@ -347,17 +334,14 @@ pub unsafe extern "C" fn lilia_c_json_put(
     if handle.is_null() || space.is_null() || id.is_null() || val_json.is_null() {
         return -1;
     }
-    let space_str = match str_from_ptr(space) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(space_str) = str_from_ptr(space).map(str::to_owned) else {
+        return -1;
     };
-    let id_str = match str_from_ptr(id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(id_str) = str_from_ptr(id).map(str::to_owned) else {
+        return -1;
     };
-    let json_str = match str_from_ptr(val_json) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(json_str) = str_from_ptr(val_json).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
 
@@ -382,20 +366,18 @@ pub unsafe extern "C" fn lilia_c_json_delete(
     if handle.is_null() || space.is_null() || id.is_null() {
         return -1;
     }
-    let space_str = match str_from_ptr(space) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(space_str) = str_from_ptr(space).map(str::to_owned) else {
+        return -1;
     };
-    let id_str = match str_from_ptr(id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(id_str) = str_from_ptr(id).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
 
     match h.db.json_delete_sync(space_str, id_str) {
         Ok(deleted) => {
             if !out_deleted.is_null() {
-                *out_deleted = if deleted { 1 } else { 0 };
+                *out_deleted = i32::from(deleted);
             }
             0
         }
@@ -415,15 +397,13 @@ pub unsafe extern "C" fn lilia_c_json_find(
     if handle.is_null() || space.is_null() || query_json.is_null() || out_json.is_null() {
         return -1;
     }
-    let space_str = match str_from_ptr(space) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(space_str) = str_from_ptr(space).map(str::to_owned) else {
+        return -1;
     };
-    let query_str = match str_from_ptr(query_json) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(query_str) = str_from_ptr(query_json).map(str::to_owned) else {
+        return -1;
     };
-    let after_opt = str_from_ptr(after_id).map(|s| s.to_string());
+    let after_opt = str_from_ptr(after_id).map(std::string::ToString::to_string);
     let h = &*handle;
 
     match h.db.json_find_sync(space_str, query_str, after_opt, limit) {
@@ -456,26 +436,22 @@ pub unsafe extern "C" fn lilia_c_graph_set_node(
     {
         return -1;
     }
-    let g = match str_from_ptr(graph) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
+        return -1;
     };
-    let i = match str_from_ptr(id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(id) = str_from_ptr(id).map(str::to_owned) else {
+        return -1;
     };
-    let k = match str_from_ptr(kind) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(kind) = str_from_ptr(kind).map(str::to_owned) else {
+        return -1;
     };
-    let m = match str_from_ptr(metadata_json) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(metadata_json) = str_from_ptr(metadata_json).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
 
-    match h.db.graph_set_node_sync(g, i, k, m) {
-        Ok(_) => 0,
+    match h.db.graph_set_node_sync(graph, id, kind, metadata_json) {
+        Ok(()) => 0,
         Err(_) => -1,
     }
 }
@@ -490,17 +466,15 @@ pub unsafe extern "C" fn lilia_c_graph_get_node(
     if handle.is_null() || graph.is_null() || id.is_null() || out_json.is_null() {
         return -1;
     }
-    let g = match str_from_ptr(graph) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
+        return -1;
     };
-    let i = match str_from_ptr(id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(id) = str_from_ptr(id).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
 
-    match h.db.graph_get_node_sync(g, i) {
+    match h.db.graph_get_node_sync(graph, id) {
         Ok(Some(node)) => {
             let json = serde_json::to_string(&node).unwrap_or_else(|_| "null".into());
             *out_json = to_c_string(json);
@@ -524,20 +498,18 @@ pub unsafe extern "C" fn lilia_c_graph_delete_node(
     if handle.is_null() || graph.is_null() || id.is_null() {
         return -1;
     }
-    let g = match str_from_ptr(graph) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
+        return -1;
     };
-    let i = match str_from_ptr(id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(id) = str_from_ptr(id).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
 
-    match h.db.graph_delete_node_sync(g, i) {
+    match h.db.graph_delete_node_sync(graph, id) {
         Ok(deleted) => {
             if !out_deleted.is_null() {
-                *out_deleted = if deleted { 1 } else { 0 };
+                *out_deleted = i32::from(deleted);
             }
             0
         }
@@ -557,9 +529,8 @@ pub unsafe extern "C" fn lilia_c_graph_add_edge(
     {
         return -1;
     }
-    let g = match str_from_ptr(graph) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
+        return -1;
     };
     let s = match str_from_ptr(source) {
         Some(str_) => str_.to_string(),
@@ -575,8 +546,8 @@ pub unsafe extern "C" fn lilia_c_graph_add_edge(
     };
     let h = &*handle;
 
-    match h.db.graph_add_edge_sync(g, s, t, k) {
-        Ok(_) => 0,
+    match h.db.graph_add_edge_sync(graph, s, t, k) {
+        Ok(()) => 0,
         Err(_) => -1,
     }
 }
@@ -594,9 +565,8 @@ pub unsafe extern "C" fn lilia_c_graph_remove_edge(
     {
         return -1;
     }
-    let g = match str_from_ptr(graph) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
+        return -1;
     };
     let s = match str_from_ptr(source) {
         Some(str_) => str_.to_string(),
@@ -612,10 +582,10 @@ pub unsafe extern "C" fn lilia_c_graph_remove_edge(
     };
     let h = &*handle;
 
-    match h.db.graph_remove_edge_sync(g, s, t, k) {
+    match h.db.graph_remove_edge_sync(graph, s, t, k) {
         Ok(deleted) => {
             if !out_deleted.is_null() {
-                *out_deleted = if deleted { 1 } else { 0 };
+                *out_deleted = i32::from(deleted);
             }
             0
         }
@@ -635,15 +605,13 @@ pub unsafe extern "C" fn lilia_c_graph_neighbors(
     if handle.is_null() || graph.is_null() || node.is_null() || out_json.is_null() {
         return -1;
     }
-    let g = match str_from_ptr(graph) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
+        return -1;
     };
-    let n = match str_from_ptr(node) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(node) = str_from_ptr(node).map(str::to_owned) else {
+        return -1;
     };
-    let k_opt = str_from_ptr(kind).map(|s| s.to_string());
+    let k_opt = str_from_ptr(kind).map(std::string::ToString::to_string);
     let dir = match direction {
         0 => FfiDirection::Incoming,
         1 => FfiDirection::Outgoing,
@@ -651,7 +619,7 @@ pub unsafe extern "C" fn lilia_c_graph_neighbors(
     };
     let h = &*handle;
 
-    match h.db.graph_neighbors_sync(g, n, dir, k_opt) {
+    match h.db.graph_neighbors_sync(graph, node, dir, k_opt) {
         Ok(neighbors) => {
             let json = serde_json::to_string(&neighbors).unwrap_or_else(|_| "[]".into());
             *out_json = to_c_string(json);
@@ -672,13 +640,11 @@ pub unsafe extern "C" fn lilia_c_graph_reachability(
     if handle.is_null() || graph.is_null() || start_nodes_json.is_null() || out_json.is_null() {
         return -1;
     }
-    let g = match str_from_ptr(graph) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
+        return -1;
     };
-    let json_str = match str_from_ptr(start_nodes_json) {
-        Some(s) => s,
-        None => return -1,
+    let Some(json_str) = str_from_ptr(start_nodes_json) else {
+        return -1;
     };
     let start_nodes: Vec<String> = match serde_json::from_str(json_str) {
         Ok(v) => v,
@@ -691,7 +657,7 @@ pub unsafe extern "C" fn lilia_c_graph_reachability(
     };
     let h = &*handle;
 
-    match h.db.graph_reachability_sync(g, start_nodes, dir) {
+    match h.db.graph_reachability_sync(graph, start_nodes, dir) {
         Ok(reachable) => {
             let json = serde_json::to_string(&reachable).unwrap_or_else(|_| "[]".into());
             *out_json = to_c_string(json);
@@ -715,22 +681,19 @@ pub unsafe extern "C" fn lilia_c_fts_index(
     if handle.is_null() || collection.is_null() || doc_id.is_null() || content.is_null() {
         return -1;
     }
-    let col = match str_from_ptr(collection) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
+        return -1;
     };
-    let id = match str_from_ptr(doc_id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(id) = str_from_ptr(doc_id).map(str::to_owned) else {
+        return -1;
     };
-    let text = match str_from_ptr(content) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(text) = str_from_ptr(content).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
 
     match h.db.fts_index_sync(col, id, text) {
-        Ok(_) => 0,
+        Ok(()) => 0,
         Err(_) => -1,
     }
 }
@@ -745,20 +708,18 @@ pub unsafe extern "C" fn lilia_c_fts_delete(
     if handle.is_null() || collection.is_null() || doc_id.is_null() {
         return -1;
     }
-    let col = match str_from_ptr(collection) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
+        return -1;
     };
-    let id = match str_from_ptr(doc_id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(id) = str_from_ptr(doc_id).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
 
     match h.db.fts_delete_sync(col, id) {
         Ok(deleted) => {
             if !out_deleted.is_null() {
-                *out_deleted = if deleted { 1 } else { 0 };
+                *out_deleted = i32::from(deleted);
             }
             0
         }
@@ -777,17 +738,75 @@ pub unsafe extern "C" fn lilia_c_fts_search(
     if handle.is_null() || collection.is_null() || query.is_null() || out_json.is_null() {
         return -1;
     }
-    let col = match str_from_ptr(collection) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
+        return -1;
     };
-    let q = match str_from_ptr(query) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(query) = str_from_ptr(query).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
 
-    match h.db.fts_search_sync(col, q, limit) {
+    match h.db.fts_search_sync(col, query, limit) {
+        Ok(hits) => {
+            let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
+            *out_json = to_c_string(json);
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_fts_suggest(
+    handle: *mut LiliaHandle,
+    collection: *const c_char,
+    prefix: *const c_char,
+    max_distance: u8,
+    limit: u32,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if handle.is_null() || collection.is_null() || prefix.is_null() || out_json.is_null() {
+        return -1;
+    }
+    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
+        return -1;
+    };
+    let Some(prefix) = str_from_ptr(prefix).map(str::to_owned) else {
+        return -1;
+    };
+    let h = &*handle;
+
+    match h.db.fts_suggest_sync(col, prefix, max_distance, limit) {
+        Ok(suggestions) => {
+            let json = serde_json::to_string(&suggestions).unwrap_or_else(|_| "[]".into());
+            *out_json = to_c_string(json);
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_fts_fuzzy_search(
+    handle: *mut LiliaHandle,
+    collection: *const c_char,
+    query: *const c_char,
+    max_distance: u8,
+    limit: u32,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if handle.is_null() || collection.is_null() || query.is_null() || out_json.is_null() {
+        return -1;
+    }
+    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
+        return -1;
+    };
+    let Some(query) = str_from_ptr(query).map(str::to_owned) else {
+        return -1;
+    };
+    let h = &*handle;
+
+    match h.db.fts_fuzzy_search_sync(col, query, max_distance, limit) {
         Ok(hits) => {
             let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
             *out_json = to_c_string(json);
@@ -813,11 +832,10 @@ pub unsafe extern "C" fn lilia_c_sql_query(
     if handle.is_null() || sql.is_null() || out_cols_json.is_null() || out_rows_json.is_null() {
         return -1;
     }
-    let sql_str = match str_from_ptr(sql) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(sql_str) = str_from_ptr(sql).map(str::to_owned) else {
+        return -1;
     };
-    let params_opt = str_from_ptr(params_json).map(|s| s.to_string());
+    let params_opt = str_from_ptr(params_json).map(std::string::ToString::to_string);
     let h = &*handle;
 
     match h.db.sql_query_sync(sql_str, params_opt) {
@@ -848,13 +866,11 @@ pub unsafe extern "C" fn lilia_c_ts_append_json(
     if handle.is_null() || series_id.is_null() || points_json.is_null() {
         return -1;
     }
-    let sid = match str_from_ptr(series_id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(sid) = str_from_ptr(series_id).map(str::to_owned) else {
+        return -1;
     };
-    let json_str = match str_from_ptr(points_json) {
-        Some(s) => s,
-        None => return -1,
+    let Some(json_str) = str_from_ptr(points_json) else {
+        return -1;
     };
     let points: Vec<crate::FfiTimeSeriesPoint> = match serde_json::from_str(json_str) {
         Ok(p) => p,
@@ -879,9 +895,8 @@ pub unsafe extern "C" fn lilia_c_ts_query_range_json(
     if handle.is_null() || series_id.is_null() || out_json.is_null() {
         return -1;
     }
-    let sid = match str_from_ptr(series_id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(sid) = str_from_ptr(series_id).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
     match h.db.ts_query_range_sync(sid, start_time, end_time) {
@@ -905,9 +920,8 @@ pub unsafe extern "C" fn lilia_c_ts_query_stats_json(
     if handle.is_null() || series_id.is_null() || out_json.is_null() {
         return -1;
     }
-    let sid = match str_from_ptr(series_id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(sid) = str_from_ptr(series_id).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
     match h.db.ts_query_stats_sync(sid, start_time, end_time) {
@@ -932,9 +946,8 @@ pub unsafe extern "C" fn lilia_c_ts_query_auto_json(
     if handle.is_null() || series_id.is_null() || out_json.is_null() {
         return -1;
     }
-    let sid = match str_from_ptr(series_id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(sid) = str_from_ptr(series_id).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
     match h
@@ -958,9 +971,8 @@ pub unsafe extern "C" fn lilia_c_ts_set_policy_json(
     if handle.is_null() || policy_json.is_null() {
         return -1;
     }
-    let json_str = match str_from_ptr(policy_json) {
-        Some(s) => s,
-        None => return -1,
+    let Some(json_str) = str_from_ptr(policy_json) else {
+        return -1;
     };
     let policy: crate::FfiTimeSeriesLifecyclePolicy = match serde_json::from_str(json_str) {
         Ok(p) => p,
@@ -982,9 +994,8 @@ pub unsafe extern "C" fn lilia_c_ts_get_policy_json(
     if handle.is_null() || series_pattern.is_null() || out_json.is_null() {
         return -1;
     }
-    let pattern = match str_from_ptr(series_pattern) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(pattern) = str_from_ptr(series_pattern).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
     match h.db.ts_get_policy_sync(pattern) {
@@ -1024,9 +1035,8 @@ pub unsafe extern "C" fn lilia_c_ts_delete_policy(
     if handle.is_null() || series_pattern.is_null() {
         return -1;
     }
-    let pattern = match str_from_ptr(series_pattern) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(pattern) = str_from_ptr(series_pattern).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
     match h.db.ts_delete_policy_sync(pattern) {
@@ -1072,23 +1082,19 @@ pub unsafe extern "C" fn lilia_c_geo_add_fence(
     {
         return -1;
     }
-    let fid = match str_from_ptr(id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(fid) = str_from_ptr(id).map(str::to_owned) else {
+        return -1;
     };
-    let fname = match str_from_ptr(name) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(fname) = str_from_ptr(name).map(str::to_owned) else {
+        return -1;
     };
-    let fcat = match str_from_ptr(category) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(fcat) = str_from_ptr(category).map(str::to_owned) else {
+        return -1;
     };
-    let fpoly = match str_from_ptr(polygon_json) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(fpoly) = str_from_ptr(polygon_json).map(str::to_owned) else {
+        return -1;
     };
-    let fmeta = str_from_ptr(metadata).map(|s| s.to_string());
+    let fmeta = str_from_ptr(metadata).map(std::string::ToString::to_string);
 
     let h = &*handle;
     match h.db.geo_add_fence_sync(fid, fname, fcat, fpoly, fmeta) {
@@ -1108,14 +1114,13 @@ pub unsafe extern "C" fn lilia_c_geo_contains_point(
     if handle.is_null() || polygon_json.is_null() || out_inside.is_null() {
         return -1;
     }
-    let fpoly = match str_from_ptr(polygon_json) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(fpoly) = str_from_ptr(polygon_json).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
     match h.db.geo_contains_point_sync(fpoly, lon, lat) {
         Ok(inside) => {
-            *out_inside = if inside { 1 } else { 0 };
+            *out_inside = i32::from(inside);
             0
         }
         Err(_) => -1,
@@ -1152,9 +1157,8 @@ pub unsafe extern "C" fn lilia_c_geo_track_distance(
     if handle.is_null() || track_id.is_null() || out_distance.is_null() {
         return -1;
     }
-    let tid = match str_from_ptr(track_id) {
-        Some(s) => s.to_string(),
-        None => return -1,
+    let Some(tid) = str_from_ptr(track_id).map(str::to_owned) else {
+        return -1;
     };
     let h = &*handle;
     match h.db.geo_track_distance_sync(tid) {
@@ -1180,5 +1184,77 @@ pub unsafe extern "C" fn lilia_c_geo_create_circle(
     let circle =
         crate::geo_create_circle_polygon(center_lon, center_lat, radius_meters, n_vertices);
     *out_json = to_c_string(circle);
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_wasm_register(
+    handle: *mut LiliaHandle,
+    name: *const c_char,
+    bytecode_ptr: *const c_uchar,
+    bytecode_len: usize,
+    memory_limit_bytes: usize,
+    fuel_limit: u64,
+    persistent: c_int,
+) -> c_int {
+    if handle.is_null() || name.is_null() || bytecode_ptr.is_null() || bytecode_len == 0 {
+        return -1;
+    }
+    let Some(name_str) = str_from_ptr(name) else {
+        return -1;
+    };
+    let bytecode = std::slice::from_raw_parts(bytecode_ptr, bytecode_len);
+    let mut config = lilia_storage_sqlite::WasmUdfConfig::default();
+    if memory_limit_bytes > 0 {
+        config.memory_limit_bytes = memory_limit_bytes;
+    }
+    if fuel_limit > 0 {
+        config.fuel_limit = fuel_limit;
+    }
+    let h = &*handle;
+    match h
+        .db
+        .inner
+        .register_wasm_udf_with_config(name_str, bytecode, config, persistent != 0)
+    {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_wasm_unregister(
+    handle: *mut LiliaHandle,
+    name: *const c_char,
+) -> c_int {
+    if handle.is_null() || name.is_null() {
+        return -1;
+    }
+    let Some(name_str) = str_from_ptr(name) else {
+        return -1;
+    };
+    let h = &*handle;
+    match h.db.inner.unregister_wasm_udf(name_str) {
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_wasm_list(
+    handle: *mut LiliaHandle,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if handle.is_null() || out_json.is_null() {
+        return -1;
+    }
+    let h = &*handle;
+    let list = h.db.inner.list_wasm_udfs();
+    let json_str = match serde_json::to_string(&list) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    *out_json = to_c_string(json_str);
     0
 }

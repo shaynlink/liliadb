@@ -20,6 +20,8 @@ pub enum LiliaFfiError {
     NotFound(String),
     #[error("Conflict: {0}")]
     Conflict(String),
+    #[error("Constraint violation: {0}")]
+    ConstraintViolation(String),
     #[error("Crypto error: {0}")]
     Crypto(String),
     #[error("Generic error: {0}")]
@@ -33,6 +35,7 @@ impl From<LiliaError> for LiliaFfiError {
             ErrorCode::InvalidInput => LiliaFfiError::InvalidInput(err.message),
             ErrorCode::NotFound => LiliaFfiError::NotFound(err.message),
             ErrorCode::Conflict => LiliaFfiError::Conflict(err.message),
+            ErrorCode::ConstraintViolation => LiliaFfiError::ConstraintViolation(err.message),
             _ => LiliaFfiError::Generic(err.message),
         }
     }
@@ -117,6 +120,24 @@ pub struct FfiFtsHit {
     pub doc_id: String,
     pub snippet: String,
     pub rank: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, uniffi::Record)]
+pub struct FfiFtsSuggestion {
+    pub term: String,
+    pub distance: u8,
+    pub doc_count: u32,
+    pub exact_prefix: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, uniffi::Record)]
+pub struct FfiFtsFuzzyHit {
+    pub collection: String,
+    pub doc_id: String,
+    pub snippet: String,
+    pub rank: f64,
+    pub edit_distance: u8,
+    pub matched_terms: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, uniffi::Record)]
@@ -585,9 +606,9 @@ impl LiliaDatabase {
     ) -> Result<Option<FfiJsonEntry>, LiliaFfiError> {
         let entry = self.inner.json_get(&space, &id)?;
         Ok(entry.map(|e| FfiJsonEntry {
+            value_json: e.value().to_string(),
             space: e.space,
             id: e.id,
-            value_json: e.value.to_string(),
             version: e.version,
         }))
     }
@@ -601,9 +622,9 @@ impl LiliaDatabase {
         tokio::task::spawn_blocking(move || {
             let entry = db.json_get(&space, &id)?;
             Ok(entry.map(|e| FfiJsonEntry {
+                value_json: e.value().to_string(),
                 space: e.space,
                 id: e.id,
-                value_json: e.value.to_string(),
                 version: e.version,
             }))
         })
@@ -688,9 +709,9 @@ impl LiliaDatabase {
         Ok(entries
             .into_iter()
             .map(|e| FfiJsonEntry {
+                value_json: e.value().to_string(),
                 space: e.space,
                 id: e.id,
-                value_json: e.value.to_string(),
                 version: e.version,
             })
             .collect())
@@ -713,9 +734,9 @@ impl LiliaDatabase {
             Ok(entries
                 .into_iter()
                 .map(|e| FfiJsonEntry {
+                    value_json: e.value().to_string(),
                     space: e.space,
                     id: e.id,
-                    value_json: e.value.to_string(),
                     version: e.version,
                 })
                 .collect())
@@ -1018,6 +1039,125 @@ impl LiliaDatabase {
         .map_err(|e| LiliaFfiError::Generic(e.to_string()))?
     }
 
+    pub fn fts_suggest_sync(
+        &self,
+        collection: String,
+        prefix: String,
+        max_distance: u8,
+        limit: u32,
+    ) -> Result<Vec<FfiFtsSuggestion>, LiliaFfiError> {
+        let items = self
+            .inner
+            .fts_suggest(&collection, &prefix, max_distance, limit)?;
+        Ok(items
+            .into_iter()
+            .map(|s| FfiFtsSuggestion {
+                term: s.term,
+                distance: s.distance,
+                doc_count: s.doc_count,
+                exact_prefix: s.exact_prefix,
+            })
+            .collect())
+    }
+
+    pub async fn fts_suggest(
+        &self,
+        collection: String,
+        prefix: String,
+        max_distance: u8,
+        limit: u32,
+    ) -> Result<Vec<FfiFtsSuggestion>, LiliaFfiError> {
+        let db = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || {
+            let items = db.fts_suggest(&collection, &prefix, max_distance, limit)?;
+            Ok(items
+                .into_iter()
+                .map(|s| FfiFtsSuggestion {
+                    term: s.term,
+                    distance: s.distance,
+                    doc_count: s.doc_count,
+                    exact_prefix: s.exact_prefix,
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| LiliaFfiError::Generic(e.to_string()))?
+    }
+
+    pub fn fts_fuzzy_search_sync(
+        &self,
+        collection: String,
+        query: String,
+        max_distance: u8,
+        limit: u32,
+    ) -> Result<Vec<FfiFtsFuzzyHit>, LiliaFfiError> {
+        let hits = self
+            .inner
+            .fts_fuzzy_search(&collection, &query, max_distance, limit)?;
+        Ok(hits
+            .into_iter()
+            .map(|h| FfiFtsFuzzyHit {
+                collection: h.collection,
+                doc_id: h.doc_id,
+                snippet: h.snippet,
+                rank: h.rank,
+                edit_distance: h.edit_distance,
+                matched_terms: h.matched_terms,
+            })
+            .collect())
+    }
+
+    pub async fn fts_fuzzy_search(
+        &self,
+        collection: String,
+        query: String,
+        max_distance: u8,
+        limit: u32,
+    ) -> Result<Vec<FfiFtsFuzzyHit>, LiliaFfiError> {
+        let db = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || {
+            let hits = db.fts_fuzzy_search(&collection, &query, max_distance, limit)?;
+            Ok(hits
+                .into_iter()
+                .map(|h| FfiFtsFuzzyHit {
+                    collection: h.collection,
+                    doc_id: h.doc_id,
+                    snippet: h.snippet,
+                    rank: h.rank,
+                    edit_distance: h.edit_distance,
+                    matched_terms: h.matched_terms,
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| LiliaFfiError::Generic(e.to_string()))?
+    }
+
+    pub fn fts_load_dictionary_sync(
+        &self,
+        collection: String,
+        words: Vec<String>,
+    ) -> Result<(), LiliaFfiError> {
+        let word_refs: Vec<&str> = words.iter().map(String::as_str).collect();
+        self.inner.fts_load_dictionary(&collection, &word_refs)?;
+        Ok(())
+    }
+
+    pub async fn fts_load_dictionary(
+        &self,
+        collection: String,
+        words: Vec<String>,
+    ) -> Result<(), LiliaFfiError> {
+        let db = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || {
+            let word_refs: Vec<&str> = words.iter().map(String::as_str).collect();
+            db.fts_load_dictionary(&collection, &word_refs)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| LiliaFfiError::Generic(e.to_string()))?
+    }
+
     // ==========================================
     // SQL ANALYTICS (Sync & Async)
     // ==========================================
@@ -1069,6 +1209,42 @@ impl LiliaDatabase {
         })
         .await
         .map_err(|e| LiliaFfiError::Generic(e.to_string()))?
+    }
+
+    /// Register a sandboxed WebAssembly User-Defined Function (UDF).
+    pub fn register_wasm_udf(
+        &self,
+        name: String,
+        bytecode: Vec<u8>,
+        memory_limit_bytes: Option<u64>,
+        fuel_limit: Option<u64>,
+        persistent: Option<bool>,
+    ) -> Result<(), LiliaFfiError> {
+        let mut config = lilia_storage_sqlite::WasmUdfConfig::default();
+        if let Some(mem) = memory_limit_bytes {
+            if mem > 0 {
+                config.memory_limit_bytes = mem as usize;
+            }
+        }
+        if let Some(fuel) = fuel_limit {
+            if fuel > 0 {
+                config.fuel_limit = fuel;
+            }
+        }
+        self.inner
+            .register_wasm_udf_with_config(&name, &bytecode, config, persistent.unwrap_or(true))
+            .map_err(Into::into)
+    }
+
+    /// Unregister a WebAssembly User-Defined Function (UDF).
+    pub fn unregister_wasm_udf(&self, name: String) -> Result<bool, LiliaFfiError> {
+        self.inner.unregister_wasm_udf(&name).map_err(Into::into)
+    }
+
+    /// List all registered WebAssembly User-Defined Functions as a JSON string.
+    pub fn list_wasm_udfs_json(&self) -> Result<String, LiliaFfiError> {
+        let list = self.inner.list_wasm_udfs();
+        serde_json::to_string(&list).map_err(|e| LiliaFfiError::Storage(e.to_string()))
     }
 
     // ==========================================

@@ -66,28 +66,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  KV secret: {}", String::from_utf8_lossy(&kv_val.value));
 
     let json_val = db.json_get("vault", "customer_42")?.unwrap();
-    println!("  JSON doc:  {}", json_val.value);
+    println!("  JSON doc:  {}", json_val.value());
 
     // Drop database to flush SQLite pages and release locks
     drop(db);
 
     // 3. Inspect raw SQLite file directly on disk
     println!("\n[4] Inspecting RAW SQLite file on disk directly (without codec):");
-    let raw_conn = rusqlite::Connection::open(&db_path)?;
+    let raw_conn = lilia_sqlite_native::NativeConnection::open_file(&db_path)?;
 
-    let raw_kv: Vec<u8> = raw_conn.query_row(
-        "SELECT value FROM _lilia_kv WHERE namespace = 'secrets' AND key = ?1",
-        [b"aws:access_key"],
-        |row| row.get(0),
-    )?;
+    let mut stmt =
+        raw_conn.prepare("SELECT value FROM _lilia_kv WHERE namespace = 'secrets' AND key = ?1")?;
+    stmt.bind_blob_static(1, b"aws:access_key")?;
+    assert!(stmt.step()?);
+    let raw_kv = stmt.column_blob(0).to_vec();
     println!("  Raw KV bytes on disk: {:02x?}", &raw_kv[..8]);
     assert_ne!(raw_kv, b"AKIAIOSFODNN7EXAMPLE");
 
-    let raw_json: String = raw_conn.query_row(
-        "SELECT value FROM _lilia_json WHERE space = 'vault' AND id = 'customer_42'",
-        [],
-        |row| row.get(0),
-    )?;
+    let mut stmt = raw_conn
+        .prepare("SELECT value FROM _lilia_json WHERE space = 'vault' AND id = 'customer_42'")?;
+    assert!(stmt.step()?);
+    let raw_json = stmt.column_text(0).to_string();
     println!("  Raw JSON envelope on disk:\n    {raw_json}");
     assert!(!raw_json.contains("1234-5678-9012-3456"));
     assert!(raw_json.contains("$codec"));

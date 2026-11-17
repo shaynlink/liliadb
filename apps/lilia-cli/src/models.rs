@@ -8,8 +8,9 @@ use serde_json::{json, Value};
 use base64::Engine;
 
 use crate::args::{
-    Command, Encoding, FtsCommand, GraphCommand, HybridCommand, JsonCommand, KvCommand,
-    VectorCommand,
+    BlobCommand, Command, CrdtCommand, CrdtCounterCommand, CrdtJsonCommand, CrdtSetCommand,
+    Encoding, FtsCommand, GraphCommand, HybridCommand, IntegrityCommand, JsonCommand, KvCommand,
+    LedgerCommand, VectorCommand,
 };
 
 pub(crate) fn resolve_plugin_path(plugin: &Path) -> anyhow::Result<std::path::PathBuf> {
@@ -75,6 +76,10 @@ pub(crate) fn execute(
         Command::Fts { command } => fts(&database, command)?,
         Command::Vector { command } => vector(&database, command)?,
         Command::Hybrid { command } => hybrid(&database, command)?,
+        Command::Crdt { command } => crdt(&database, command)?,
+        Command::Blob { command } => blob(&database, command)?,
+        Command::Integrity { command } => integrity_model(&database, command)?,
+        Command::Ledger { command } => ledger_model(&database, command)?,
         Command::Batch { file } => {
             let operations: Vec<BatchOperation> = serde_json::from_slice(&fs::read(file)?)?;
             serde_json::to_value(database.batch(&operations)?)?
@@ -220,6 +225,144 @@ fn json_model(database: &Database, command: JsonCommand) -> anyhow::Result<Value
             after.as_deref(),
             limit,
         )?)?),
+        JsonCommand::CreateCollection { space, check } => {
+            database.json().create_collection(
+                &space,
+                lilia_core::CollectionOptions {
+                    check,
+                    auto_embed: None,
+                },
+            )?;
+            Ok(json!({ "ok": true, "space": space }))
+        }
+        JsonCommand::SetCheck { space, check } => {
+            database.json().set_check(&space, check.as_deref())?;
+            Ok(json!({ "ok": true, "space": space, "check": check }))
+        }
+    }
+}
+
+fn integrity_model(database: &Database, command: IntegrityCommand) -> anyhow::Result<Value> {
+    match command {
+        IntegrityCommand::AddGraphRef {
+            graph,
+            target,
+            name,
+            on_delete,
+            required,
+        } => {
+            let action = match on_delete.to_lowercase().as_str() {
+                "cascade" => lilia_core::RefAction::Cascade,
+                "restrict" => lilia_core::RefAction::Restrict,
+                "set_null" => lilia_core::RefAction::SetNull,
+                other => anyhow::bail!(
+                    "unknown on-delete action '{other}': expected cascade, restrict, or set_null"
+                ),
+            };
+            let mut reference = lilia_core::Reference::graph_nodes(graph, target)
+                .on_delete(action)
+                .required(required);
+            if let Some(n) = name {
+                reference = reference.named(n);
+            }
+            database.integrity().add_reference(reference)?;
+            Ok(json!({ "ok": true }))
+        }
+        IntegrityCommand::AddKvRef {
+            namespace,
+            target,
+            name,
+            on_delete,
+            prefix_separator,
+        } => {
+            let action = match on_delete.to_lowercase().as_str() {
+                "cascade" => lilia_core::RefAction::Cascade,
+                "restrict" => lilia_core::RefAction::Restrict,
+                other => anyhow::bail!(
+                    "unknown on-delete action '{other}': expected cascade or restrict"
+                ),
+            };
+            let mut reference = lilia_core::Reference::kv(namespace, target).on_delete(action);
+            if let Some(sep) = prefix_separator {
+                reference = reference.key(lilia_core::KeyMapping::Prefix { separator: sep });
+            }
+            if let Some(n) = name {
+                reference = reference.named(n);
+            }
+            database.integrity().add_reference(reference)?;
+            Ok(json!({ "ok": true }))
+        }
+        IntegrityCommand::DropRef { name } => {
+            let dropped = database.integrity().drop_reference(&name)?;
+            Ok(json!({ "ok": true, "dropped": dropped }))
+        }
+        IntegrityCommand::ListRefs => {
+            let refs = database.integrity().references();
+            Ok(serde_json::to_value(refs)?)
+        }
+        IntegrityCommand::ListChecks => {
+            let checks = database.integrity().checks();
+            Ok(serde_json::to_value(checks)?)
+        }
+    }
+}
+
+fn ledger_model(database: &Database, command: LedgerCommand) -> anyhow::Result<Value> {
+    match command {
+        LedgerCommand::Root => {
+            let root = database.ledger_root();
+            Ok(json!({
+                "merkle_root": hex::encode(root)
+            }))
+        }
+        LedgerCommand::Latest => {
+            let commit = database.ledger_latest_commit()?;
+            Ok(serde_json::to_value(commit)?)
+        }
+        LedgerCommand::ProveDoc { space, id, version } => {
+            let proof = database.ledger_prove_doc(&space, &id, version)?;
+            Ok(serde_json::to_value(proof)?)
+        }
+        LedgerCommand::ProveKv {
+            namespace,
+            key,
+            encoding,
+            version,
+        } => {
+            let raw_key = decode_binary(&key, encoding, "key")?;
+            let proof = database.ledger_prove_kv(&namespace, &raw_key, version)?;
+            Ok(serde_json::to_value(proof)?)
+        }
+        LedgerCommand::ProveCommit { commit_seq } => {
+            let proof = database.ledger_prove_commit(commit_seq)?;
+            Ok(serde_json::to_value(proof)?)
+        }
+        LedgerCommand::VerifyProof {
+            proof_file,
+            expected_root,
+        } => {
+            let bytes = fs::read(&proof_file)?;
+            let proof: lilia_core::ledger::InclusionProof = serde_json::from_slice(&bytes)?;
+            let root = if let Some(r_hex) = expected_root {
+                let mut buf = [0u8; 32];
+                hex::decode_to_slice(&r_hex, &mut buf)?;
+                buf
+            } else {
+                database.ledger_root()
+            };
+            let is_valid = proof.verify(&root);
+            Ok(json!({
+                "valid": is_valid,
+                "target": proof.target,
+                "merkle_root": hex::encode(root),
+                "commit_seq": proof.commit_seq,
+                "timestamp_ms": proof.timestamp_ms,
+            }))
+        }
+        LedgerCommand::VerifyDb => {
+            let report = database.verify_ledger()?;
+            Ok(serde_json::to_value(report)?)
+        }
     }
 }
 
@@ -301,6 +444,24 @@ fn fts(database: &Database, command: FtsCommand) -> anyhow::Result<Value> {
             let hits = database.fts_search(&collection, &query, limit)?;
             Ok(serde_json::to_value(hits)?)
         }
+        FtsCommand::Suggest {
+            collection,
+            prefix,
+            max_distance,
+            limit,
+        } => {
+            let suggestions = database.fts_suggest(&collection, &prefix, max_distance, limit)?;
+            Ok(serde_json::to_value(suggestions)?)
+        }
+        FtsCommand::Fuzzy {
+            collection,
+            query,
+            max_distance,
+            limit,
+        } => {
+            let hits = database.fts_fuzzy_search(&collection, &query, max_distance, limit)?;
+            Ok(serde_json::to_value(hits)?)
+        }
     }
 }
 
@@ -317,93 +478,96 @@ fn parse_element_type(raw: &str) -> anyhow::Result<VectorElementType> {
 
 fn parse_vector_data(raw: &str, element_type: VectorElementType) -> anyhow::Result<(Vec<u8>, u32)> {
     let trimmed = raw.trim();
-    // 1. Try JSON array
+
+    // 1. JSON array
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
         if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(trimmed) {
-            match element_type {
-                VectorElementType::Float32 => {
-                    let mut bytes = Vec::with_capacity(arr.len() * 4);
-                    for item in &arr {
-                        let f = item
-                            .as_f64()
-                            .ok_or_else(|| anyhow::anyhow!("vector element not a number"))?
-                            as f32;
-                        bytes.extend_from_slice(&f.to_le_bytes());
-                    }
-                    return Ok((bytes, arr.len() as u32));
-                }
-                VectorElementType::Int8 => {
-                    let mut bytes = Vec::with_capacity(arr.len());
-                    for item in &arr {
-                        let i = item
-                            .as_i64()
-                            .ok_or_else(|| anyhow::anyhow!("vector element not an int"))?
-                            as i8;
-                        bytes.push(i as u8);
-                    }
-                    return Ok((bytes, arr.len() as u32));
-                }
-                VectorElementType::Bit => {
-                    let mut bytes = Vec::with_capacity(arr.len());
-                    for item in &arr {
-                        let u = item
-                            .as_u64()
-                            .ok_or_else(|| anyhow::anyhow!("vector element not a u8"))?
-                            as u8;
-                        bytes.push(u);
-                    }
-                    return Ok((bytes, (arr.len() * 8) as u32));
-                }
-            }
+            let numbers = arr
+                .iter()
+                .map(|item| {
+                    item.as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("vector element `{item}` is not a number"))
+                })
+                .collect::<anyhow::Result<Vec<f64>>>()?;
+            return encode_vector(&numbers, element_type);
         }
     }
 
-    // 2. Try Base64
+    // 2. Base64
     if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(trimmed) {
-        let dim = match element_type {
-            VectorElementType::Float32 => (bytes.len() / 4) as u32,
-            VectorElementType::Int8 => bytes.len() as u32,
-            VectorElementType::Bit => (bytes.len() * 8) as u32,
-        };
+        let dim = vector_dimension(bytes.len(), element_type)?;
         return Ok((bytes, dim));
     }
 
-    // 3. Try comma-separated numbers
-    let parts: std::result::Result<Vec<f32>, _> = trimmed
+    // 3. Comma-separated numbers
+    let parts: std::result::Result<Vec<f64>, _> = trimmed
         .split(',')
-        .map(|s| s.trim().parse::<f32>())
+        .map(|s| s.trim().parse::<f64>())
         .collect();
-    if let Ok(floats) = parts {
-        if !floats.is_empty() {
-            match element_type {
-                VectorElementType::Float32 => {
-                    let mut bytes = Vec::with_capacity(floats.len() * 4);
-                    for f in &floats {
-                        bytes.extend_from_slice(&f.to_le_bytes());
-                    }
-                    return Ok((bytes, floats.len() as u32));
-                }
-                VectorElementType::Int8 => {
-                    let mut bytes = Vec::with_capacity(floats.len());
-                    for f in &floats {
-                        bytes.push(*f as i8 as u8);
-                    }
-                    return Ok((bytes, floats.len() as u32));
-                }
-                VectorElementType::Bit => {
-                    let mut bytes = Vec::with_capacity(floats.len());
-                    for f in &floats {
-                        bytes.push(*f as u8);
-                    }
-                    return Ok((bytes, (floats.len() * 8) as u32));
-                }
-            }
+    if let Ok(numbers) = parts {
+        if !numbers.is_empty() {
+            return encode_vector(&numbers, element_type);
         }
     }
 
     anyhow::bail!("unable to parse vector input: must be JSON array (e.g. `[1.0, 2.0]`), comma-separated numbers, or base64")
 }
 
+/// Encodes `numbers` as `element_type` bytes: little-endian `f32`, one `i8` per element, or one
+/// byte of eight bits per element. Integer element types reject non-integral or out-of-range values.
+fn encode_vector(
+    numbers: &[f64],
+    element_type: VectorElementType,
+) -> anyhow::Result<(Vec<u8>, u32)> {
+    let bytes = match element_type {
+        VectorElementType::Float32 => numbers
+            .iter()
+            .flat_map(|&n| nearest_f32(n).to_le_bytes())
+            .collect(),
+        VectorElementType::Int8 => numbers
+            .iter()
+            .map(|&n| {
+                lilia_core::json::binary::exact_int(n)
+                    .and_then(|i| i8::try_from(i).ok())
+                    .map(i8::cast_unsigned)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("int8 vector element {n} is not an integer in -128..=127")
+                    })
+            })
+            .collect::<anyhow::Result<Vec<u8>>>()?,
+        VectorElementType::Bit => numbers
+            .iter()
+            .map(|&n| {
+                lilia_core::json::binary::exact_int(n)
+                    .and_then(|i| u8::try_from(i).ok())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("bit vector byte {n} is not an integer in 0..=255")
+                    })
+            })
+            .collect::<anyhow::Result<Vec<u8>>>()?,
+    };
+    let dim = vector_dimension(bytes.len(), element_type)?;
+    Ok((bytes, dim))
+}
+
+/// Number of dimensions held by `byte_len` bytes of `element_type`.
+fn vector_dimension(byte_len: usize, element_type: VectorElementType) -> anyhow::Result<u32> {
+    let dimensions = match element_type {
+        VectorElementType::Float32 => Some(byte_len / 4),
+        VectorElementType::Int8 => Some(byte_len),
+        VectorElementType::Bit => byte_len.checked_mul(8),
+    };
+    dimensions
+        .and_then(|d| u32::try_from(d).ok())
+        .ok_or_else(|| anyhow::anyhow!("vector of {byte_len} bytes has too many dimensions"))
+}
+
+#[allow(clippy::cast_possible_truncation)] // f32 vectors store the nearest representable value
+fn nearest_f32(value: f64) -> f32 {
+    value as f32
+}
+
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn vector(database: &Database, command: VectorCommand) -> anyhow::Result<Value> {
     match command {
         VectorCommand::CreateIndex {
@@ -470,13 +634,15 @@ fn vector(database: &Database, command: VectorCommand) -> anyhow::Result<Value> 
                     let values: Value = match elem_type {
                         VectorElementType::Float32 => {
                             let floats: Vec<f32> = bytes
-                                .chunks_exact(4)
-                                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|c| f32::from_le_bytes(*c))
                                 .collect();
                             json!(floats)
                         }
                         VectorElementType::Int8 => {
-                            let ints: Vec<i8> = bytes.into_iter().map(|b| b as i8).collect();
+                            let ints: Vec<i8> = bytes.into_iter().map(u8::cast_signed).collect();
                             json!(ints)
                         }
                         VectorElementType::Bit => {
@@ -589,6 +755,179 @@ fn hybrid(database: &Database, command: HybridCommand) -> anyhow::Result<Value> 
                 limit,
             )?;
             Ok(serde_json::to_value(hits)?)
+        }
+    }
+}
+
+fn crdt(database: &Database, command: CrdtCommand) -> anyhow::Result<Value> {
+    let mutate =
+        |operation| Ok::<_, anyhow::Error>(serde_json::to_value(database.batch(&[operation])?)?);
+    match command {
+        // ── PN-Counter ──────────────────────────────────────────────────────────
+        CrdtCommand::Counter {
+            command: CrdtCounterCommand::Get { space, id },
+        } => {
+            let value = database.crdt().counter(&space, &id).get()?;
+            Ok(json!({ "ok": true, "space": space, "id": id, "value": value }))
+        }
+        CrdtCommand::Counter {
+            command:
+                CrdtCounterCommand::Inc {
+                    space,
+                    id,
+                    actor_id,
+                    amount,
+                },
+        } => mutate(lilia_core::BatchOperation::CrdtPnCounterIncrement {
+            space,
+            id,
+            actor_id,
+            amount,
+        }),
+        CrdtCommand::Counter {
+            command:
+                CrdtCounterCommand::Dec {
+                    space,
+                    id,
+                    actor_id,
+                    amount,
+                },
+        } => mutate(lilia_core::BatchOperation::CrdtPnCounterDecrement {
+            space,
+            id,
+            actor_id,
+            amount,
+        }),
+
+        // ── OR-Set ──────────────────────────────────────────────────────────────
+        CrdtCommand::Set {
+            command: CrdtSetCommand::Get { space, id },
+        } => {
+            let elements = database.crdt().set(&space, &id).read()?;
+            Ok(json!({ "ok": true, "space": space, "id": id, "elements": elements }))
+        }
+        CrdtCommand::Set {
+            command: CrdtSetCommand::Contains { space, id, element },
+        } => {
+            let contains = database.crdt().set(&space, &id).contains(&element)?;
+            Ok(
+                json!({ "ok": true, "space": space, "id": id, "element": element, "contains": contains }),
+            )
+        }
+        CrdtCommand::Set {
+            command:
+                CrdtSetCommand::Add {
+                    space,
+                    id,
+                    actor_id,
+                    element,
+                },
+        } => mutate(lilia_core::BatchOperation::CrdtOrSetAdd {
+            space,
+            id,
+            actor_id,
+            element,
+        }),
+        CrdtCommand::Set {
+            command: CrdtSetCommand::Remove { space, id, element },
+        } => mutate(lilia_core::BatchOperation::CrdtOrSetRemove {
+            space,
+            id,
+            element,
+            timestamp_ms: None,
+        }),
+        CrdtCommand::Set {
+            command:
+                CrdtSetCommand::Prune {
+                    space,
+                    id,
+                    cutoff_ms,
+                },
+        } => {
+            database.crdt().set(&space, &id).prune(cutoff_ms)?;
+            Ok(json!({ "ok": true, "space": space, "id": id, "pruned_before_ms": cutoff_ms }))
+        }
+
+        // ── LWW-JSON Document ───────────────────────────────────────────────────
+        CrdtCommand::Json {
+            command: CrdtJsonCommand::Get { space, id },
+        } => {
+            let doc = database.crdt().doc(&space, &id).get()?;
+            Ok(json!({ "ok": true, "space": space, "id": id, "document": doc }))
+        }
+        CrdtCommand::Json {
+            command:
+                CrdtJsonCommand::SetField {
+                    space,
+                    id,
+                    actor_id,
+                    path,
+                    value,
+                },
+        } => {
+            let json_value: serde_json::Value = serde_json::from_str(&value)
+                .map_err(|e| anyhow::anyhow!("invalid JSON value: {e}"))?;
+            mutate(lilia_core::BatchOperation::CrdtJsonSetField {
+                space,
+                id,
+                actor_id,
+                path,
+                value: json_value,
+                timestamp_ms: None,
+            })
+        }
+        CrdtCommand::Json {
+            command:
+                CrdtJsonCommand::DeleteField {
+                    space,
+                    id,
+                    actor_id,
+                    path,
+                },
+        } => mutate(lilia_core::BatchOperation::CrdtJsonDeleteField {
+            space,
+            id,
+            actor_id,
+            path,
+            timestamp_ms: None,
+        }),
+    }
+}
+
+fn blob(database: &Database, command: BlobCommand) -> anyhow::Result<Value> {
+    match command {
+        BlobCommand::Put { file, mime_type } => {
+            let mut f = fs::File::open(&file)?;
+            let descriptor = database.blob_store_stream(&mut f, mime_type)?;
+            Ok(serde_json::to_value(descriptor)?)
+        }
+        BlobCommand::Get { hash, output } => {
+            let bytes = database
+                .blob_get(&hash)?
+                .ok_or_else(|| anyhow::anyhow!("blob with hash '{hash}' not found"))?;
+            if let Some(dest) = output {
+                fs::write(&dest, &bytes)?;
+                Ok(json!({ "hash": hash, "written_to": dest, "bytes": bytes.len() }))
+            } else {
+                let text = match String::from_utf8(bytes.clone()) {
+                    Ok(s) => s,
+                    Err(_) => base64::engine::general_purpose::STANDARD.encode(&bytes),
+                };
+                Ok(json!({ "hash": hash, "size_bytes": bytes.len(), "data": text }))
+            }
+        }
+        BlobCommand::Path { hash } => {
+            let path = database.blob_path(&hash);
+            let exists = path.is_file();
+            Ok(json!({ "hash": hash, "path": path, "exists": exists }))
+        }
+        BlobCommand::Exists { hash } => {
+            let exists = database.blob_exists(&hash);
+            Ok(json!({ "hash": hash, "exists": exists }))
+        }
+        BlobCommand::Gc => {
+            let stats = database.blob_gc()?;
+            Ok(serde_json::to_value(stats)?)
         }
     }
 }
@@ -723,6 +1062,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
     fn graph_and_fts_command_execution() {
         use crate::args::DirectionArg;
 
@@ -895,7 +1235,7 @@ mod tests {
         assert_eq!(vhits[0]["id"], "doc1");
 
         // Hybrid search
-        let hsearch = execute(
+        let hybrid_results = execute(
             Command::Hybrid {
                 command: HybridCommand::Search {
                     collection: "docs".into(),
@@ -913,8 +1253,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let hhits = hsearch.as_array().unwrap();
-        assert_eq!(hhits.len(), 2);
+        assert_eq!(hybrid_results.as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -939,5 +1278,612 @@ mod tests {
         let err =
             resolve_plugin_path(Path::new("definitely-nonexistent-plugin-12345")).unwrap_err();
         assert!(err.to_string().contains("not found as a file or directory"));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
+    fn crdt_cli_command_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("crdt_cli.lilia");
+
+        // PN-Counter Inc & Dec & Get
+        execute(
+            Command::Crdt {
+                command: CrdtCommand::Counter {
+                    command: CrdtCounterCommand::Inc {
+                        space: "stats".into(),
+                        id: "visits".into(),
+                        actor_id: "node_1".into(),
+                        amount: 10,
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        execute(
+            Command::Crdt {
+                command: CrdtCommand::Counter {
+                    command: CrdtCounterCommand::Dec {
+                        space: "stats".into(),
+                        id: "visits".into(),
+                        actor_id: "node_2".into(),
+                        amount: 3,
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        let counter_val = execute(
+            Command::Crdt {
+                command: CrdtCommand::Counter {
+                    command: CrdtCounterCommand::Get {
+                        space: "stats".into(),
+                        id: "visits".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(counter_val["value"], 7);
+
+        // OR-Set Add & Contains & Remove & Get
+        execute(
+            Command::Crdt {
+                command: CrdtCommand::Set {
+                    command: CrdtSetCommand::Add {
+                        space: "tags".into(),
+                        id: "post1".into(),
+                        actor_id: "phone".into(),
+                        element: "rust".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        execute(
+            Command::Crdt {
+                command: CrdtCommand::Set {
+                    command: CrdtSetCommand::Add {
+                        space: "tags".into(),
+                        id: "post1".into(),
+                        actor_id: "laptop".into(),
+                        element: "database".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        let contains = execute(
+            Command::Crdt {
+                command: CrdtCommand::Set {
+                    command: CrdtSetCommand::Contains {
+                        space: "tags".into(),
+                        id: "post1".into(),
+                        element: "rust".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(contains["contains"], true);
+
+        execute(
+            Command::Crdt {
+                command: CrdtCommand::Set {
+                    command: CrdtSetCommand::Remove {
+                        space: "tags".into(),
+                        id: "post1".into(),
+                        element: "rust".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        let set_items = execute(
+            Command::Crdt {
+                command: CrdtCommand::Set {
+                    command: CrdtSetCommand::Get {
+                        space: "tags".into(),
+                        id: "post1".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(set_items["elements"], json!(["database"]));
+
+        // LWW-JSON SetField & Get & DeleteField
+        execute(
+            Command::Crdt {
+                command: CrdtCommand::Json {
+                    command: CrdtJsonCommand::SetField {
+                        space: "settings".into(),
+                        id: "user_42".into(),
+                        actor_id: "client_a".into(),
+                        path: "theme/mode".into(),
+                        value: "\"dark\"".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        execute(
+            Command::Crdt {
+                command: CrdtCommand::Json {
+                    command: CrdtJsonCommand::SetField {
+                        space: "settings".into(),
+                        id: "user_42".into(),
+                        actor_id: "client_b".into(),
+                        path: "notifications/email".into(),
+                        value: "true".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        let doc = execute(
+            Command::Crdt {
+                command: CrdtCommand::Json {
+                    command: CrdtJsonCommand::Get {
+                        space: "settings".into(),
+                        id: "user_42".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(doc["document"]["theme"]["mode"], "dark");
+        assert_eq!(doc["document"]["notifications"]["email"], true);
+
+        execute(
+            Command::Crdt {
+                command: CrdtCommand::Json {
+                    command: CrdtJsonCommand::DeleteField {
+                        space: "settings".into(),
+                        id: "user_42".into(),
+                        actor_id: "client_a".into(),
+                        path: "theme/mode".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        let doc_after = execute(
+            Command::Crdt {
+                command: CrdtCommand::Json {
+                    command: CrdtJsonCommand::Get {
+                        space: "settings".into(),
+                        id: "user_42".into(),
+                    },
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(doc_after["document"]["theme"].get("mode"), None);
+        assert_eq!(doc_after["document"]["notifications"]["email"], true);
+    }
+
+    #[test]
+    fn blob_put_get_path_exists_and_gc() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_blob.lilia");
+        let src_file = dir.path().join("sample.bin");
+        let payload = vec![0x42u8; 100_000];
+        fs::write(&src_file, &payload).unwrap();
+
+        // 1. Put
+        let put_res = execute(
+            Command::Blob {
+                command: BlobCommand::Put {
+                    file: src_file.clone(),
+                    mime_type: Some("application/octet-stream".into()),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        let hash = put_res["hash"].as_str().unwrap().to_string();
+        assert_eq!(put_res["size_bytes"], 100_000);
+        assert_eq!(put_res["mime_type"], "application/octet-stream");
+
+        // 2. Exists
+        let exists_res = execute(
+            Command::Blob {
+                command: BlobCommand::Exists { hash: hash.clone() },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(exists_res["exists"], true);
+
+        // 3. Path
+        let path_res = execute(
+            Command::Blob {
+                command: BlobCommand::Path { hash: hash.clone() },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(path_res["exists"], true);
+
+        // 4. Get to file
+        let out_file = dir.path().join("recovered.bin");
+        let get_res = execute(
+            Command::Blob {
+                command: BlobCommand::Get {
+                    hash: hash.clone(),
+                    output: Some(out_file.clone()),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(get_res["bytes"], 100_000);
+        assert_eq!(fs::read(&out_file).unwrap(), payload);
+
+        // 5. GC (blob has ref_count = 0 because it was stored directly without KV/JSON ref)
+        let gc_res = execute(
+            Command::Blob {
+                command: BlobCommand::Gc,
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(gc_res["orphans_purged"], 1);
+        assert_eq!(gc_res["bytes_reclaimed"], 100_000);
+
+        // 6. Exists after GC
+        let exists_after = execute(
+            Command::Blob {
+                command: BlobCommand::Exists { hash },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(exists_after["exists"], false);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
+    fn integrity_cli_command_execution() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("cli_integrity.lilia");
+
+        execute(Command::Init, &db_path, None).unwrap();
+
+        // 1. Create collection with CHECK constraint
+        let create_res = execute(
+            Command::Json {
+                command: JsonCommand::CreateCollection {
+                    space: "accounts".into(),
+                    check: Some("$.balance >= 0.0 AND length($.iban) == 27".into()),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(create_res["ok"], true);
+
+        // 2. Put valid document
+        let valid_iban = "F".repeat(27);
+        let valid_put = execute(
+            Command::Json {
+                command: JsonCommand::Put {
+                    space: "accounts".into(),
+                    id: "acc_1".into(),
+                    value: format!(r#"{{"balance": 100.0, "iban": "{valid_iban}"}}"#),
+                    if_version: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert!(valid_put.is_array());
+
+        // 3. Put invalid document (negative balance) -> fails with CONSTRAINT_VIOLATION
+        let invalid_put = execute(
+            Command::Json {
+                command: JsonCommand::Put {
+                    space: "accounts".into(),
+                    id: "acc_2".into(),
+                    value: format!(r#"{{"balance": -10.0, "iban": "{valid_iban}"}}"#),
+                    if_version: None,
+                },
+            },
+            &db_path,
+            None,
+        );
+        let err = invalid_put.expect_err("violating CHECK must be rejected");
+        let lilia_err = err
+            .downcast_ref::<lilia_core::LiliaError>()
+            .expect("LiliaError");
+        assert_eq!(lilia_err.code, lilia_core::ErrorCode::ConstraintViolation);
+
+        // 4. Add graph reference (CASCADE) and KV reference (RESTRICT)
+        execute(
+            Command::Integrity {
+                command: IntegrityCommand::AddGraphRef {
+                    graph: "social".into(),
+                    target: "users".into(),
+                    name: None,
+                    on_delete: "cascade".into(),
+                    required: false,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        execute(
+            Command::Integrity {
+                command: IntegrityCommand::AddKvRef {
+                    namespace: "sessions".into(),
+                    target: "users".into(),
+                    name: None,
+                    on_delete: "restrict".into(),
+                    prefix_separator: Some(':'),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        // 5. List checks and references
+        let checks = execute(
+            Command::Integrity {
+                command: IntegrityCommand::ListChecks,
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(checks[0][0], "accounts");
+
+        let refs = execute(
+            Command::Integrity {
+                command: IntegrityCommand::ListRefs,
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(refs.as_array().unwrap().len(), 2);
+
+        // 6. Put parent JSON document
+        execute(
+            Command::Json {
+                command: JsonCommand::Put {
+                    space: "users".into(),
+                    id: "user_42".into(),
+                    value: r#"{"name": "Alice"}"#.into(),
+                    if_version: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        // 7. Orphan KV key fails with ConstraintViolation
+        let orphan_kv = execute(
+            Command::Kv {
+                command: KvCommand::Set {
+                    namespace: "sessions".into(),
+                    key: "user_99:tok".into(),
+                    value: "secret".into(),
+                    if_version: None,
+                    expires_at_ms: None,
+                    encoding: Encoding::Text,
+                    key_encoding: None,
+                    value_encoding: None,
+                },
+            },
+            &db_path,
+            None,
+        );
+        let err = orphan_kv.expect_err("orphan KV must be rejected");
+        let lilia_err = err
+            .downcast_ref::<lilia_core::LiliaError>()
+            .expect("LiliaError");
+        assert_eq!(lilia_err.code, lilia_core::ErrorCode::ConstraintViolation);
+
+        // 8. Valid child KV key
+        execute(
+            Command::Kv {
+                command: KvCommand::Set {
+                    namespace: "sessions".into(),
+                    key: "user_42:tok".into(),
+                    value: "secret".into(),
+                    if_version: None,
+                    expires_at_ms: None,
+                    encoding: Encoding::Text,
+                    key_encoding: None,
+                    value_encoding: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        // 9. Deleting parent JSON while child KV exists is rejected by RESTRICT
+        let delete_parent_blocked = execute(
+            Command::Json {
+                command: JsonCommand::Delete {
+                    space: "users".into(),
+                    id: "user_42".into(),
+                    if_version: None,
+                },
+            },
+            &db_path,
+            None,
+        );
+        let err = delete_parent_blocked.expect_err("deletion blocked by RESTRICT");
+        let lilia_err = err
+            .downcast_ref::<lilia_core::LiliaError>()
+            .expect("LiliaError");
+        assert_eq!(lilia_err.code, lilia_core::ErrorCode::ConstraintViolation);
+
+        // 10. Delete child KV, then delete parent -> succeeds
+        execute(
+            Command::Kv {
+                command: KvCommand::Delete {
+                    namespace: "sessions".into(),
+                    key: "user_42:tok".into(),
+                    if_version: None,
+                    encoding: Encoding::Text,
+                    key_encoding: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        let delete_parent = execute(
+            Command::Json {
+                command: JsonCommand::Delete {
+                    space: "users".into(),
+                    id: "user_42".into(),
+                    if_version: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert!(delete_parent.is_array());
+    }
+
+    #[test]
+    fn test_ledger_cli_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("cli_ledger.lilia");
+
+        // 1. Initial root before any writes
+        let root_res = execute(
+            Command::Ledger {
+                command: LedgerCommand::Root,
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(root_res["merkle_root"], "0".repeat(64));
+
+        // 2. Insert document
+        execute(
+            Command::Json {
+                command: JsonCommand::Put {
+                    space: "patients".into(),
+                    id: "p42".into(),
+                    value: r#"{"name": "Alice", "status": "active"}"#.into(),
+                    if_version: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        // 3. Root after write
+        let root_res2 = execute(
+            Command::Ledger {
+                command: LedgerCommand::Root,
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        let root2_hex = root_res2["merkle_root"].as_str().unwrap().to_string();
+        assert_ne!(root2_hex, "0".repeat(64));
+
+        // 4. Prove document
+        let proof_res = execute(
+            Command::Ledger {
+                command: LedgerCommand::ProveDoc {
+                    space: "patients".into(),
+                    id: "p42".into(),
+                    version: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(proof_res["commit_seq"], 1);
+
+        let proof_file = dir.path().join("proof.json");
+        fs::write(&proof_file, serde_json::to_vec(&proof_res).unwrap()).unwrap();
+
+        // 5. Verify proof via CLI
+        let verify_res = execute(
+            Command::Ledger {
+                command: LedgerCommand::VerifyProof {
+                    proof_file: proof_file.clone(),
+                    expected_root: Some(root2_hex),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(verify_res["valid"], true);
+
+        // 6. Verify full DB
+        let verify_db_res = execute(
+            Command::Ledger {
+                command: LedgerCommand::VerifyDb,
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(verify_db_res["is_valid"], true);
+        assert_eq!(verify_db_res["commit_count"], 1);
     }
 }

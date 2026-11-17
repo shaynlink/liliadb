@@ -63,18 +63,14 @@ impl TimeSeriesWorker {
             .name("lilia-ts-retention".into())
             .spawn(move || loop {
                 match receive.recv_timeout(interval) {
-                    Ok(()) => {}
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 }
 
                 if let (Some(resources), Some(lifecycle)) =
                     (weak_resources.upgrade(), weak_lifecycle.upgrade())
                 {
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as i64;
+                    let now_ms = crate::storage::now_ms();
                     let _ = crate::timeseries::run_retention_pass(&resources, &lifecycle, now_ms);
                 } else {
                     return;
@@ -104,6 +100,7 @@ impl TimeSeriesWorker {
 
 #[cfg(target_arch = "wasm32")]
 impl TimeSeriesWorker {
+    #[allow(dead_code)]
     pub(crate) fn start(_options: TimeSeriesOptions) -> Result<Self> {
         Ok(Self)
     }

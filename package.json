@@ -1,6 +1,6 @@
 {
   "name": "@liliadb/workspace",
-  "version": "0.1.0-alpha.6",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "packageManager": "pnpm@11.5.2",
@@ -8,6 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
+    "check:size": "tools/check-file-size.sh staged",
     "build": "nx run-many -t build",
     "test": "nx run-many -t test",
     "lint": "nx run-many -t lint",

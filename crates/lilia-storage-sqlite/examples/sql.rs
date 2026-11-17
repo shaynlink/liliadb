@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let updated_sensor = db.json_get("devices", "sensor-02")?.expect("exists");
     println!(
         "  Sensor-02 status after SQL update: {}",
-        updated_sensor.value["status"]
+        updated_sensor.value()["status"]
     );
 
     println!("\n[✓] Native Rust SQL example completed successfully!");

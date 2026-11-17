@@ -29,10 +29,6 @@ impl Database {
         vector_weight: f64,
         limit: u32,
     ) -> Result<Vec<HybridHit>> {
-        validate_name("collection", collection)?;
-        let k = if rrf_k == 0 { 60.0 } else { f64::from(rrf_k) };
-        let candidate_limit = normalize_limit(limit).saturating_mul(2) as u32;
-
         struct Accumulator {
             score: f64,
             fts_rank: Option<usize>,
@@ -40,6 +36,11 @@ impl Database {
             vector_rank: Option<usize>,
             vector_distance: Option<f64>,
         }
+
+        validate_name("collection", collection)?;
+        let k = if rrf_k == 0 { 60.0 } else { f64::from(rrf_k) };
+        let candidate_limit =
+            u32::try_from(normalize_limit(limit).saturating_mul(2)).unwrap_or(u32::MAX);
 
         let mut map: HashMap<String, Accumulator> = HashMap::new();
 
@@ -49,7 +50,8 @@ impl Database {
                 let fts_hits = self.fts_search(collection, query, candidate_limit)?;
                 for (idx, hit) in fts_hits.into_iter().enumerate() {
                     let rank_1based = idx + 1;
-                    let rrf_contrib = fts_weight / (k + rank_1based as f64);
+                    let rrf_contrib = fts_weight
+                        / (k + f64::from(u32::try_from(rank_1based).unwrap_or(u32::MAX)));
                     let entry = map.entry(hit.doc_id).or_insert_with(|| Accumulator {
                         score: 0.0,
                         fts_rank: None,
@@ -76,7 +78,8 @@ impl Database {
             )?;
             for (idx, hit) in vec_hits.into_iter().enumerate() {
                 let rank_1based = idx + 1;
-                let rrf_contrib = vector_weight / (k + rank_1based as f64);
+                let rrf_contrib =
+                    vector_weight / (k + f64::from(u32::try_from(rank_1based).unwrap_or(u32::MAX)));
                 let entry = map.entry(hit.id).or_insert_with(|| Accumulator {
                     score: 0.0,
                     fts_rank: None,
@@ -184,6 +187,7 @@ impl Database {
         }
         drop(stmt);
         drop(conn);
+        self.autotune.record_index_use(space, index_name);
 
         let candidate_refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
         self.vector_search_filtered(

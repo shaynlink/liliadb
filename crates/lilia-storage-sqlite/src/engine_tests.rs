@@ -19,7 +19,18 @@ fn readers_continue_and_expired_queued_batch_never_mutates() {
     database.batch(&[put(1)]).unwrap();
     let mut writer = database.lock_writer().unwrap();
     let mut transaction = writer.transaction().unwrap();
-    apply(&mut transaction, &put(2), &lilia_core::IdentityCodec).unwrap();
+    apply(
+        &mut transaction,
+        &put(2),
+        &lilia_core::IdentityCodec,
+        &lilia_core::DictionaryRegistry::new(),
+        &crate::engine::JsonOptions::default(),
+        database.hlc().as_ref(),
+        database.cas(),
+        None,
+        None,
+    )
+    .unwrap();
     std::thread::scope(|scope| {
         let reader = scope.spawn(|| database.kv_get("queue", b"key").unwrap().unwrap());
         assert_eq!(reader.join().unwrap().value, vec![1]);
@@ -483,11 +494,12 @@ fn test_gorilla_90_percent_disk_space_reduction() {
     let gorilla_payload = gorilla_stats.rows[0][0].as_i64().unwrap();
 
     // Calculate reduction ratio
-    let space_reduction_pct = (1.0 - (gorilla_payload as f64 / classic_payload as f64)) * 100.0;
+    let gorilla = f64::from(u32::try_from(gorilla_payload).unwrap());
+    let classic = f64::from(u32::try_from(classic_payload).unwrap());
+    let space_reduction_pct = (1.0 - gorilla / classic) * 100.0;
 
     println!(
-        "Benchmark: Classic SQLite payload: {} bytes, Gorilla compressed payload: {} bytes (Reduction: {:.2}%)",
-        classic_payload, gorilla_payload, space_reduction_pct
+        "Benchmark: Classic SQLite payload: {classic_payload} bytes, Gorilla compressed payload: {gorilla_payload} bytes (Reduction: {space_reduction_pct:.2}%)"
     );
 
     // Verify > 90% space reduction
@@ -543,7 +555,7 @@ fn test_timeseries_declarative_lifecycle_and_downsampling() {
     for i in 0..7200i64 {
         points.push(lilia_core::TimeSeriesPoint::new(
             base_time + (i * 1000),
-            60.0 + (i % 20) as f64,
+            60.0 + f64::from(u8::try_from(i % 20).unwrap()),
         ));
     }
     db.ts_append_points("patient:hr", &points).unwrap();
@@ -573,47 +585,47 @@ fn test_timeseries_declarative_lifecycle_and_downsampling() {
     );
 
     // Tier 1 (1-minute resolution = 60,000 ms) must have 120 points (2 hours * 60 min)
-    let pts_1m = db
+    let per_minute = db
         .ts_query_range_with_resolution("patient:hr", 60_000, base_time, base_time + 7_200_000)
         .unwrap();
     assert_eq!(
-        pts_1m.len(),
+        per_minute.len(),
         120,
         "2 hours of data should produce exactly 120 1-minute buckets"
     );
 
     // Tier 2 (1-hour resolution = 3,600,000 ms) must have 2 points (2 hours)
-    let pts_1h = db
+    let per_hour = db
         .ts_query_range_with_resolution("patient:hr", 3_600_000, base_time, base_time + 7_200_000)
         .unwrap();
     assert_eq!(
-        pts_1h.len(),
+        per_hour.len(),
         2,
         "2 hours of data should produce exactly 2 1-hour buckets"
     );
 
     // 2. Fast forward to +32 days:
     // 32 days > 30 days retention, so 1-minute points must be pruned, but 1-hour points remain!
-    let time_after_32d = base_time + (32 * 24 * 3600 * 1000);
-    let stats_32d = db.ts_apply_retention_at(time_after_32d).unwrap();
-    assert!(stats_32d.chunks_pruned > 0);
+    let after_32_days = base_time + (32 * 24 * 3600 * 1000);
+    let retention_after_32_days = db.ts_apply_retention_at(after_32_days).unwrap();
+    assert!(retention_after_32_days.chunks_pruned > 0);
 
     // 1-minute points are now pruned
-    let pts_1m_after_30d = db
+    let per_minute_after_32_days = db
         .ts_query_range_with_resolution("patient:hr", 60_000, base_time, base_time + 7_200_000)
         .unwrap();
     assert_eq!(
-        pts_1m_after_30d.len(),
+        per_minute_after_32_days.len(),
         0,
         "1-minute points older than 30 days must be pruned"
     );
 
     // 1-hour points are retained indefinitely!
-    let pts_1h_after_30d = db
+    let per_hour_after_32_days = db
         .ts_query_range_with_resolution("patient:hr", 3_600_000, base_time, base_time + 7_200_000)
         .unwrap();
     assert_eq!(
-        pts_1h_after_30d.len(),
+        per_hour_after_32_days.len(),
         2,
         "1-hour points must be retained permanently"
     );
@@ -772,5 +784,5 @@ fn test_geofencing_and_gps_tracks_on_watch() {
     assert!(db.geo_remove_fence("fence_parc_monceau").unwrap());
     assert!(!db.geo_remove_fence("non_existent").unwrap());
     let empty_matches = db.geo_find_fences_for_point(2.3080, 48.8800).unwrap();
-    assert!(empty_matches.is_empty());
+    assert_eq!(empty_matches, [] as [lilia_core::GeofenceMatch; 0]);
 }

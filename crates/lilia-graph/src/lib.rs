@@ -15,28 +15,20 @@ pub use algorithms::{
 };
 pub use cypher::{execute_cypher, CypherResult};
 pub use lilia_core::{
-    CentralityType, ComponentType, Direction, GraphEdge, GraphNode, NodeScore, PathEdge, Result,
-    WeightedPath,
+    CentralityType, ComponentType, Direction, GraphEdge, GraphNode, ImpactAnalysis, NodeScore,
+    PathEdge, Result, WeightedPath,
 };
 pub use lilia_storage_sqlite::Database;
-use serde::{Deserialize, Serialize};
 pub use snapshot::{GraphView, ViewEdge};
 pub use traversal::GraphTraversal;
 pub use unified::{resolve_node_document, UnifiedNode};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImpactAnalysis {
-    pub direct: Vec<String>,
-    pub dependants: Vec<String>,
-    pub total_affected: usize,
-}
-
 pub trait DatabaseGraphExt {
-    fn graph<'a>(&'a self, graph_id: impl Into<String>) -> GraphStore<'a>;
+    fn graph(&self, graph_id: impl Into<String>) -> GraphStore<'_>;
 }
 
 impl DatabaseGraphExt for Database {
-    fn graph<'a>(&'a self, graph_id: impl Into<String>) -> GraphStore<'a> {
+    fn graph(&self, graph_id: impl Into<String>) -> GraphStore<'_> {
         GraphStore::new(self, graph_id)
     }
 }
@@ -393,14 +385,14 @@ impl<'a> GraphStore<'a> {
 
 fn extract_coordinates(val: &serde_json::Value) -> Option<(f64, f64)> {
     if let (Some(x), Some(y)) = (
-        val.get("x").and_then(|v| v.as_f64()),
-        val.get("y").and_then(|v| v.as_f64()),
+        val.get("x").and_then(serde_json::Value::as_f64),
+        val.get("y").and_then(serde_json::Value::as_f64),
     ) {
         return Some((x, y));
     }
     if let (Some(lat), Some(lon)) = (
-        val.get("lat").and_then(|v| v.as_f64()),
-        val.get("lon").and_then(|v| v.as_f64()),
+        val.get("lat").and_then(serde_json::Value::as_f64),
+        val.get("lon").and_then(serde_json::Value::as_f64),
     ) {
         return Some((lon, lat));
     }
@@ -556,8 +548,10 @@ mod tests {
         assert_eq!(pr[0].node, "H");
 
         // Personalized / Local PageRank focusing on P1
-        let mut local_cfg = PageRankConfig::default();
-        local_cfg.seeds = Some(vec!["P1".to_string()]);
+        let local_cfg = PageRankConfig {
+            seeds: Some(vec!["P1".to_string()]),
+            ..PageRankConfig::default()
+        };
         let local_pr = graph.pagerank(&local_cfg).unwrap();
         let p1_score = local_pr.iter().find(|s| s.node == "P1").unwrap().score;
         let p2_score = local_pr.iter().find(|s| s.node == "P2").unwrap().score;
@@ -601,7 +595,7 @@ mod tests {
         assert!(graph.has_cycle(Direction::Outgoing, None).unwrap());
 
         let cycles = graph.find_cycles(10, None).unwrap();
-        assert!(!cycles.is_empty());
+        assert_ne!(cycles, [] as [std::vec::Vec<std::string::String>; 0]);
         assert_eq!(cycles[0].len(), 4); // ["1", "2", "3", "1"] (or rotated)
 
         // Strongly connected components
@@ -655,20 +649,16 @@ mod tests {
 
         let graph = db.graph("social");
 
-        // 2. Create nodes referencing the documents (ZERO DUPLICATION)
-        // Auto-resolution cascade: kind = "users" automatically maps to space "users"
-        graph.set_node("user_alice", "users", &json!({})).unwrap();
-        graph.set_node("user_bob", "users", &json!({})).unwrap();
-        // Explicit doc_space: kind = "content", doc_space = "posts"
-        graph
-            .set_node_doc(
-                "post_101",
-                "content",
-                Some("posts"),
-                Some("post_101"),
-                &json!({}),
-            )
-            .unwrap();
+        // 2. Create nodes referencing the documents (ZERO DUPLICATION) through explicit links
+        for (id, kind, space) in [
+            ("user_alice", "users", "users"),
+            ("user_bob", "users", "users"),
+            ("post_101", "content", "posts"),
+        ] {
+            graph
+                .set_node_doc(id, kind, Some(space), Some(id), &json!({}))
+                .unwrap();
+        }
 
         // 3. Connect them: alice -FRIEND-> bob -LIKES-> post_101
         graph.add_edge("user_alice", "user_bob", "FRIEND").unwrap();

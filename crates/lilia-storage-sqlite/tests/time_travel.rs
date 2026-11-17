@@ -3,6 +3,7 @@ use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
 #[test]
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn test_json_time_travel_and_delta_encoding() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db = Database::open(DatabaseOptions::durable(
@@ -62,8 +63,8 @@ fn test_json_time_travel_and_delta_encoding() {
     // 1. Current version from standard json_get (zero overhead)
     let current = db.json().get("docs", "contract_42").unwrap().unwrap();
     assert_eq!(current.version, 3);
-    assert_eq!(current.value["status"], "approved");
-    assert_eq!(current.value["amount"], 1250);
+    assert_eq!(current.value()["status"], "approved");
+    assert_eq!(current.value()["amount"], 1250);
 
     // 2. Query at Version 1
     let v1 = db
@@ -72,9 +73,9 @@ fn test_json_time_travel_and_delta_encoding() {
         .unwrap()
         .expect("version 1 must exist");
     assert_eq!(v1.version, 1);
-    assert_eq!(v1.value["status"], "draft");
-    assert_eq!(v1.value["amount"], 1000);
-    assert!(v1.value.get("approved_by").is_none());
+    assert_eq!(v1.value()["status"], "draft");
+    assert_eq!(v1.value()["amount"], 1000);
+    assert!(v1.value().get("approved_by").is_none());
 
     // 3. Query at Version 2
     let v2 = db
@@ -83,9 +84,9 @@ fn test_json_time_travel_and_delta_encoding() {
         .unwrap()
         .expect("version 2 must exist");
     assert_eq!(v2.version, 2);
-    assert_eq!(v2.value["status"], "in_review");
-    assert_eq!(v2.value["amount"], 1250);
-    assert!(v2.value.get("approved_by").is_none());
+    assert_eq!(v2.value()["status"], "in_review");
+    assert_eq!(v2.value()["amount"], 1250);
+    assert!(v2.value().get("approved_by").is_none());
 
     // 4. Query at Version 3
     let v3 = db
@@ -94,8 +95,8 @@ fn test_json_time_travel_and_delta_encoding() {
         .unwrap()
         .expect("version 3 must exist");
     assert_eq!(v3.version, 3);
-    assert_eq!(v3.value["status"], "approved");
-    assert_eq!(v3.value["approved_by"], "Bob");
+    assert_eq!(v3.value()["status"], "approved");
+    assert_eq!(v3.value()["approved_by"], "Bob");
 
     // 5. Query non-existent future version
     let v99 = db
@@ -127,8 +128,7 @@ fn test_json_time_travel_and_delta_encoding() {
         .diff("docs", "contract_42", Version(1), Version(3))
         .unwrap();
     assert!(diff.is_array());
-    let diff_ops = diff.as_array().unwrap();
-    assert!(!diff_ops.is_empty());
+    assert_ne!(diff, json!([]));
 
     // 8. Delete document (creates revision 4 tombstone)
     db.batch(&[BatchOperation::JsonDelete {
@@ -151,7 +151,7 @@ fn test_json_time_travel_and_delta_encoding() {
             .get_at_version("docs", "contract_42", Version(2))
             .unwrap()
             .unwrap()
-            .value["status"],
+            .value()["status"],
         "in_review"
     );
 }

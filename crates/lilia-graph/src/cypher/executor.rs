@@ -24,10 +24,9 @@ pub fn execute(store: &GraphStore<'_>, query: &CypherQuery) -> Result<CypherResu
 
         match_chain(
             store,
-            &view,
             &query.pattern,
             1,
-            start_node.id.clone(),
+            &start_node.id,
             binding,
             &mut matches,
         )?;
@@ -122,10 +121,9 @@ fn find_node_candidates(
 
 fn match_chain(
     store: &GraphStore<'_>,
-    view: &GraphView,
     pattern: &super::ast::PatternChain,
     node_idx: usize,
-    current_node_id: String,
+    current_node_id: &str,
     current_binding: HashMap<String, GraphNode>,
     results: &mut Vec<HashMap<String, GraphNode>>,
 ) -> Result<()> {
@@ -139,7 +137,7 @@ fn match_chain(
 
     // Traverse neighbors
     let neighbors = store.neighbors_with_kind(
-        &current_node_id,
+        current_node_id,
         edge_pat.direction,
         edge_pat.kind.as_deref(),
     )?;
@@ -184,15 +182,7 @@ fn match_chain(
                 new_binding.insert(var.clone(), next_node);
             }
 
-            match_chain(
-                store,
-                view,
-                pattern,
-                node_idx + 1,
-                n_id,
-                new_binding,
-                results,
-            )?;
+            match_chain(store, pattern, node_idx + 1, &n_id, new_binding, results)?;
         }
     }
 

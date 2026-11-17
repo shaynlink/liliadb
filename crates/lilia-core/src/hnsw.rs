@@ -151,7 +151,7 @@ impl HnswIndex {
             .is_some_and(|&uid| !self.deleted_ids.contains(&uid))
     }
 
-    /// Randomly sample a level for a new element based on exponential decay $P(l) \propto e^{-l / m_L}$.
+    /// Randomly sample a level for a new element based on exponential decay $P(l) \propto e^{-l / `m_L`}$.
     fn random_level(&self) -> usize {
         let mut rng = rand::rng();
         let r: f64 = rng.random();
@@ -280,7 +280,7 @@ impl HnswIndex {
 
                 // Set neighbors for new node
                 if let Some(Some(ref mut n)) = self.nodes.get_mut(internal_id as usize) {
-                    n.neighbors[lc] = selected_neighbors.clone();
+                    n.neighbors[lc].clone_from(&selected_neighbors);
                 }
                 modified_nodes.insert((internal_id, lc));
 
@@ -799,22 +799,21 @@ impl HnswIndex {
         neighbor_ids: &[&str],
         vector: &[u8],
     ) {
-        let internal_id = match self.id_to_internal.get(id) {
-            Some(&uid) => uid,
-            None => {
-                let uid = self.nodes.len() as u32;
-                self.id_to_internal.insert(id.to_string(), uid);
-                self.internal_to_id.push(Some(id.to_string()));
-                self.vectors.push(Some(vector.to_vec()));
-                self.nodes.push(Some(HnswNode {
-                    id: id.to_string(),
-                    internal_id: uid,
-                    level,
-                    neighbors: vec![Vec::new(); level + 1],
-                }));
-                self.active_count += 1;
-                uid
-            }
+        let internal_id = if let Some(&uid) = self.id_to_internal.get(id) {
+            uid
+        } else {
+            let uid = self.nodes.len() as u32;
+            self.id_to_internal.insert(id.to_string(), uid);
+            self.internal_to_id.push(Some(id.to_string()));
+            self.vectors.push(Some(vector.to_vec()));
+            self.nodes.push(Some(HnswNode {
+                id: id.to_string(),
+                internal_id: uid,
+                level,
+                neighbors: vec![Vec::new(); level + 1],
+            }));
+            self.active_count += 1;
+            uid
         };
 
         if let Some(Some(ref mut n)) = self.nodes.get_mut(internal_id as usize) {
@@ -878,13 +877,15 @@ fn bytes_to_f32_slice(bytes: &[u8]) -> Vec<f32> {
         return Vec::new();
     }
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
 
 fn bytes_to_i8_vec(bytes: &[u8]) -> Vec<i8> {
-    bytes.iter().map(|&b| b as i8).collect()
+    bytes.iter().map(|&b| i8::from_ne_bytes([b])).collect()
 }
 
 #[cfg(test)]

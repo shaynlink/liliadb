@@ -302,7 +302,7 @@ mod tests {
             "version": "1.0.0",
             "abi_major": 1,
             "abi_minor": 0,
-            "engine_requirement": "^0.1.0",
+            "engine_requirement": "^0.2.0",
             "target": "any",
             "library": "lib.so",
             "library_sha256": "abc",

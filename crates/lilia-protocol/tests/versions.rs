@@ -30,6 +30,10 @@ fn binary_versions_remain_native_u64_and_json_versions_are_decimal() {
         let result = MutationResult {
             version: Some(value),
             deleted: false,
+            hlc: None,
+            conflict_detected: None,
+            tier: lilia_core::StorageTier::Disk,
+            buffered: false,
         };
         let bytes = rmp_serde::to_vec_named(&result).unwrap();
         let wire: serde_json::Value = rmp_serde::from_slice(&bytes).unwrap();

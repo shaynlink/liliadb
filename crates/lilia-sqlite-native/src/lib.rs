@@ -7,15 +7,20 @@ pub mod session;
 pub mod slots;
 pub mod statement;
 pub mod transaction;
+pub mod vtab;
 
 pub use backup::NativeBackup;
 pub use connection::{InterruptHandle, NativeConnection};
 pub use function::{NativeContext, NativeValue};
 pub use logging::ensure_sqlite_initialized;
-pub use session::{ConflictAction, NativeSession};
+pub use session::{ChangeOp, ChangesetIterator, ConflictAction, NativeSession, RowChange};
 pub use slots::{StatementSlots, StmtSlot};
-pub use statement::NativeStatement;
+pub use statement::{NativeStatement, StmtStatus};
 pub use transaction::NativeTransaction;
+pub use vtab::{
+    ConstraintOp, IndexConstraint, IndexPlan, VTabValue, VirtualCursor, VirtualTableFactory,
+    VirtualTableProvider,
+};
 
 pub fn sqlite_version() -> &'static str {
     unsafe {
@@ -110,6 +115,59 @@ mod tests {
         let mut check = conn.prepare("SELECT count(*) FROM t;").unwrap();
         assert!(check.step().unwrap());
         assert_eq!(check.column_int64(0), 0);
+    }
+
+    #[test]
+    fn test_native_savepoint_rollback_and_release() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_savepoints.db");
+
+        let mut conn = NativeConnection::open(&db_path, "NORMAL", 1024 * 1024, 5000).unwrap();
+        conn.exec("CREATE TABLE t(x INTEGER PRIMARY KEY);").unwrap();
+
+        let mut tx = conn.transaction().unwrap();
+        tx.exec("INSERT INTO t(x) VALUES(1);").unwrap();
+
+        // Level 1 savepoint
+        tx.savepoint("sp1").unwrap();
+        tx.exec("INSERT INTO t(x) VALUES(2);").unwrap();
+
+        // Level 2 nested savepoint
+        tx.savepoint("sp2").unwrap();
+        tx.exec("INSERT INTO t(x) VALUES(3);").unwrap();
+
+        // Rollback sp2 -> row 3 is removed, row 2 is preserved
+        tx.rollback_to_savepoint("sp2").unwrap();
+        tx.release_savepoint("sp2").unwrap();
+
+        let mut c = tx.prepare("SELECT count(*) FROM t WHERE x = 3;").unwrap();
+        assert!(c.step().unwrap());
+        assert_eq!(c.column_int64(0), 0);
+
+        let mut c = tx.prepare("SELECT count(*) FROM t WHERE x = 2;").unwrap();
+        assert!(c.step().unwrap());
+        assert_eq!(c.column_int64(0), 1);
+
+        // Open sp3 and commit it into sp1
+        tx.savepoint("sp3").unwrap();
+        tx.exec("INSERT INTO t(x) VALUES(4);").unwrap();
+        tx.release_savepoint("sp3").unwrap();
+
+        // Rollback sp1 -> rows 2 and 4 removed, row 1 preserved
+        tx.rollback_to_savepoint("sp1").unwrap();
+        tx.release_savepoint("sp1").unwrap();
+
+        tx.commit().unwrap();
+
+        let mut check = conn.prepare("SELECT x FROM t ORDER BY x;").unwrap();
+        assert!(check.step().unwrap());
+        assert_eq!(check.column_int64(0), 1);
+        assert!(!check.step().unwrap());
+
+        // Validate bad savepoint names
+        assert!(conn.savepoint("").is_err());
+        assert!(conn.savepoint("bad name with space").is_err());
+        assert!(conn.savepoint("inject\"; DROP TABLE t; --").is_err());
     }
 
     #[test]
@@ -228,6 +286,37 @@ mod tests {
     }
 
     #[test]
+    fn test_stmt_status_reports_full_scan_steps() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let conn = NativeConnection::open_file(temp_dir.path().join("scan.db")).unwrap();
+        conn.exec(
+            "CREATE TABLE demo(id INTEGER PRIMARY KEY, grp INTEGER NOT NULL, v TEXT);
+             CREATE INDEX demo_grp ON demo(grp);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+             INSERT INTO demo SELECT i, i % 10, 'x' FROM n;",
+        )
+        .unwrap();
+
+        let mut scan = conn
+            .prepare("SELECT count(*) FROM demo WHERE v = 'x';")
+            .unwrap();
+        assert!(scan.step().unwrap());
+        // 200 rows are visited by 199 forward steps after the first row.
+        assert!(scan.status(StmtStatus::FullscanStep, true) >= 199);
+        assert_eq!(
+            scan.status(StmtStatus::FullscanStep, false),
+            0,
+            "reset must clear the counter"
+        );
+
+        let mut indexed = conn
+            .prepare("SELECT count(*) FROM demo WHERE grp = 3;")
+            .unwrap();
+        assert!(indexed.step().unwrap());
+        assert_eq!(indexed.status(StmtStatus::FullscanStep, true), 0);
+    }
+
+    #[test]
     fn test_native_session_changeset_and_invert() {
         let temp_dir = tempfile::tempdir().unwrap();
         let src_path = temp_dir.path().join("session_src.db");
@@ -302,5 +391,146 @@ mod tests {
 
         let cs = session.changeset().unwrap();
         assert!(!cs.is_empty());
+    }
+
+    #[test]
+    fn test_eponymous_vtab_and_temp_view_union() {
+        use std::sync::Arc;
+
+        struct SampleProvider;
+        struct SampleCursor {
+            rows: Vec<(i64, &'static str, &'static str)>,
+            idx: usize,
+        }
+        impl VirtualCursor for SampleCursor {
+            fn filter(
+                &mut self,
+                idx_num: i32,
+                _idx_str: Option<&str>,
+                args: &[VTabValue],
+            ) -> lilia_core::Result<()> {
+                let mut rows = vec![(1, "mem_ns", "alpha"), (2, "other_ns", "beta")];
+                if idx_num == 1 {
+                    if let Some(VTabValue::Text(ns)) = args.first() {
+                        rows.retain(|r| r.1 == ns);
+                    }
+                }
+                self.rows = rows;
+                self.idx = 0;
+                Ok(())
+            }
+            fn next(&mut self) -> lilia_core::Result<()> {
+                self.idx += 1;
+                Ok(())
+            }
+            fn eof(&self) -> bool {
+                self.idx >= self.rows.len()
+            }
+            fn column(&self, col: i32) -> lilia_core::Result<VTabValue> {
+                let r = self.rows[self.idx];
+                Ok(match col {
+                    0 => VTabValue::Text(r.1.to_string()),
+                    1 => VTabValue::Text(r.2.to_string()),
+                    _ => VTabValue::Null,
+                })
+            }
+            fn rowid(&self) -> i64 {
+                self.rows.get(self.idx).map_or(0, |r| r.0)
+            }
+        }
+        impl VirtualTableProvider for SampleProvider {
+            fn schema_ddl(&self) -> &str {
+                "CREATE TABLE x(ns TEXT, val TEXT)"
+            }
+            fn best_index(&self, constraints: &[IndexConstraint]) -> IndexPlan {
+                for (i, c) in constraints.iter().enumerate() {
+                    if c.usable && c.column == 0 && c.op == ConstraintOp::Eq {
+                        return IndexPlan {
+                            idx_num: 1,
+                            idx_str: None,
+                            constraint_usage: vec![(i, 1, true)],
+                            estimated_cost: 1.0,
+                            estimated_rows: 1,
+                            unique_scan: false,
+                        };
+                    }
+                }
+                IndexPlan::default()
+            }
+            fn open_cursor(&self) -> lilia_core::Result<Box<dyn VirtualCursor>> {
+                Ok(Box::new(SampleCursor {
+                    rows: Vec::new(),
+                    idx: 0,
+                }))
+            }
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("vtab.db");
+        let conn = NativeConnection::open_file(&db_path).unwrap();
+        conn.exec("CREATE TABLE disk_items(ns TEXT, val TEXT);")
+            .unwrap();
+        conn.exec("INSERT INTO disk_items VALUES('disk_ns', 'gamma');")
+            .unwrap();
+        conn.register_vtab_module("vtab_mem_items", Arc::new(SampleProvider))
+            .unwrap();
+        conn.exec(
+            "CREATE TEMP VIEW unified_items AS \
+             SELECT ns, val, 'disk' AS tier FROM disk_items \
+             UNION ALL \
+             SELECT ns, val, 'memory' AS tier FROM vtab_mem_items;",
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT val, tier FROM unified_items WHERE ns = 'mem_ns' ORDER BY val;")
+            .unwrap();
+        assert!(stmt.step().unwrap());
+        assert_eq!(stmt.column_text(0), "alpha");
+        assert_eq!(stmt.column_text(1), "memory");
+        assert!(!stmt.step().unwrap());
+
+        let mut all_stmt = conn.prepare("SELECT count(*) FROM unified_items;").unwrap();
+        assert!(all_stmt.step().unwrap());
+        assert_eq!(all_stmt.column_int64(0), 3);
+    }
+
+    #[test]
+    fn test_shared_cache_unlock_notify_concurrency() {
+        let uri = "file:lilia_unlock_notify_test?mode=memory&cache=shared";
+        let writer = NativeConnection::open(std::path::Path::new(uri), "OFF", 0, 5000).unwrap();
+        writer
+            .exec("CREATE TABLE items(id INTEGER PRIMARY KEY, val INTEGER);")
+            .unwrap();
+
+        let reader = NativeConnection::open(std::path::Path::new(uri), "OFF", 0, 5000).unwrap();
+        reader.pragma_update("query_only", 1).unwrap();
+
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_r = std::sync::Arc::clone(&stop);
+        let reader_handle = std::thread::spawn(move || {
+            let mut reads = 0usize;
+            while !stop_r.load(std::sync::atomic::Ordering::Relaxed) || reads < 50 {
+                let mut stmt = reader.prepare("SELECT count(*) FROM items;").unwrap();
+                assert!(stmt.step().unwrap());
+                let _ = stmt.column_int64(0);
+                reads += 1;
+            }
+            reads
+        });
+
+        for i in 0..400 {
+            writer.begin_immediate().unwrap();
+            let mut s = writer
+                .prepare("INSERT INTO items(id, val) VALUES(?1, ?2);")
+                .unwrap();
+            s.bind_int64(1, i).unwrap();
+            s.bind_int64(2, i * 10).unwrap();
+            s.step().unwrap();
+            writer.commit().unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let reads = reader_handle.join().unwrap();
+        assert!(reads >= 50);
     }
 }

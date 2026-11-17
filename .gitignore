@@ -35,6 +35,8 @@ Thumbs.db
 *.swp
 *~
 deno.lock
+.gradle/
+*.gradle/
 
 # Python artifacts
 __pycache__/

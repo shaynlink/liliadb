@@ -28,7 +28,13 @@ pub enum StmtSlot {
     HnswMetaGet = 22,
     HnswEdgesUpsert = 23,
     HnswEdgesDelete = 24,
-    Count = 25,
+    MemFtsIndexDelete = 25,
+    MemFtsIndexInsert = 26,
+    KvLocate = 27,
+    JsonLocate = 28,
+    EmbedEnqueue = 29,
+    EmbedDequeue = 30,
+    Count = 31,
 }
 
 impl StmtSlot {
@@ -58,7 +64,72 @@ impl StmtSlot {
         StmtSlot::HnswMetaGet,
         StmtSlot::HnswEdgesUpsert,
         StmtSlot::HnswEdgesDelete,
+        StmtSlot::MemFtsIndexDelete,
+        StmtSlot::MemFtsIndexInsert,
+        StmtSlot::KvLocate,
+        StmtSlot::JsonLocate,
+        StmtSlot::EmbedEnqueue,
+        StmtSlot::EmbedDequeue,
     ];
+
+    /// Select FTS delete slot for disk (`main`) or memory (`_lilia_mem`).
+    #[must_use]
+    pub const fn fts_delete_for(is_memory: bool) -> Self {
+        if is_memory {
+            Self::MemFtsIndexDelete
+        } else {
+            Self::FtsIndexDelete
+        }
+    }
+
+    /// Select FTS insert slot for disk (`main`) or memory (`_lilia_mem`).
+    #[must_use]
+    pub const fn fts_insert_for(is_memory: bool) -> Self {
+        if is_memory {
+            Self::MemFtsIndexInsert
+        } else {
+            Self::FtsIndexInsert
+        }
+    }
+
+    /// The sharded data table this slot reads or writes, when it targets one.
+    #[must_use]
+    pub const fn sharded_table(&self) -> Option<&'static str> {
+        match self {
+            Self::KvUpsertReturning
+            | Self::KvUpsertVersioned
+            | Self::KvGet
+            | Self::KvScan
+            | Self::KvDelete
+            | Self::KvVersion => Some("_lilia_kv"),
+            Self::JsonPutReturning
+            | Self::JsonPutVersioned
+            | Self::JsonGet
+            | Self::JsonScan
+            | Self::JsonDelete
+            | Self::JsonVersion => Some("_lilia_json"),
+            _ => None,
+        }
+    }
+
+    /// The slot SQL with its sharded table qualified by `schema` (an attached
+    /// database alias). Slots without a sharded table are returned unchanged.
+    #[must_use]
+    pub fn sql_in_schema(&self, schema: &str) -> String {
+        let sql = self.sql();
+        match self.sharded_table() {
+            Some(table) => sql
+                .replace(
+                    &format!("INTO {table}("),
+                    &format!("INTO {schema}.{table}("),
+                )
+                .replace(
+                    &format!("FROM {table} "),
+                    &format!("FROM {schema}.{table} "),
+                ),
+            None => sql.to_owned(),
+        }
+    }
 
     pub fn sql(&self) -> &'static str {
         match self {
@@ -95,25 +166,29 @@ impl StmtSlot {
                 "SELECT version FROM _lilia_kv WHERE namespace = ?1 AND key = ?2;"
             }
             Self::JsonPutReturning => {
-                "INSERT INTO _lilia_json(space, id, value, version) \
-                 VALUES(?1, ?2, ?3, 1) \
+                "INSERT INTO _lilia_json(space, id, value, format, dict_id, version) \
+                 VALUES(?1, ?2, ?3, ?4, ?5, 1) \
                  ON CONFLICT(space, id) DO UPDATE SET \
                    value = excluded.value, \
+                   format = excluded.format, \
+                   dict_id = excluded.dict_id, \
                    version = _lilia_json.version + 1 \
                  RETURNING version;"
             }
             Self::JsonPutVersioned => {
-                "INSERT INTO _lilia_json(space, id, value, version) \
-                 VALUES(?1, ?2, ?3, ?4) \
+                "INSERT INTO _lilia_json(space, id, value, format, dict_id, version) \
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6) \
                  ON CONFLICT(space, id) DO UPDATE SET \
                    value = excluded.value, \
+                   format = excluded.format, \
+                   dict_id = excluded.dict_id, \
                    version = excluded.version;"
             }
             Self::JsonGet => {
-                "SELECT value, version FROM _lilia_json WHERE space = ?1 AND id = ?2;"
+                "SELECT value, format, dict_id, version FROM _lilia_json WHERE space = ?1 AND id = ?2;"
             }
             Self::JsonScan => {
-                "SELECT id, value, version FROM _lilia_json WHERE space = ?1 AND id > ?2 ORDER BY id LIMIT ?3;"
+                "SELECT id, value, format, dict_id, version FROM _lilia_json WHERE space = ?1 AND id > ?2 ORDER BY id LIMIT ?3;"
             }
             Self::JsonDelete => {
                 "DELETE FROM _lilia_json WHERE space = ?1 AND id = ?2;"
@@ -176,6 +251,28 @@ impl StmtSlot {
             Self::HnswEdgesDelete => {
                 "DELETE FROM _lilia_hnsw_edges WHERE collection = ?1 AND id = ?2;"
             }
+            Self::MemFtsIndexDelete => {
+                "DELETE FROM _lilia_mem._lilia_mem_fts WHERE collection = ?1 AND doc_id = ?2;"
+            }
+            Self::MemFtsIndexInsert => {
+                "INSERT INTO _lilia_mem._lilia_mem_fts(collection, doc_id, content) VALUES(?1, ?2, ?3);"
+            }
+            Self::KvLocate => {
+                "SELECT _shard FROM _lilia_kv WHERE namespace = ?1 AND key = ?2 LIMIT 1;"
+            }
+            Self::JsonLocate => {
+                "SELECT _shard FROM _lilia_json WHERE space = ?1 AND id = ?2 LIMIT 1;"
+            }
+            Self::EmbedEnqueue => {
+                "INSERT INTO _lilia_embed_queue(space, id) VALUES(?1, ?2) \
+                 ON CONFLICT(space, id) DO UPDATE SET \
+                   attempts = 0, \
+                   next_attempt_ms = 0, \
+                   last_error = NULL;"
+            }
+            Self::EmbedDequeue => {
+                "DELETE FROM _lilia_embed_queue WHERE space = ?1 AND id = ?2;"
+            }
             Self::Count => unreachable!(),
         }
     }
@@ -201,5 +298,13 @@ impl StatementSlots {
     #[inline]
     pub fn set(&mut self, slot: StmtSlot, stmt: NativeStatement) {
         self.slots[slot as usize] = Some(stmt);
+    }
+
+    /// Resets every prepared statement, ending the reads they keep open.
+    pub fn reset_all(&mut self) {
+        for stmt in self.slots.iter_mut().flatten() {
+            // `sqlite3_reset` only repeats the error of the last step, already reported to its caller.
+            let _ = stmt.reset();
+        }
     }
 }
