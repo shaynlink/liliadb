@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod connection;
+pub mod cow_vfs;
 pub mod ffi;
 pub mod function;
 pub mod logging;
@@ -10,6 +11,10 @@ pub mod transaction;
 
 pub use backup::NativeBackup;
 pub use connection::{InterruptHandle, NativeConnection};
+pub use cow_vfs::{
+    ensure_cow_vfs_registered, get_branch_state, register_branch_state, unregister_branch_state,
+    BranchVfsState, COW_VFS_NAME,
+};
 pub use function::{NativeContext, NativeValue};
 pub use logging::ensure_sqlite_initialized;
 pub use session::{ConflictAction, NativeSession};
@@ -150,6 +155,21 @@ mod tests {
         }
         assert_eq!(collected, vec![10, 20, 30, 42]);
         stmt.reset().unwrap();
+
+        // Unsigned 64-bit integer array
+        let mut stmt_u64 = conn.prepare("SELECT value FROM carray(?1);").unwrap();
+        let u64_numbers: Vec<u64> = vec![0x8928308280fffff, 0x8928308281fffff];
+        stmt_u64.bind_carray_uint64_static(1, &u64_numbers).unwrap();
+        let mut collected_u64 = Vec::new();
+        while stmt_u64.step().unwrap() {
+            collected_u64.push(stmt_u64.column_int64(0) as u64);
+        }
+        assert_eq!(collected_u64, u64_numbers);
+        stmt_u64.reset().unwrap();
+
+        // Empty array
+        stmt_u64.bind_carray_uint64_static(1, &[]).unwrap();
+        assert!(!stmt_u64.step().unwrap());
 
         // Text array
         let mut stmt_text = conn.prepare("SELECT value FROM carray(?1);").unwrap();

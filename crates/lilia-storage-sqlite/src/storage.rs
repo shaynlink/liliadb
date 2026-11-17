@@ -133,9 +133,11 @@ pub(crate) fn migrate(connection: &NativeConnection) -> Result<()> {
            altitude REAL,
            speed REAL,
            accuracy REAL,
+           h3_index INTEGER,
            PRIMARY KEY(track_id,timestamp)
          ) STRICT, WITHOUT ROWID;
          CREATE INDEX IF NOT EXISTS _lilia_gps_points_time ON _lilia_gps_points(track_id,timestamp);
+         CREATE INDEX IF NOT EXISTS _lilia_gps_points_h3_time ON _lilia_gps_points(h3_index,timestamp);
          CREATE VIEW IF NOT EXISTS lilia_kv AS
            SELECT namespace, key, lilia_decode_kv(value) AS value, version, expires_at_ms
            FROM _lilia_kv;
@@ -174,7 +176,7 @@ pub(crate) fn migrate(connection: &NativeConnection) -> Result<()> {
            SELECT rowid, _shape, id, name, category, metadata
            FROM _lilia_geofences;
          CREATE VIEW IF NOT EXISTS lilia_gps_points AS
-           SELECT track_id, timestamp, latitude, longitude, altitude, speed, accuracy
+           SELECT track_id, timestamp, latitude, longitude, altitude, speed, accuracy, h3_index
            FROM _lilia_gps_points;
          CREATE TABLE IF NOT EXISTS _lilia_json_revisions(
            space TEXT NOT NULL,
@@ -198,6 +200,28 @@ pub(crate) fn migrate(connection: &NativeConnection) -> Result<()> {
          CREATE VIEW IF NOT EXISTS lilia_json_history AS
            SELECT space, id, version, timestamp_ms, is_keyframe, is_deletion
            FROM _lilia_json_revisions;
+         CREATE TABLE IF NOT EXISTS _lilia_bitemporal(
+           space TEXT NOT NULL,
+           id TEXT NOT NULL,
+           vt_from INTEGER NOT NULL,
+           vt_to INTEGER NOT NULL,
+           tt_from INTEGER NOT NULL,
+           tt_to INTEGER NOT NULL,
+           value TEXT NOT NULL CHECK(json_valid(value)),
+           version INTEGER NOT NULL CHECK(version > 0),
+           PRIMARY KEY(space,id,vt_from,tt_from)
+         ) STRICT, WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS _lilia_bitemp_lookup ON _lilia_bitemporal(space,id,tt_from,tt_to,vt_from,vt_to);
+         CREATE INDEX IF NOT EXISTS _lilia_bitemp_space_time ON _lilia_bitemporal(space,tt_from,tt_to,vt_from,vt_to);
+         CREATE VIEW IF NOT EXISTS lilia_bitemporal AS
+           SELECT space, id, vt_from, vt_to, tt_from, tt_to,
+                  lilia_decode_json(value) AS value, version
+           FROM _lilia_bitemporal;
+         CREATE TABLE IF NOT EXISTS _lilia_markov_state(
+           id INTEGER PRIMARY KEY,
+           state BLOB NOT NULL,
+           updated_at_ms INTEGER NOT NULL
+         ) STRICT;
          COMMIT;",
     )?;
 

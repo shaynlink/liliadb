@@ -2,9 +2,12 @@ mod codec;
 pub mod compression;
 mod error;
 pub mod geo;
+pub mod h3;
 pub mod hnsw;
 pub mod json_patch;
+pub mod markov;
 pub mod quantization;
+pub mod temporal;
 pub mod timeseries;
 mod types;
 mod version;
@@ -16,18 +19,43 @@ pub use geo::{
     circle_to_geopoly_json, coords_to_geopoly_json, haversine_distance_meters, GeofenceMatch,
     GpsPoint, EARTH_RADIUS_METERS,
 };
+pub use h3::SpatioTemporalPoint;
 pub use hnsw::{HnswIndex, HnswNode};
+pub use markov::{AccessTarget, MarkovConfig, MarkovModel, MarkovStats};
+pub use temporal::{
+    format_ms_to_date, format_ms_to_iso, parse_iso_to_ms, BitemporalInterval, BitemporalPoint,
+    BITEMPORAL_INFINITY, BITEMPORAL_NEG_INFINITY,
+};
 pub use timeseries::{
     compress_timeseries, decompress_timeseries, downsample_points, pattern_matches, BitReader,
     BitWriter, DownsampleAggregation, TimeSeriesLifecyclePolicy, TimeSeriesPoint,
     TimeSeriesRetentionRule, TimeSeriesRetentionStats, TimeSeriesStats,
 };
 pub use types::{
-    BatchOperation, CentralityType, ComponentType, DatabaseEvent, Direction, Durability, FtsHit,
-    GraphEdge, GraphNode, HnswConfig, HybridHit, JsonEntry, JsonIndexInfo, JsonRevisionInfo,
-    KvEntry, MutationResult, NodeScore, PathEdge, RedoResult, SqlQueryResult, UndoEntry,
-    UndoResult, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric, Version, WeightedPath,
+    BatchOperation, BitemporalEntry, BranchDiff, CentralityType, ComponentType, DatabaseEvent, Direction,
+    Durability, FtsHit, GraphEdge, GraphNode, HnswConfig, HybridHit, JsonEntry, JsonIndexInfo,
+    JsonRevisionInfo, KvEntry, MergeResult, MergeStrategy, MutationResult, NodeScore, PathEdge,
+    RedoResult, SqlQueryResult, TableDiff, UndoEntry, UndoResult, VectorElementType, VectorHit,
+    VectorIndexInfo, VectorMetric, Version, WeightedPath,
 };
+
+/// Ergonomic macro to construct document-style JSON values for updates, queries, and filters.
+///
+/// # Example
+/// ```rust
+/// use lilia_core::doc;
+///
+/// let update = doc! { "$mul": { "price": 0.8 } };
+/// ```
+#[macro_export]
+macro_rules! doc {
+    ({ $($json:tt)* }) => {
+        serde_json::json!({ $($json)* })
+    };
+    ($($json:tt)+) => {
+        serde_json::json!({ $($json)+ })
+    };
+}
 
 #[cfg(windows)]
 pub mod windows_security;

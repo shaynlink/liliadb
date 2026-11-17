@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc)]
+
 use serde::{Deserialize, Serialize};
 
 /// Earth radius in meters according to WGS84 mean radius.
@@ -15,6 +17,8 @@ pub struct GpsPoint {
     pub speed: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accuracy: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h3_index: Option<u64>,
 }
 
 impl GpsPoint {
@@ -27,6 +31,7 @@ impl GpsPoint {
             altitude: None,
             speed: None,
             accuracy: None,
+            h3_index: None,
         }
     }
 
@@ -46,7 +51,26 @@ impl GpsPoint {
             altitude,
             speed,
             accuracy,
+            h3_index: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_h3(mut self, h3: u64) -> Self {
+        self.h3_index = Some(h3);
+        self
+    }
+
+    /// Computes and assigns the H3 index at the given resolution.
+    pub fn compute_h3(&mut self, resolution: u8) -> crate::Result<u64> {
+        let cell = crate::h3::lat_lng_to_cell(self.latitude, self.longitude, resolution)?;
+        self.h3_index = Some(cell);
+        Ok(cell)
+    }
+
+    /// Converts the GPS coordinates into an H3 cell at the requested resolution.
+    pub fn to_h3(&self, resolution: u8) -> crate::Result<u64> {
+        crate::h3::lat_lng_to_cell(self.latitude, self.longitude, resolution)
     }
 }
 

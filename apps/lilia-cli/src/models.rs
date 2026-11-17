@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 use base64::Engine;
 
 use crate::args::{
-    Command, Encoding, FtsCommand, GraphCommand, HybridCommand, JsonCommand, KvCommand,
-    VectorCommand,
+    BitempCommand, Command, Encoding, FtsCommand, GraphCommand, HybridCommand, JsonCommand,
+    KvCommand, VectorCommand,
 };
 
 pub(crate) fn resolve_plugin_path(plugin: &Path) -> anyhow::Result<std::path::PathBuf> {
@@ -75,6 +75,7 @@ pub(crate) fn execute(
         Command::Fts { command } => fts(&database, command)?,
         Command::Vector { command } => vector(&database, command)?,
         Command::Hybrid { command } => hybrid(&database, command)?,
+        Command::Bitemp { command } => bitemp_model(&database, command)?,
         Command::Batch { file } => {
             let operations: Vec<BatchOperation> = serde_json::from_slice(&fs::read(file)?)?;
             serde_json::to_value(database.batch(&operations)?)?
@@ -180,6 +181,67 @@ fn kv(database: &Database, command: KvCommand) -> anyhow::Result<Value> {
                 after.as_deref(),
                 limit,
             )?)?)
+        }
+    }
+}
+
+fn bitemp_model(database: &Database, command: BitempCommand) -> anyhow::Result<Value> {
+    match command {
+        BitempCommand::Put {
+            space,
+            id,
+            value,
+            vt_from,
+            vt_to,
+            system_time,
+        } => {
+            let parsed_val: Value = serde_json::from_str(&value)?;
+            let interval = lilia_core::BitemporalInterval::inclusive_days(&vt_from, &vt_to)?;
+            let st = system_time
+                .as_deref()
+                .map(lilia_core::parse_iso_to_ms)
+                .transpose()?;
+            let ver = database.bitemporal().put_with_system_time(
+                &space,
+                &id,
+                parsed_val,
+                interval,
+                st,
+            )?;
+            Ok(json!({ "ok": true, "space": space, "id": id, "version": ver }))
+        }
+        BitempCommand::Get {
+            space,
+            id,
+            as_of_tt,
+            for_vt,
+        } => {
+            let tt = lilia_core::BitemporalPoint::at(&as_of_tt)?;
+            let vt = lilia_core::BitemporalPoint::at(&for_vt)?;
+            let entry = database.bitemporal().get(&space, &id, tt, vt)?;
+            Ok(serde_json::to_value(entry)?)
+        }
+        BitempCommand::Timeline { space, id, as_of_tt } => {
+            let tt = lilia_core::BitemporalPoint::at(&as_of_tt)?;
+            let timeline = database.bitemporal().timeline(&space, &id, tt)?;
+            Ok(serde_json::to_value(timeline)?)
+        }
+        BitempCommand::History { space, id } => {
+            let hist = database.bitemporal().history(&space, &id)?;
+            Ok(serde_json::to_value(hist)?)
+        }
+        BitempCommand::Delete {
+            space,
+            id,
+            vt_from,
+            vt_to,
+        } => {
+            let interval = match (vt_from, vt_to) {
+                (Some(f), Some(t)) => Some(lilia_core::BitemporalInterval::between(&f, &t)?),
+                _ => None,
+            };
+            let deleted = database.bitemporal().delete(&space, &id, interval)?;
+            Ok(json!({ "ok": true, "deleted": deleted }))
         }
     }
 }

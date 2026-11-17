@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
+use std::sync::Arc;
 use lilia_sqlite_native::StmtSlot;
 
 use crate::storage::{normalize_limit, now_ms, parse_version, validate_name};
@@ -9,6 +10,19 @@ use lilia_core::{KvEntry, Result};
 impl Database {
     pub fn kv_get(&self, namespace: &str, key: &[u8]) -> Result<Option<KvEntry>> {
         validate_name("namespace", namespace)?;
+
+        // Fast path: L1 Cache Hit (0.00 ms)
+        if let Some(cached) = self.cache.get_kv(namespace, key) {
+            let expired = cached.expires_at_ms.is_some_and(|exp| exp <= now_ms());
+            if !expired {
+                if let Some(ref prefetcher) = self.prefetcher {
+                    prefetcher.on_access(lilia_core::AccessTarget::kv(namespace, key));
+                }
+                return Ok(Some((*cached).clone()));
+            }
+            self.cache.invalidate_kv(namespace, key);
+        }
+
         let mut connection = self.read_lock()?;
         let stmt = connection.slot(StmtSlot::KvGet)?;
         stmt.reset()?;
@@ -24,17 +38,24 @@ impl Database {
                 Some(stmt.column_int64(2))
             };
             let value = self.codec.decode(raw_val)?;
-            Some(KvEntry {
+            let e = Arc::new(KvEntry {
                 namespace: namespace.to_owned(),
                 key: key.to_vec(),
                 value,
                 version,
                 expires_at_ms,
-            })
+            });
+            self.cache.put_kv(namespace, key, Arc::clone(&e));
+            Some((*e).clone())
         } else {
             None
         };
         stmt.reset()?;
+
+        if let Some(ref prefetcher) = self.prefetcher {
+            prefetcher.on_access(lilia_core::AccessTarget::kv(namespace, key));
+        }
+
         Ok(entry)
     }
 

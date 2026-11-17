@@ -438,6 +438,50 @@ pub(crate) fn apply(
                 deleted,
             })
         }
+        BatchOperation::BitemporalPut {
+            space,
+            id,
+            value,
+            vt_from,
+            vt_to,
+            system_time,
+        } => {
+            let ver = crate::bitemporal::apply_bitemporal_put(
+                tx,
+                space,
+                id,
+                value,
+                *vt_from,
+                *vt_to,
+                *system_time,
+                codec,
+            )?;
+            Ok(MutationResult {
+                version: Some(ver),
+                deleted: false,
+            })
+        }
+        BatchOperation::BitemporalDelete {
+            space,
+            id,
+            vt_from,
+            vt_to,
+            system_time,
+        } => {
+            let deleted = crate::bitemporal::apply_bitemporal_delete(
+                tx,
+                space,
+                id,
+                *vt_from,
+                *vt_to,
+                *system_time,
+                codec,
+            )?;
+            Ok(MutationResult {
+                version: None,
+                deleted,
+            })
+        }
     }
 }
 

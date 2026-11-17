@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
+use std::sync::Arc;
 use lilia_sqlite_native::StmtSlot;
 
 use crate::storage::{normalize_limit, parse_version, validate_name};
@@ -76,6 +77,15 @@ impl Database {
     pub fn json_get(&self, space: &str, id: &str) -> Result<Option<JsonEntry>> {
         validate_name("space", space)?;
         validate_name("id", id)?;
+
+        // Fast path: L1 Cache Hit (0.00 ms)
+        if let Some(cached) = self.cache.get_json(space, id) {
+            if let Some(ref prefetcher) = self.prefetcher {
+                prefetcher.on_access(lilia_core::AccessTarget::json(space, id));
+            }
+            return Ok(Some((*cached).clone()));
+        }
+
         let mut connection = self.read_lock()?;
         let stmt = connection.slot(StmtSlot::JsonGet)?;
         stmt.reset()?;
@@ -85,16 +95,23 @@ impl Database {
             let encoded = stmt.column_text(0);
             let version = parse_version(stmt.column_int64(1))?;
             let value = decode_json_value(encoded, self.codec.as_ref())?;
-            Some(JsonEntry {
+            let e = Arc::new(JsonEntry {
                 space: space.to_owned(),
                 id: id.to_owned(),
                 value,
                 version,
-            })
+            });
+            self.cache.put_json(space, id, Arc::clone(&e));
+            Some((*e).clone())
         } else {
             None
         };
         stmt.reset()?;
+
+        if let Some(ref prefetcher) = self.prefetcher {
+            prefetcher.on_access(lilia_core::AccessTarget::json(space, id));
+        }
+
         Ok(entry)
     }
 
@@ -635,6 +652,166 @@ impl Database {
     }
 }
 
+fn get_field_mut<'a>(
+    doc: &'a mut serde_json::Value,
+    path: &str,
+) -> Option<&'a mut serde_json::Value> {
+    let mut current = doc;
+    for part in path.split('.') {
+        match current {
+            serde_json::Value::Object(map) => {
+                current = map.get_mut(part)?;
+            }
+            serde_json::Value::Array(arr) => {
+                let idx: usize = part.parse().ok()?;
+                current = arr.get_mut(idx)?;
+            }
+            _ => return None,
+        }
+    }
+    Some(current)
+}
+
+fn set_field(doc: &mut serde_json::Value, path: &str, val: serde_json::Value) {
+    let parts: Vec<&str> = path.split('.').collect();
+    if parts.is_empty() {
+        return;
+    }
+    let mut current = doc;
+    for &part in &parts[..parts.len() - 1] {
+        if !current.is_object() {
+            *current = serde_json::Value::Object(serde_json::Map::new());
+        }
+        current = current
+            .as_object_mut()
+            .unwrap()
+            .entry(part)
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    }
+    if let Some(map) = current.as_object_mut() {
+        map.insert(parts.last().unwrap().to_string(), val);
+    }
+}
+
+fn remove_field(doc: &mut serde_json::Value, path: &str) -> Option<serde_json::Value> {
+    let parts: Vec<&str> = path.split('.').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let mut current = doc;
+    for &part in &parts[..parts.len() - 1] {
+        current = current.as_object_mut()?.get_mut(part)?;
+    }
+    current.as_object_mut()?.remove(*parts.last().unwrap())
+}
+
+pub(crate) fn apply_document_update(
+    doc: &mut serde_json::Value,
+    update: &serde_json::Value,
+) -> Result<()> {
+    let Some(update_obj) = update.as_object() else {
+        return Err(LiliaError::new(
+            ErrorCode::InvalidInput,
+            "update specification must be a JSON object",
+            false,
+        ));
+    };
+
+    let has_operators = update_obj.keys().any(|k| k.starts_with('$'));
+
+    if !has_operators {
+        if let Some(doc_map) = doc.as_object_mut() {
+            for (k, v) in update_obj {
+                doc_map.insert(k.clone(), v.clone());
+            }
+        } else {
+            *doc = update.clone();
+        }
+        return Ok(());
+    }
+
+    for (op, spec) in update_obj {
+        match op.as_str() {
+            "$mul" => {
+                if let Some(spec_map) = spec.as_object() {
+                    for (field, factor_val) in spec_map {
+                        if let Some(factor) = factor_val.as_f64() {
+                            if let Some(target) = get_field_mut(doc, field) {
+                                if let Some(n) = target.as_i64() {
+                                    let res = (n as f64) * factor;
+                                    if res.fract() == 0.0
+                                        && res <= i64::MAX as f64
+                                        && res >= i64::MIN as f64
+                                    {
+                                        *target = serde_json::json!(res as i64);
+                                    } else {
+                                        *target = serde_json::json!(res);
+                                    }
+                                } else if let Some(f) = target.as_f64() {
+                                    *target = serde_json::json!(f * factor);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "$inc" => {
+                if let Some(spec_map) = spec.as_object() {
+                    for (field, amount_val) in spec_map {
+                        if let Some(target) = get_field_mut(doc, field) {
+                            if let (Some(t_int), Some(a_int)) =
+                                (target.as_i64(), amount_val.as_i64())
+                            {
+                                *target = serde_json::json!(t_int + a_int);
+                            } else if let (Some(t_num), Some(a_num)) =
+                                (target.as_f64(), amount_val.as_f64())
+                            {
+                                *target = serde_json::json!(t_num + a_num);
+                            }
+                        } else if let Some(amount) = amount_val.as_f64() {
+                            set_field(doc, field, serde_json::json!(amount));
+                        }
+                    }
+                }
+            }
+            "$set" => {
+                if let Some(spec_map) = spec.as_object() {
+                    for (field, val) in spec_map {
+                        set_field(doc, field, val.clone());
+                    }
+                }
+            }
+            "$unset" => {
+                if let Some(spec_map) = spec.as_object() {
+                    for field in spec_map.keys() {
+                        let _ = remove_field(doc, field);
+                    }
+                }
+            }
+            "$rename" => {
+                if let Some(spec_map) = spec.as_object() {
+                    for (old_key, new_key_val) in spec_map {
+                        if let Some(new_key) = new_key_val.as_str() {
+                            if let Some(removed) = remove_field(doc, old_key) {
+                                set_field(doc, new_key, removed);
+                            }
+                        }
+                    }
+                }
+            }
+            other => {
+                return Err(LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    format!("unsupported update operator: {other}"),
+                    false,
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Fluent JSON interface for document operations, time-travel queries, and history.
 #[derive(Debug, Clone, Copy)]
 pub struct JsonStore<'a> {
@@ -644,6 +821,81 @@ pub struct JsonStore<'a> {
 impl<'a> JsonStore<'a> {
     pub fn get(&self, space: &str, id: &str) -> Result<Option<JsonEntry>> {
         self.db.json_get(space, id)
+    }
+
+    pub fn put(&self, space: &str, id: &str, value: serde_json::Value) -> Result<u64> {
+        let results = self.db.batch(&[lilia_core::BatchOperation::JsonPut {
+            space: space.to_owned(),
+            id: id.to_owned(),
+            value,
+            if_version: None,
+        }])?;
+        Ok(results.first().and_then(|r| r.version).unwrap_or(1))
+    }
+
+    pub fn delete(&self, space: &str, id: &str) -> Result<bool> {
+        let results = self
+            .db
+            .batch(&[lilia_core::BatchOperation::JsonDelete {
+                space: space.to_owned(),
+                id: id.to_owned(),
+                if_version: None,
+            }])?;
+        Ok(results.first().is_some_and(|r| r.deleted))
+    }
+
+    pub fn scan(&self, space: &str, after: Option<&str>, limit: u32) -> Result<Vec<JsonEntry>> {
+        self.db.json_scan(space, after, limit)
+    }
+
+    pub fn find(
+        &self,
+        space: &str,
+        query: &serde_json::Map<String, serde_json::Value>,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<JsonEntry>> {
+        self.db.json_find(space, query, after_id, limit)
+    }
+
+    pub fn update_where(
+        &self,
+        space: &str,
+        filter: serde_json::Value,
+        update: serde_json::Value,
+    ) -> Result<u64> {
+        let entries = self.db.json_scan(space, None, u32::MAX)?;
+        let mut ops = Vec::new();
+        let filter_obj = filter.as_object();
+
+        for entry in entries {
+            let matches = match filter_obj {
+                Some(f) if !f.is_empty() => doc_matches_query(&entry.value, f),
+                _ => true,
+            };
+
+            if matches {
+                let mut updated_doc = entry.value.clone();
+                apply_document_update(&mut updated_doc, &update)?;
+                ops.push(lilia_core::BatchOperation::JsonPut {
+                    space: space.to_owned(),
+                    id: entry.id,
+                    value: updated_doc,
+                    if_version: Some(entry.version),
+                });
+            }
+        }
+
+        let updated_count = ops.len() as u64;
+        for chunk in ops.chunks(1000) {
+            self.db.batch(chunk)?;
+        }
+
+        Ok(updated_count)
+    }
+
+    pub fn update_all(&self, space: &str, update: serde_json::Value) -> Result<u64> {
+        self.update_where(space, serde_json::json!({}), update)
     }
 
     pub fn get_at_version(

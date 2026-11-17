@@ -31,11 +31,14 @@ pub const SQLITE_LOCKED: c_int = 6;
 pub const SQLITE_INTERRUPT: c_int = 9;
 pub const SQLITE_IOERR: c_int = 10;
 pub const SQLITE_CORRUPT: c_int = 11;
+pub const SQLITE_NOTFOUND: c_int = 12;
 pub const SQLITE_FULL: c_int = 13;
+pub const SQLITE_CANTOPEN: c_int = 14;
 pub const SQLITE_MISUSE: c_int = 21;
 pub const SQLITE_NOTADB: c_int = 26;
 pub const SQLITE_ROW: c_int = 100;
 pub const SQLITE_DONE: c_int = 101;
+pub const SQLITE_IOERR_SHORT_READ: c_int = SQLITE_IOERR | (2 << 8);
 
 // Open flags
 pub const SQLITE_OPEN_READONLY: c_int = 0x00000001;
@@ -43,7 +46,24 @@ pub const SQLITE_OPEN_READWRITE: c_int = 0x00000002;
 pub const SQLITE_OPEN_CREATE: c_int = 0x00000004;
 pub const SQLITE_OPEN_URI: c_int = 0x00000040;
 pub const SQLITE_OPEN_MEMORY: c_int = 0x00000080;
+pub const SQLITE_OPEN_MAIN_DB: c_int = 0x00000100;
+pub const SQLITE_OPEN_TEMP_DB: c_int = 0x00000200;
+pub const SQLITE_OPEN_TRANSIENT_DB: c_int = 0x00000400;
+pub const SQLITE_OPEN_MAIN_JOURNAL: c_int = 0x00000800;
+pub const SQLITE_OPEN_TEMP_JOURNAL: c_int = 0x00001000;
+pub const SQLITE_OPEN_SUBJOURNAL: c_int = 0x00002000;
+pub const SQLITE_OPEN_SUPER_JOURNAL: c_int = 0x00004000;
 pub const SQLITE_OPEN_NOMUTEX: c_int = 0x00008000;
+pub const SQLITE_OPEN_WAL: c_int = 0x00080000;
+
+// Device characteristics
+pub const SQLITE_IOCAP_POWERSAFE_OVERWRITE: c_int = 0x00001000;
+pub const SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN: c_int = 0x00000800;
+
+// Access flags
+pub const SQLITE_ACCESS_EXISTS: c_int = 0;
+pub const SQLITE_ACCESS_READWRITE: c_int = 1;
+pub const SQLITE_ACCESS_READ: c_int = 2;
 
 // Prepare flags
 pub const SQLITE_PREPARE_PERSISTENT: c_uint = 0x01;
@@ -302,6 +322,72 @@ extern "C" {
         pzErrMsg: *mut *mut c_char,
         pApi: *const c_void,
     ) -> c_int;
+
+    // VFS API
+    pub fn sqlite3_vfs_find(zVfsName: *const c_char) -> *mut sqlite3_vfs;
+    pub fn sqlite3_vfs_register(pVfs: *mut sqlite3_vfs, makeDflt: c_int) -> c_int;
+    pub fn sqlite3_vfs_unregister(pVfs: *mut sqlite3_vfs) -> c_int;
+    pub fn sqlite3_uri_parameter(zFilename: *const c_char, zParam: *const c_char) -> *const c_char;
+    pub fn sqlite3_serialize(
+        db: *mut sqlite3,
+        zSchema: *const c_char,
+        piSize: *mut i64,
+        mFlags: c_uint,
+    ) -> *mut c_uchar;
+}
+
+#[repr(C)]
+pub struct sqlite3_file {
+    pub pMethods: *const sqlite3_io_methods,
+}
+
+#[repr(C)]
+pub struct sqlite3_io_methods {
+    pub iVersion: c_int,
+    pub xClose: Option<unsafe extern "C" fn(*mut sqlite3_file) -> c_int>,
+    pub xRead: Option<unsafe extern "C" fn(*mut sqlite3_file, *mut c_void, c_int, i64) -> c_int>,
+    pub xWrite: Option<unsafe extern "C" fn(*mut sqlite3_file, *const c_void, c_int, i64) -> c_int>,
+    pub xTruncate: Option<unsafe extern "C" fn(*mut sqlite3_file, i64) -> c_int>,
+    pub xSync: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int) -> c_int>,
+    pub xFileSize: Option<unsafe extern "C" fn(*mut sqlite3_file, *mut i64) -> c_int>,
+    pub xLock: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int) -> c_int>,
+    pub xUnlock: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int) -> c_int>,
+    pub xCheckReservedLock: Option<unsafe extern "C" fn(*mut sqlite3_file, *mut c_int) -> c_int>,
+    pub xFileControl: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int, *mut c_void) -> c_int>,
+    pub xSectorSize: Option<unsafe extern "C" fn(*mut sqlite3_file) -> c_int>,
+    pub xDeviceCharacteristics: Option<unsafe extern "C" fn(*mut sqlite3_file) -> c_int>,
+    pub xShmMap: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int, c_int, c_int, *mut *mut c_void) -> c_int>,
+    pub xShmLock: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int, c_int, c_int) -> c_int>,
+    pub xShmBarrier: Option<unsafe extern "C" fn(*mut sqlite3_file)>,
+    pub xShmUnmap: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int) -> c_int>,
+    pub xFetch: Option<unsafe extern "C" fn(*mut sqlite3_file, i64, c_int, *mut *mut c_void) -> c_int>,
+    pub xUnfetch: Option<unsafe extern "C" fn(*mut sqlite3_file, i64, *mut c_void) -> c_int>,
+}
+
+#[repr(C)]
+pub struct sqlite3_vfs {
+    pub iVersion: c_int,
+    pub szOsFile: c_int,
+    pub mxPathname: c_int,
+    pub pNext: *mut sqlite3_vfs,
+    pub zName: *const c_char,
+    pub pAppData: *mut c_void,
+    pub xOpen: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, *mut sqlite3_file, c_int, *mut c_int) -> c_int>,
+    pub xDelete: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, c_int) -> c_int>,
+    pub xAccess: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, c_int, *mut c_int) -> c_int>,
+    pub xFullPathname: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, c_int, *mut c_char) -> c_int>,
+    pub xDlOpen: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char) -> *mut c_void>,
+    pub xDlError: Option<unsafe extern "C" fn(*mut sqlite3_vfs, c_int, *mut c_char)>,
+    pub xDlSym: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *mut c_void, *const c_char) -> Option<unsafe extern "C" fn()>>,
+    pub xDlClose: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *mut c_void)>,
+    pub xRandomness: Option<unsafe extern "C" fn(*mut sqlite3_vfs, c_int, *mut c_char) -> c_int>,
+    pub xSleep: Option<unsafe extern "C" fn(*mut sqlite3_vfs, c_int) -> c_int>,
+    pub xCurrentTime: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *mut f64) -> c_int>,
+    pub xGetLastError: Option<unsafe extern "C" fn(*mut sqlite3_vfs, c_int, *mut c_char) -> c_int>,
+    pub xCurrentTimeInt64: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *mut i64) -> c_int>,
+    pub xSetSystemCall: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, *mut c_void) -> c_int>,
+    pub xGetSystemCall: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char) -> *mut c_void>,
+    pub xNextSystemCall: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char) -> *const c_char>,
 }
 
 /// Convert an SQLite return code to a `LiliaError`.

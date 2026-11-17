@@ -19,7 +19,6 @@ sha2.workspace = true
 [dev-dependencies]
 lilia-core = { path = "../../crates/lilia-core" }
 lilia-storage-sqlite = { path = "../../crates/lilia-storage-sqlite" }
-rusqlite.workspace = true
 serde_json.workspace = true
 tempfile = "3.27.0"
 

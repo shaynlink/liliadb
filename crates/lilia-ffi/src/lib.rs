@@ -312,6 +312,7 @@ impl From<FfiGpsPoint> for lilia_core::GpsPoint {
             altitude: p.altitude,
             speed: p.speed,
             accuracy: p.accuracy,
+            h3_index: None,
         }
     }
 }

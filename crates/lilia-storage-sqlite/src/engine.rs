@@ -10,15 +10,18 @@ use std::time::{Duration, Instant};
 use lilia_sqlite_native::NativeBackup;
 use lilia_sqlite_native::{InterruptHandle, NativeConnection};
 
+use crate::branch::Branch;
+use crate::cache::{CacheManager, CacheStats};
 use crate::checkpoint::{CheckpointStats, Checkpointer};
 use crate::lifecycle::{Lifecycle, Operation};
+use crate::prefetch::{CacheOptions, PrefetchEngine};
 use crate::storage::{migrate, prepare_parent, secure_database_file};
 use crate::timeseries_worker::{TimeSeriesOptions, TimeSeriesWorker};
 use crate::transaction::apply;
 use crate::writer_queue::{Permit, WriterQueue};
 use lilia_core::{
-    BatchOperation, Durability, ErrorCode, IdentityCodec, LiliaError, MutationResult, Result,
-    ValueCodec,
+    BatchOperation, Durability, ErrorCode, IdentityCodec, LiliaError, MergeResult, MergeStrategy,
+    MutationResult, Result, ValueCodec,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -51,6 +54,7 @@ pub struct DatabaseOptions {
     pub cache_size_kib: i32,
     pub timeseries_options: TimeSeriesOptions,
     pub undo_log_capacity: usize,
+    pub cache: CacheOptions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +84,7 @@ impl DatabaseOptions {
                 retention_interval_ms: 60_000,
             },
             undo_log_capacity: 100,
+            cache: CacheOptions::default(),
         }
     }
 
@@ -103,6 +108,7 @@ impl DatabaseOptions {
                 retention_interval_ms: 300_000,
             },
             undo_log_capacity: 100,
+            cache: CacheOptions::mobile(),
         }
     }
 
@@ -126,6 +132,7 @@ impl DatabaseOptions {
                 retention_interval_ms: 600_000,
             },
             undo_log_capacity: 100,
+            cache: CacheOptions::constrained(),
         }
     }
 
@@ -155,6 +162,7 @@ impl DatabaseOptions {
                 retention_interval_ms: 0,
             },
             undo_log_capacity: 100,
+            cache: CacheOptions::default(),
         }
     }
 
@@ -174,6 +182,7 @@ impl DatabaseOptions {
                     auto_retention: true,
                     retention_interval_ms: 60_000,
                 };
+                self.cache = CacheOptions::server();
             }
             ResourceProfile::Mobile => {
                 self.cache_size_kib = -8_192;
@@ -187,6 +196,7 @@ impl DatabaseOptions {
                     auto_retention: true,
                     retention_interval_ms: 300_000,
                 };
+                self.cache = CacheOptions::mobile();
             }
             ResourceProfile::Constrained => {
                 self.cache_size_kib = -2_048;
@@ -200,8 +210,22 @@ impl DatabaseOptions {
                     auto_retention: false,
                     retention_interval_ms: 600_000,
                 };
+                self.cache = CacheOptions::constrained();
             }
         }
+        self
+    }
+
+    #[must_use]
+    pub fn with_cache_options(mut self, options: CacheOptions) -> Self {
+        self.cache = options;
+        self
+    }
+
+    #[must_use]
+    pub fn with_predictive_cache(mut self, enabled: bool) -> Self {
+        self.cache.enabled = enabled;
+        self.cache.prefetch_enabled = enabled;
         self
     }
 
@@ -250,6 +274,9 @@ pub struct Database {
     >,
     #[allow(dead_code)]
     pub(crate) undo_log_capacity: usize,
+    pub(crate) active_branches: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    pub(crate) cache: Arc<CacheManager>,
+    pub(crate) prefetcher: Option<Arc<PrefetchEngine>>,
 }
 
 #[derive(Debug)]
@@ -269,6 +296,15 @@ pub struct WriterGuard<'a> {
     connection: MutexGuard<'a, Option<NativeConnection>>,
     _permit: Option<Permit<'a>>,
     _operation: Operation<'a>,
+    pub(crate) cache_to_clear_on_drop: Option<Arc<CacheManager>>,
+}
+
+impl Drop for WriterGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(ref cache) = self.cache_to_clear_on_drop {
+            cache.clear();
+        }
+    }
 }
 
 impl std::fmt::Debug for WriterGuard<'_> {
@@ -394,6 +430,28 @@ impl Database {
         // Disable SQLite's commit-path checkpoint in favor of background work.
         connection.pragma_update("wal_autocheckpoint", 0)?;
         migrate(&connection)?;
+
+        let restored_markov = if options.cache.persist_markov {
+            let mut stmt = connection
+                .prepare("SELECT state FROM _lilia_markov_state WHERE id = 1;")
+                .ok();
+            if let Some(ref mut s) = stmt {
+                if let Ok(true) = s.step() {
+                    let blob = s.column_blob(0);
+                    if let Ok(decompressed) = lilia_core::decompress_bytes(blob) {
+                        serde_json::from_slice::<lilia_core::MarkovModel>(&decompressed).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let reader_count = if cfg!(target_arch = "wasm32") {
             0
         } else {
@@ -439,6 +497,24 @@ impl Database {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ts_worker);
         }
 
+        let cache = Arc::new(CacheManager::new(
+            options.cache.l1_capacity,
+            options.cache.l2_capacity,
+        ));
+
+        let prefetcher = if options.cache.enabled {
+            PrefetchEngine::start(
+                &options.path,
+                options.cache.clone(),
+                Arc::clone(&cache),
+                Arc::clone(&options.codec),
+                restored_markov,
+            )
+            .ok()
+        } else {
+            None
+        };
+
         Ok(Self {
             lifecycle,
             resources,
@@ -447,6 +523,9 @@ impl Database {
             events: Arc::new(tokio::sync::broadcast::channel(1024).0),
             hnsw_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             undo_log_capacity: options.undo_log_capacity,
+            active_branches: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            cache,
+            prefetcher,
         })
     }
 
@@ -477,8 +556,34 @@ impl Database {
 
     /// Stop admission and wait at most `timeout`; cleanup continues after TIMEOUT.
     pub fn close(&self, timeout: Duration) -> Result<()> {
+        let markov_blob = if let Some(ref prefetcher) = self.prefetcher {
+            let blob = prefetcher
+                .export_markov_model()
+                .and_then(|model| serde_json::to_vec(&model).ok())
+                .map(|bytes| lilia_core::compress_bytes(&bytes));
+            prefetcher.stop();
+            blob
+        } else {
+            None
+        };
         let resources = Arc::clone(&self.resources);
-        self.lifecycle.close(timeout, move || resources.close())
+        self.lifecycle.close(timeout, move || resources.close(markov_blob))
+    }
+
+    #[must_use]
+    pub fn cache_stats(&self) -> CacheStats {
+        self.cache.stats()
+    }
+
+    #[must_use]
+    pub fn markov_stats(&self) -> lilia_core::MarkovStats {
+        self.prefetcher
+            .as_ref()
+            .map_or_else(lilia_core::MarkovStats::default, |p| p.markov_stats())
+    }
+
+    pub fn clear_cache(&self) {
+        self.cache.clear();
     }
 
     pub fn integrity_check(&self) -> Result<bool> {
@@ -702,6 +807,24 @@ impl Database {
 
         transaction.commit()?;
 
+        for operation in operations {
+            match operation {
+                BatchOperation::JsonPut { space, id, .. }
+                | BatchOperation::JsonDelete { space, id, .. } => {
+                    self.cache.invalidate_json(space, id);
+                }
+                BatchOperation::KvSet { namespace, key, .. }
+                | BatchOperation::KvDelete { namespace, key, .. } => {
+                    self.cache.invalidate_kv(namespace, key);
+                }
+                BatchOperation::GraphSetNode { graph, id, .. }
+                | BatchOperation::GraphDeleteNode { graph, id } => {
+                    self.cache.invalidate_graph_node(graph, id);
+                }
+                _ => {}
+            }
+        }
+
         if let Some(sess) = session {
             if !sess.is_empty() {
                 if let Ok(changeset) = sess.changeset() {
@@ -852,6 +975,32 @@ impl Database {
                             deleted: true,
                         })
                     }
+                    BatchOperation::BitemporalPut {
+                        space,
+                        id,
+                        vt_from,
+                        vt_to,
+                        ..
+                    } => Some(lilia_core::DatabaseEvent::BitemporalMutated {
+                        space: space.clone(),
+                        id: id.clone(),
+                        vt_from: *vt_from,
+                        vt_to: *vt_to,
+                        deleted: false,
+                    }),
+                    BatchOperation::BitemporalDelete {
+                        space,
+                        id,
+                        vt_from,
+                        vt_to,
+                        ..
+                    } => Some(lilia_core::DatabaseEvent::BitemporalMutated {
+                        space: space.clone(),
+                        id: id.clone(),
+                        vt_from: vt_from.unwrap_or(0),
+                        vt_to: vt_to.unwrap_or(lilia_core::BITEMPORAL_INFINITY),
+                        deleted: true,
+                    }),
                 };
                 if let Some(event) = evt {
                     let _ = self.events.send(event);
@@ -874,7 +1023,9 @@ impl Database {
 
     #[doc(hidden)]
     pub fn lock_writer(&self) -> Result<WriterGuard<'_>> {
-        self.writer_lock(None)
+        let mut guard = self.writer_lock(None)?;
+        guard.cache_to_clear_on_drop = Some(Arc::clone(&self.cache));
+        Ok(guard)
     }
 
     fn writer_lock(&self, deadline: Option<Instant>) -> Result<WriterGuard<'_>> {
@@ -925,6 +1076,7 @@ impl Database {
         drop(update_stmt);
 
         tx.commit()?;
+        self.cache.clear();
 
         Ok(Some(lilia_core::UndoResult {
             id,
@@ -978,6 +1130,7 @@ impl Database {
         drop(update_stmt);
 
         tx.commit()?;
+        self.cache.clear();
 
         Ok(Some(lilia_core::RedoResult {
             id,
@@ -1005,6 +1158,184 @@ impl Database {
         }
         Ok(entries)
     }
+
+    /// Create an isolated, zero-cost (O(1)) Copy-on-Write virtual branch of this database.
+    ///
+    /// The branch shares the parent database's pages with 0 extra bytes on disk.
+    /// Any mutations performed inside the branch are isolated in an in-memory overlay
+    /// and never touch the main database.
+    pub fn branch(&self, name: &str) -> Result<Branch> {
+        crate::storage::validate_name("branch_name", name)?;
+
+        {
+            let active = self.active_branches.lock().unwrap();
+            if active.contains(name) {
+                return Err(LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    format!("branch '{name}' already exists"),
+                    false,
+                ));
+            }
+        }
+
+        // Flush outstanding WAL transactions to base storage
+        let _ = self.checkpoint();
+
+        let parent_bytes = if crate::storage::is_uri_or_memory(&self.path) || !self.path.exists() {
+            let conn = self.read_lock()?;
+            let bytes = conn.serialize("main")?;
+            Some(bytes)
+        } else {
+            None
+        };
+
+        let cow_state = lilia_sqlite_native::BranchVfsState::new(
+            name.to_string(),
+            &self.path,
+            parent_bytes,
+        )?;
+        lilia_sqlite_native::register_branch_state(cow_state.clone());
+
+        let branch_path = PathBuf::from(format!("file:{}?branch_id={}", name, name));
+        let branch_conn = lilia_sqlite_native::NativeConnection::open_with_vfs(
+            &branch_path,
+            Some(lilia_sqlite_native::COW_VFS_NAME),
+            "OFF",
+            0,
+            5000,
+            -8192,
+        )?;
+
+        crate::sql::register_sql_functions(&branch_conn, &self.codec)?;
+        branch_conn.pragma_update("wal_autocheckpoint", 0)?;
+
+        let session = lilia_sqlite_native::NativeSession::create(&branch_conn, "main")?;
+        session.attach_all()?;
+
+        let branch_lifecycle = Arc::new(Lifecycle::default());
+        let branch_resources = Arc::new(Resources {
+            checkpointer: Mutex::new(None),
+            ts_worker: Mutex::new(None),
+            writer: Mutex::new(Some(branch_conn)),
+            readers: Vec::new(),
+            next_reader: AtomicUsize::new(0),
+            writer_queue: WriterQueue::new(16),
+        });
+
+        let branch_db = Database {
+            path: branch_path,
+            lifecycle: branch_lifecycle,
+            resources: branch_resources,
+            codec: Arc::clone(&self.codec),
+            events: Arc::new(tokio::sync::broadcast::channel(128).0),
+            hnsw_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+            undo_log_capacity: self.undo_log_capacity,
+            active_branches: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            cache: Arc::new(CacheManager::new(256, 1024)),
+            prefetcher: None,
+        };
+
+        self.active_branches.lock().unwrap().insert(name.to_string());
+
+        Ok(Branch {
+            name: name.to_string(),
+            db: branch_db,
+            session: Mutex::new(Some(session)),
+            cow_state,
+            created_at_ms: crate::storage::now_ms(),
+        })
+    }
+
+    /// Atomically merge a branch back into the main database using the specified strategy.
+    pub fn merge_branch(&self, branch: Branch, strategy: MergeStrategy) -> Result<MergeResult> {
+        let changeset = branch.changeset()?;
+        let branch_name = branch.name().to_string();
+
+        if changeset.is_empty() {
+            self.active_branches.lock().unwrap().remove(&branch_name);
+            return Ok(MergeResult {
+                branch_name,
+                rows_merged: 0,
+                conflicts_detected: 0,
+                strategy_used: strategy,
+            });
+        }
+
+        let conflict_action = match strategy {
+            MergeStrategy::FastForward | MergeStrategy::AbortOnConflict => {
+                lilia_sqlite_native::ConflictAction::Abort
+            }
+            MergeStrategy::Replace => lilia_sqlite_native::ConflictAction::Replace,
+            MergeStrategy::Omit => lilia_sqlite_native::ConflictAction::Omit,
+        };
+
+        let mut writer = self.lock_writer()?;
+        let tx = writer.transaction()?;
+
+        let apply_result =
+            lilia_sqlite_native::NativeSession::apply(tx.conn(), &changeset, conflict_action);
+
+        if let Err(e) = apply_result {
+            if strategy == MergeStrategy::FastForward || strategy == MergeStrategy::AbortOnConflict
+            {
+                return Err(LiliaError::new(
+                    ErrorCode::Conflict,
+                    format!(
+                        "Branch '{branch_name}' merge rejected: conflict or divergence detected on main ({e})"
+                    ),
+                    false,
+                ));
+            }
+            return Err(e);
+        }
+
+        if self.undo_log_capacity > 0 {
+            if let Ok(inverse) =
+                lilia_sqlite_native::NativeSession::invert_changeset(&changeset)
+            {
+                let now = crate::storage::now_ms();
+                let summary = format!("merge branch '{branch_name}'");
+                let fwd_compressed = lilia_core::compress_bytes(&changeset);
+                let rev_compressed = lilia_core::compress_bytes(&inverse);
+
+                if let Ok(mut ins_stmt) = tx.prepare(
+                    "INSERT INTO _lilia_undo_log(timestamp_ms, summary, forward_changeset, reverse_changeset, undone) \
+                     VALUES(?1, ?2, ?3, ?4, 0);",
+                ) {
+                    let _ = ins_stmt.bind_int64(1, now);
+                    let _ = ins_stmt.bind_text_static(2, &summary);
+                    let _ = ins_stmt.bind_blob_static(3, &fwd_compressed);
+                    let _ = ins_stmt.bind_blob_static(4, &rev_compressed);
+                    let _ = ins_stmt.step();
+                }
+            }
+        }
+
+        tx.commit()?;
+
+        self.active_branches.lock().unwrap().remove(&branch_name);
+        lilia_sqlite_native::unregister_branch_state(&branch_name);
+
+        Ok(MergeResult {
+            branch_name,
+            rows_merged: branch.dirty_page_count(),
+            conflicts_detected: 0,
+            strategy_used: strategy,
+        })
+    }
+
+    /// List active branches created from this database instance.
+    pub fn list_branches(&self) -> Vec<String> {
+        let mut branches: Vec<String> = self
+            .active_branches
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect();
+        branches.sort();
+        branches
+    }
 }
 
 impl Resources {
@@ -1023,6 +1354,7 @@ impl Resources {
             connection,
             _permit: Some(permit),
             _operation: operation,
+            cache_to_clear_on_drop: None,
         })
     }
 
@@ -1039,10 +1371,11 @@ impl Resources {
             connection,
             _permit: None,
             _operation: operation,
+            cache_to_clear_on_drop: None,
         })
     }
 
-    fn close(&self) -> Result<()> {
+    fn close(&self, markov_blob: Option<Vec<u8>>) -> Result<()> {
         // No admitted operations remain. Potentially slow I/O runs on the cleanup
         // thread so the caller's timeout is independent of filesystem progress.
         let ts_worker = self
@@ -1073,6 +1406,16 @@ impl Resources {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         {
+            if let Some(compressed) = markov_blob {
+                let now = crate::storage::now_ms();
+                if let Ok(mut stmt) = writer.prepare(
+                    "INSERT OR REPLACE INTO _lilia_markov_state(id, state, updated_at_ms) VALUES(1, ?1, ?2);",
+                ) {
+                    let _ = stmt.bind_blob_static(1, &compressed);
+                    let _ = stmt.bind_int64(2, now);
+                    let _ = stmt.step();
+                }
+            }
             let checkpoint = writer.exec("PRAGMA wal_checkpoint(PASSIVE);");
             result = result.and(checkpoint);
             drop(writer);

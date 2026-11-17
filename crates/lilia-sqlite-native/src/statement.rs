@@ -136,11 +136,16 @@ impl NativeStatement {
     /// Bind an array of 64-bit integers to a carray() parameter using zero-copy static binding.
     /// The `vals` slice must outlive the query execution.
     pub fn bind_carray_int64_static(&mut self, col: i32, vals: &[i64]) -> Result<()> {
+        let ptr = if vals.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            vals.as_ptr() as *mut c_void
+        };
         let rc = unsafe {
             ffi::sqlite3_carray_bind_v2(
                 self.raw,
                 col as c_int,
-                vals.as_ptr() as *mut c_void,
+                ptr,
                 vals.len() as c_int,
                 ffi::CARRAY_INT64,
                 ffi::SQLITE_STATIC,
@@ -158,13 +163,48 @@ impl NativeStatement {
         }
     }
 
-    /// Bind an array of 32-bit integers to a carray() parameter using zero-copy static binding.
-    pub fn bind_carray_int32_static(&mut self, col: i32, vals: &[i32]) -> Result<()> {
+    /// Bind an array of 64-bit unsigned integers to a carray() parameter using zero-copy static binding.
+    /// The `vals` slice must outlive the query execution.
+    pub fn bind_carray_uint64_static(&mut self, col: i32, vals: &[u64]) -> Result<()> {
+        let ptr = if vals.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            vals.as_ptr() as *mut c_void
+        };
         let rc = unsafe {
             ffi::sqlite3_carray_bind_v2(
                 self.raw,
                 col as c_int,
-                vals.as_ptr() as *mut c_void,
+                ptr,
+                vals.len() as c_int,
+                ffi::CARRAY_INT64,
+                ffi::SQLITE_STATIC,
+                std::ptr::null_mut(),
+            )
+        };
+        if rc == ffi::SQLITE_OK {
+            Ok(())
+        } else {
+            Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("failed to bind carray uint64 col={col}: rc={rc}"),
+                false,
+            ))
+        }
+    }
+
+    /// Bind an array of 32-bit integers to a carray() parameter using zero-copy static binding.
+    pub fn bind_carray_int32_static(&mut self, col: i32, vals: &[i32]) -> Result<()> {
+        let ptr = if vals.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            vals.as_ptr() as *mut c_void
+        };
+        let rc = unsafe {
+            ffi::sqlite3_carray_bind_v2(
+                self.raw,
+                col as c_int,
+                ptr,
                 vals.len() as c_int,
                 ffi::CARRAY_INT32,
                 ffi::SQLITE_STATIC,
@@ -184,11 +224,16 @@ impl NativeStatement {
 
     /// Bind an array of doubles to a carray() parameter using zero-copy static binding.
     pub fn bind_carray_double_static(&mut self, col: i32, vals: &[f64]) -> Result<()> {
+        let ptr = if vals.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            vals.as_ptr() as *mut c_void
+        };
         let rc = unsafe {
             ffi::sqlite3_carray_bind_v2(
                 self.raw,
                 col as c_int,
-                vals.as_ptr() as *mut c_void,
+                ptr,
                 vals.len() as c_int,
                 ffi::CARRAY_DOUBLE,
                 ffi::SQLITE_STATIC,

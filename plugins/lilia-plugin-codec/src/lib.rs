@@ -329,24 +329,18 @@ mod tests {
 
         drop(db);
 
-        // Verify SQLite raw database contains encrypted bytes and envelopes
-        let raw_conn = rusqlite::Connection::open(&db_path).unwrap();
-        let raw_kv: Vec<u8> = raw_conn
-            .query_row(
-                "SELECT value FROM _lilia_kv WHERE namespace = 'vault' AND key = ?1",
-                [b"secret_key"],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_ne!(raw_kv, b"top_secret_aes_payload");
+        // Verify SQLite raw database without codec contains encrypted bytes and envelopes
+        let raw_db = Database::open(DatabaseOptions::durable(&db_path)).unwrap();
+        let raw_kv = raw_db.kv_get("vault", b"secret_key").unwrap().unwrap();
+        assert_ne!(raw_kv.value, b"top_secret_aes_payload");
 
-        let raw_json: String = raw_conn
-            .query_row(
+        let raw_json_res = raw_db
+            .sql_query(
                 "SELECT value FROM _lilia_json WHERE space = 'identities' AND id = 'user42'",
-                [],
-                |row| row.get(0),
+                &[],
             )
             .unwrap();
+        let raw_json = raw_json_res.rows[0][0].as_str().unwrap();
         assert!(!raw_json.contains("top_secret_aes_payload"));
         assert!(!raw_json.contains("admin"));
         assert!(raw_json.contains("$codec"));

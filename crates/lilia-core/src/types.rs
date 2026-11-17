@@ -32,6 +32,19 @@ pub struct JsonEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BitemporalEntry {
+    pub space: String,
+    pub id: String,
+    pub vt_from: i64,
+    pub vt_to: i64,
+    pub tt_from: i64,
+    pub tt_to: i64,
+    pub value: Value,
+    #[serde(with = "crate::version")]
+    pub version: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "model", rename_all = "snake_case")]
 pub enum BatchOperation {
     KvSet {
@@ -112,6 +125,25 @@ pub enum BatchOperation {
     VectorDelete {
         collection: String,
         id: String,
+    },
+    BitemporalPut {
+        space: String,
+        id: String,
+        value: Value,
+        vt_from: i64,
+        vt_to: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system_time: Option<i64>,
+    },
+    BitemporalDelete {
+        space: String,
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vt_from: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vt_to: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system_time: Option<i64>,
     },
 }
 
@@ -368,6 +400,13 @@ pub enum DatabaseEvent {
         id: String,
         deleted: bool,
     },
+    BitemporalMutated {
+        space: String,
+        id: String,
+        vt_from: i64,
+        vt_to: i64,
+        deleted: bool,
+    },
 }
 
 impl DatabaseEvent {
@@ -379,7 +418,9 @@ impl DatabaseEvent {
         }
         match self {
             Self::KvMutated { namespace, .. } => namespace == filter,
-            Self::JsonMutated { space, .. } => space == filter,
+            Self::JsonMutated { space, .. } | Self::BitemporalMutated { space, .. } => {
+                space == filter
+            }
             Self::GraphNodeMutated { graph, .. } | Self::GraphEdgeMutated { graph, .. } => {
                 graph == filter
             }
@@ -395,6 +436,70 @@ pub struct SqlQueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Value>>,
     pub rows_affected: u64,
+}
+
+impl SqlQueryResult {
+    #[must_use]
+    pub fn scalar_f64(&self) -> Option<f64> {
+        self.rows.first()?.first()?.as_f64()
+    }
+
+    #[must_use]
+    pub fn scalar_i64(&self) -> Option<i64> {
+        self.rows.first()?.first()?.as_i64()
+    }
+
+    #[must_use]
+    pub fn scalar_str(&self) -> Option<&str> {
+        self.rows.first()?.first()?.as_str()
+    }
+
+    #[must_use]
+    pub fn first_row(&self) -> Option<&[Value]> {
+        self.rows.first().map(Vec::as_slice)
+    }
+}
+
+/// Conflict resolution and merge strategy when merging a branch into the main database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStrategy {
+    /// Only merge if the main database has not had conflicting modifications
+    /// since the branch was created. If conflicts are detected, the merge is rejected.
+    #[default]
+    FastForward,
+    /// Overwrite destination rows in the main database with the branch's modifications.
+    Replace,
+    /// Keep destination rows in the main database in case of conflict, only applying non-conflicting changes.
+    Omit,
+    /// Abort changeset application immediately upon encountering any conflict.
+    AbortOnConflict,
+}
+
+/// Result of merging a branch into the main database.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeResult {
+    pub branch_name: String,
+    pub rows_merged: usize,
+    pub conflicts_detected: usize,
+    pub strategy_used: MergeStrategy,
+}
+
+/// Statistics on table-level changes recorded in a branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableDiff {
+    pub table_name: String,
+    pub inserts: usize,
+    pub updates: usize,
+    pub deletes: usize,
+}
+
+/// Summary of all changes recorded in a branch compared to its base.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchDiff {
+    pub branch_name: String,
+    pub total_changes: usize,
+    pub tables: Vec<TableDiff>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

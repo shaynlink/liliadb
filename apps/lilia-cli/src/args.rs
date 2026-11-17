@@ -80,6 +80,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: HybridCommand,
     },
+    Bitemp {
+        #[command(subcommand)]
+        command: BitempCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -464,5 +468,46 @@ pub(crate) enum TrustCommand {
         root: Option<PathBuf>,
         #[arg(long)]
         development: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum BitempCommand {
+    Put {
+        space: String,
+        id: String,
+        value: String,
+        #[arg(long = "from")]
+        vt_from: String,
+        #[arg(long = "to")]
+        vt_to: String,
+        #[arg(long = "system-time")]
+        system_time: Option<String>,
+    },
+    Get {
+        space: String,
+        id: String,
+        #[arg(long = "as-of-tt", default_value = "now")]
+        as_of_tt: String,
+        #[arg(long = "for-vt", default_value = "now")]
+        for_vt: String,
+    },
+    Timeline {
+        space: String,
+        id: String,
+        #[arg(long = "as-of-tt", default_value = "now")]
+        as_of_tt: String,
+    },
+    History {
+        space: String,
+        id: String,
+    },
+    Delete {
+        space: String,
+        id: String,
+        #[arg(long = "from")]
+        vt_from: Option<String>,
+        #[arg(long = "to")]
+        vt_to: Option<String>,
     },
 }

@@ -69,6 +69,18 @@ impl NativeConnection {
         busy_timeout_ms: i32,
         cache_size_kib: i32,
     ) -> Result<Self> {
+        Self::open_with_vfs(path, None, synchronous, mmap_size, busy_timeout_ms, cache_size_kib)
+    }
+
+    /// Open a new SQLite connection with an optional custom VFS name.
+    pub fn open_with_vfs(
+        path: &Path,
+        vfs_name: Option<&str>,
+        synchronous: &str,
+        mmap_size: u64,
+        busy_timeout_ms: i32,
+        cache_size_kib: i32,
+    ) -> Result<Self> {
         crate::logging::ensure_sqlite_initialized();
 
         let path_str = path.to_str().ok_or_else(|| {
@@ -83,13 +95,26 @@ impl NativeConnection {
             )
         })?;
 
+        let c_vfs = match vfs_name {
+            Some(name) => Some(CString::new(name).map_err(|e| {
+                LiliaError::new(
+                    ErrorCode::InvalidInput,
+                    format!("null byte in vfs name: {e}"),
+                    false,
+                )
+            })?),
+            None => None,
+        };
+
+        let vfs_ptr = c_vfs.as_ref().map_or(ptr::null(), |cv| cv.as_ptr());
+
         let mut raw = ptr::null_mut();
         let flags = ffi::SQLITE_OPEN_READWRITE
             | ffi::SQLITE_OPEN_CREATE
             | ffi::SQLITE_OPEN_URI
             | ffi::SQLITE_OPEN_NOMUTEX;
 
-        let rc = unsafe { ffi::sqlite3_open_v2(c_path.as_ptr(), &mut raw, flags, ptr::null()) };
+        let rc = unsafe { ffi::sqlite3_open_v2(c_path.as_ptr(), &mut raw, flags, vfs_ptr) };
         if rc != ffi::SQLITE_OK || raw.is_null() {
             let msg = if raw.is_null() {
                 format!("failed to allocate sqlite handle: rc={rc}")
@@ -118,7 +143,11 @@ impl NativeConnection {
         };
 
         // Configure PRAGMAs
-        conn.exec("PRAGMA journal_mode = WAL;")?;
+        if vfs_name == Some(crate::cow_vfs::COW_VFS_NAME) {
+            conn.exec("PRAGMA journal_mode = MEMORY;")?;
+        } else {
+            conn.exec("PRAGMA journal_mode = WAL;")?;
+        }
         conn.exec(&format!("PRAGMA synchronous = {synchronous};"))?;
         conn.exec("PRAGMA temp_store = MEMORY;")?;
         conn.exec(&format!("PRAGMA cache_size = {cache_size_kib};"))?;
@@ -374,6 +403,33 @@ impl NativeConnection {
     #[inline]
     pub fn last_insert_rowid(&self) -> i64 {
         unsafe { ffi::sqlite3_last_insert_rowid(self.raw) }
+    }
+
+    /// Serialize the connected database (or attached schema) to a contiguous byte buffer.
+    pub fn serialize(&self, schema: &str) -> Result<Vec<u8>> {
+        let c_schema = CString::new(schema).map_err(|e| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("null byte in schema name: {e}"),
+                false,
+            )
+        })?;
+        let mut size: i64 = 0;
+        let ptr = unsafe { ffi::sqlite3_serialize(self.raw, c_schema.as_ptr(), &mut size, 0) };
+        if ptr.is_null() {
+            if size <= 0 {
+                return Ok(Vec::new());
+            }
+            return Err(LiliaError::new(
+                ErrorCode::Storage,
+                "failed to serialize database",
+                false,
+            ));
+        }
+        let slice = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
+        let bytes = slice.to_vec();
+        unsafe { ffi::sqlite3_free(ptr.cast()) };
+        Ok(bytes)
     }
 }
 

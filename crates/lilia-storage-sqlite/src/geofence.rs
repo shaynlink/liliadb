@@ -139,8 +139,8 @@ impl Database {
 
         let mut stmt = writer.prepare(
             "INSERT OR REPLACE INTO _lilia_gps_points(
-                track_id, timestamp, latitude, longitude, altitude, speed, accuracy
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                track_id, timestamp, latitude, longitude, altitude, speed, accuracy, h3_index
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
         )?;
 
         for p in points {
@@ -168,6 +168,16 @@ impl Database {
                 stmt.bind_null(7)?;
             }
 
+            let h3 = p.h3_index.unwrap_or_else(|| {
+                lilia_core::h3::lat_lng_to_cell(
+                    p.latitude,
+                    p.longitude,
+                    lilia_core::h3::DEFAULT_H3_RESOLUTION,
+                )
+                .unwrap_or(0)
+            });
+            stmt.bind_int64(8, h3 as i64)?;
+
             stmt.step()?;
         }
 
@@ -190,7 +200,7 @@ impl Database {
         let conn = self.read_lock()?;
 
         let mut stmt = conn.prepare(
-            "SELECT timestamp, latitude, longitude, altitude, speed, accuracy
+            "SELECT timestamp, latitude, longitude, altitude, speed, accuracy, h3_index
              FROM _lilia_gps_points
              WHERE track_id = ?1
                AND (?2 IS NULL OR timestamp >= ?2)
@@ -230,6 +240,11 @@ impl Database {
             } else {
                 Some(stmt.column_double(5))
             };
+            let h3_index = if stmt.column_is_null(6) {
+                None
+            } else {
+                Some(stmt.column_int64(6) as u64)
+            };
 
             points.push(GpsPoint {
                 timestamp,
@@ -238,6 +253,82 @@ impl Database {
                 altitude,
                 speed,
                 accuracy,
+                h3_index,
+            });
+        }
+
+        stmt.reset()?;
+        Ok(points)
+    }
+
+    /// Finds all recorded GPS points whose H3 index is within grid distance `k` of `center_h3`,
+    /// optionally filtered within a time window `[start_time, end_time]`.
+    /// Accelerated by native `carray(?1)` and the composite B-Tree index on `(h3_index, timestamp)`.
+    pub fn geo_find_points_in_h3(
+        &self,
+        center_h3: u64,
+        k: u32,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
+    ) -> Result<Vec<GpsPoint>> {
+        let nearby_cells = lilia_core::h3::k_ring(center_h3, k)?;
+        let conn = self.read_lock()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT timestamp, latitude, longitude, altitude, speed, accuracy, h3_index
+             FROM _lilia_gps_points
+             WHERE h3_index IN carray(?1)
+               AND (?2 IS NULL OR timestamp >= ?2)
+               AND (?3 IS NULL OR timestamp <= ?3)
+             ORDER BY timestamp ASC;",
+        )?;
+
+        stmt.bind_carray_uint64_static(1, &nearby_cells)?;
+        if let Some(st) = start_time {
+            stmt.bind_int64(2, st)?;
+        } else {
+            stmt.bind_null(2)?;
+        }
+        if let Some(et) = end_time {
+            stmt.bind_int64(3, et)?;
+        } else {
+            stmt.bind_null(3)?;
+        }
+
+        let mut points = Vec::new();
+        while stmt.step()? {
+            let timestamp = stmt.column_int64(0);
+            let latitude = stmt.column_double(1);
+            let longitude = stmt.column_double(2);
+            let altitude = if stmt.column_is_null(3) {
+                None
+            } else {
+                Some(stmt.column_double(3))
+            };
+            let speed = if stmt.column_is_null(4) {
+                None
+            } else {
+                Some(stmt.column_double(4))
+            };
+            let accuracy = if stmt.column_is_null(5) {
+                None
+            } else {
+                Some(stmt.column_double(5))
+            };
+            let h3_index = if stmt.column_is_null(6) {
+                None
+            } else {
+                Some(stmt.column_int64(6) as u64)
+            };
+
+            points.push(GpsPoint {
+                timestamp,
+                latitude,
+                longitude,
+                altitude,
+                speed,
+                accuracy,
+                h3_index,
             });
         }
 

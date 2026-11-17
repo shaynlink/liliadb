@@ -47,5 +47,9 @@ __pycache__/
 dist/
 build/
 
+# Android/Gradle artifacts
+.gradle/
+*.gradle/
+
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md

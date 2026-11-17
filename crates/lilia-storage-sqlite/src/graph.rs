@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
+use std::sync::Arc;
 use lilia_sqlite_native::StmtSlot;
 
 use crate::storage::{normalize_limit, validate_name};
@@ -49,19 +50,29 @@ impl Database {
         }
         stmt.step()?;
         stmt.reset()?;
+        self.cache.invalidate_graph_node(graph, id);
         Ok(())
     }
 
     pub fn graph_get_node(&self, graph: &str, id: &str) -> Result<Option<GraphNode>> {
         validate_name("graph", graph)?;
         validate_name("id", id)?;
+
+        // Fast path: L1 Cache Hit (0.00 ms)
+        if let Some(cached) = self.cache.get_graph_node(graph, id) {
+            if let Some(ref prefetcher) = self.prefetcher {
+                prefetcher.on_access(lilia_core::AccessTarget::graph_node(graph, id));
+            }
+            return Ok(Some((*cached).clone()));
+        }
+
         let conn = self.read_lock()?;
         let mut stmt = conn.prepare(
             "SELECT kind, metadata, doc_space, doc_id FROM _lilia_graph_nodes WHERE graph = ?1 AND id = ?2;",
         )?;
         stmt.bind_text_static(1, graph)?;
         stmt.bind_text_static(2, id)?;
-        if stmt.step()? {
+        let node_opt = if stmt.step()? {
             let kind = stmt.column_text(0).to_string();
             let meta_str = stmt.column_text(1);
             let metadata = serde_json::from_str(meta_str)
@@ -76,17 +87,25 @@ impl Database {
             } else {
                 Some(stmt.column_text(3).to_string())
             };
-            Ok(Some(GraphNode {
+            let node = Arc::new(GraphNode {
                 graph: graph.to_owned(),
                 id: id.to_owned(),
                 kind,
                 metadata,
                 doc_space,
                 doc_id,
-            }))
+            });
+            self.cache.put_graph_node(graph, id, Arc::clone(&node));
+            Some((*node).clone())
         } else {
-            Ok(None)
+            None
+        };
+
+        if let Some(ref prefetcher) = self.prefetcher {
+            prefetcher.on_access(lilia_core::AccessTarget::graph_node(graph, id));
         }
+
+        Ok(node_opt)
     }
 
     pub fn graph_get_node_document(
@@ -129,6 +148,7 @@ impl Database {
         stmt_node.reset()?;
         let deleted = tx.conn().changes() > 0;
         tx.commit()?;
+        self.cache.invalidate_graph_node(graph, id);
         Ok(deleted)
     }
 
