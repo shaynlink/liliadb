@@ -1,24 +1,32 @@
 # LiliaDB Node.js SDK (`@liliadb/node`)
 
-Official TypeScript and Node.js SDK for **LiliaDB**, the local-first multimodel embedded and daemon database written in Rust.
+Official TypeScript and Node.js SDK for **LiliaDB**, the local-first multimodel embedded
+and daemon database written in Rust.
 
 ---
 
 ## 1. Key Features
 
-- **Embedded & Daemon Modes**: Direct in-process execution via native Node-API bindings or connection to a local daemon over Unix domain sockets or Windows named pipes.
-- **Multimodel Engine**: Unified Key/Value store, JSON documents with dynamic secondary indexing, embedded Graph traversal, Full-Text Search (FTS5), and declarative SQL queries.
-- **Multi-Runtime Support**: First-class support for **Node.js** (>= 22), **Bun** (>= 1.0), and **Deno** (>= 2.0).
-- **Exact 64-bit Versioning**: Safe optimistic concurrency control (`ifVersion`) using JavaScript native `bigint` without IEEE-754 precision loss.
-- **Asynchronous Keyset Streaming**: Memory-bounded `for await` async iteration (`scanStream`) and standard Node.js Streams (`createReadStream`) with transparent keyset pagination.
-- **Real-Time CDC Subscriptions**: Live change event bus (`db.watch()`) across all mutations with namespace filtering.
-- **Atomic Multi-Model Transactions**: Apply KV mutations, JSON documents, graph edges, and search indexes in a single ACID commit (`db.batch()`).
+- **Embedded & Daemon Modes**: In-process execution through native Node-API bindings, or
+  connection to a local `lilia-daemon` over Unix domain sockets / Windows named pipes.
+- **Multimodel Engine**: Key/Value, JSON documents with dynamic secondary indexes, Graph
+  traversal, Full-Text Search (FTS5), Vector search (HNSW), Hybrid RRF search, and
+  declarative SQL queries.
+- **Multi-Runtime Support**: Node.js `>=22`, Bun `>=1.0`, and Deno `>=2.0`.
+- **Exact 64-bit Versioning**: Optimistic concurrency control (`ifVersion`) using native
+  `bigint`, without IEEE-754 precision loss.
+- **Streaming**: Keyset-paginated async iterators, Node.js `Readable` streams, and WHATWG
+  `ReadableStream`s.
+- **Real-Time CDC**: Live change subscriptions (`db.watch()`) with namespace/space
+  filtering across all models.
+- **Atomic Multi-Model Batches**: Apply KV, JSON, Graph, FTS, and Vector mutations in a
+  single ACID commit (`db.batch()`).
+- **Cancellation & Synchronous Access**: `AbortSignal` on all async operations, plus a
+  zero-async-overhead embedded API via `db.sync`.
 
 ---
 
 ## 2. Installation
-
-Install via your preferred package manager:
 
 ```bash
 # pnpm
@@ -34,7 +42,9 @@ bun add @liliadb/node
 deno add npm:@liliadb/node
 ```
 
-> **Prebuilt Native Addons**: Binary prebuilds are automatically resolved and downloaded for `darwin-arm64`, `darwin-x64`, `linux-arm64-gnu`, `linux-x64-gnu`, and `win32-x64-msvc`.
+> **Native addons**: Prebuilds are published for `darwin-arm64`, `darwin-x64`,
+> `linux-arm64-gnu`, `linux-x64-gnu`, and `win32-x64-msvc`. Set `LILIA_NATIVE_PATH` to
+> load a locally built addon instead.
 
 ---
 
@@ -43,71 +53,104 @@ deno add npm:@liliadb/node
 ```typescript
 import { Database } from "@liliadb/node";
 
-// 1. Open an embedded database
 const db = await Database.open({
   path: "./app.lilia",
   durability: "durable", // "durable" | "balanced" | "performance"
 });
 
-// 2. Key/Value Store (Binary safe)
+// 1. Key/Value (binary safe, UTF-8 strings accepted for convenience)
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-await db.kv.set("session", enc.encode("tok_abc"), enc.encode("user_42"));
-const entry = await db.kv.get("session", enc.encode("tok_abc"));
-if (entry) {
-  console.log("Session:", dec.decode(entry.value), "version:", entry.version);
-}
+await db.kv.set("session", "tok_abc", enc.encode("user_42"));
+const entry = await db.kv.get("session", "tok_abc");
+console.log("Session:", dec.decode(entry!.value), "version:", entry!.version);
 
-// 3. JSON Document Store
+// 2. JSON document store
 await db.json.put("users", "usr_101", { name: "Alice", role: "admin" });
 const user = await db.json.get("users", "usr_101");
 console.log("User:", user?.value);
 
-// 4. Embedded Graph
+// 3. Embedded graph
 await db.graph.setNode("social", "usr_101", "User", { name: "Alice" });
 await db.graph.setNode("social", "usr_102", "User", { name: "Bob" });
 await db.graph.addEdge("social", "usr_101", "usr_102", "FOLLOWS");
-const friends = await db.graph.neighbors("social", "usr_101", { direction: "outgoing" });
-console.log("Friends:", friends);
+console.log("Friends:", await db.graph.neighbors("social", "usr_101", { direction: "outgoing" }));
 
-// 5. Full-Text Search (FTS5)
-await db.fts.index("articles", "art_1", "LiliaDB delivers local-first multimodel database storage.");
-const hits = await db.fts.search("articles", "multimodel storage");
-for (const hit of hits) {
-  console.log(`Hit ${hit.docId} (rank ${hit.rank}): ${hit.snippet}`);
-}
+// 4. Full-text search
+await db.fts.index("articles", "art_1", "LiliaDB delivers local-first multimodel storage.");
+console.log(await db.fts.search("articles", "multimodel storage"));
 
-// 6. Declarative SQL Analytics
+// 5. Vector search
+await db.vector.set("catalog", "item_1", [0.15, -0.42, 0.91, 0.05]);
+console.log(await db.vector.search("catalog", [0.12, -0.40, 0.88, 0.02], { limit: 5 }));
+
+// 6. Declarative SQL
 const admins = await db.sql.query("SELECT id, value FROM lilia_json WHERE space = 'users'");
 console.log("Admins:", admins);
 
-// 7. Clean Shutdown
+// 7. Clean shutdown
 await db.close();
 ```
 
 ---
 
-## 4. Modes of Operation
+## 4. Opening a Database
+
+```typescript
+interface OpenOptions {
+  path: string;
+  mode?: "embedded" | "daemon";
+  durability?: "durable" | "balanced" | "performance";
+  plugins?: readonly ("kv" | "json")[];
+  endpoint?: string;
+  tokenFile?: string;
+  busyTimeoutMs?: number;
+  writerQueueCapacity?: number;
+  readPoolSize?: number;
+  checkpointPolicy?: { walBytes?: number; intervalMs?: number };
+  encryptionKey?: string;
+  signal?: AbortSignal;
+}
+```
+
+| Option | Description |
+| --- | --- |
+| `path` | **Required.** Database file path. |
+| `mode` | `"embedded"` (default) or `"daemon"`. |
+| `durability` | SQLite durability profile. |
+| `plugins` | Enabled plugins. The v0.1 distribution requires both `kv` and `json` (default). |
+| `endpoint` | Daemon IPC endpoint. Defaults to `${path}.sock`. |
+| `tokenFile` | Daemon token file. Defaults to `${path}.token`. |
+| `busyTimeoutMs` | SQLite busy timeout. |
+| `writerQueueCapacity` | Native writer queue capacity. |
+| `readPoolSize` | Number of native read connections. |
+| `checkpointPolicy` | WAL checkpoint thresholds (`walBytes`, `intervalMs`), integers in `1..=4294967295`. |
+| `encryptionKey` | Key used by the encryption codec at rest. |
+| `signal` | Cancels opening. |
 
 ### Embedded Mode (Default)
-Runs in-process via Node-API native bindings. SQLite WAL operations run on background threads without blocking the JavaScript event loop:
+
+Runs in-process. SQLite WAL work executes on background threads without blocking the
+JavaScript event loop.
 
 ```typescript
 const db = await Database.open({
   path: "app.lilia",
-  durability: "durable", // "durable" | "balanced" | "performance"
+  durability: "durable",
   busyTimeoutMs: 5000,
   writerQueueCapacity: 64,
   readPoolSize: 4,
   checkpointPolicy: {
-    walBytes: 4 * 1024 * 1024, // 4MB
+    walBytes: 4 * 1024 * 1024, // 4 MB
     intervalMs: 1000,
   },
 });
 ```
 
 ### Daemon Mode
-Connects over local IPC to an isolated `lilia-daemon` background service:
+
+Connects to an isolated `lilia-daemon` process over length-prefixed MessagePack on local
+IPC.
 
 ```typescript
 const db = await Database.open({
@@ -120,48 +163,47 @@ const db = await Database.open({
 
 ---
 
-## 5. API Reference
+## 5. Key/Value Model (`db.kv`)
 
-### Key / Value Model (`db.kv`)
-
-Keys and values are binary `Uint8Array` slices:
+Keys and values are binary `Uint8Array` slices. `string` inputs are UTF-8 encoded
+automatically for keys, values, and `scan({ after })` cursors.
 
 ```typescript
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-// Put with version check (OCC) and millisecond TTL
+// Put with optimistic concurrency and a millisecond TTL
 const write = await db.kv.set(
   "sessions",
   enc.encode("sess_01"),
   enc.encode("active"),
   {
-    ifVersion: 0n,                     // Only insert if key does not exist
+    ifVersion: 0n,                      // insert only when absent
     expiresAtMs: Date.now() + 3600_000, // 1 hour TTL
-  }
+  },
 );
 
-// Get entry
+// Get
 const entry = await db.kv.get("sessions", enc.encode("sess_01"));
 if (entry) {
   console.log(dec.decode(entry.value), entry.version, entry.expiresAtMs);
 }
 
-// Delete entry
+// Delete (optionally conditional)
 await db.kv.delete("sessions", enc.encode("sess_01"), { ifVersion: write.version });
 
-// In-memory bounded scan
+// Bounded in-memory scan
 const entries = await db.kv.scan("sessions", { limit: 100 });
 ```
 
+`KvEntry` is `{ namespace, key: Uint8Array, value: Uint8Array, version: bigint, expiresAtMs?: number }`.
+`MutationResult` is `{ version?: bigint; deleted: boolean }`.
+
 ---
 
-### JSON Document Model (`db.json`)
-
-Documents are stored as structured JSON objects:
+## 6. JSON Document Model (`db.json`)
 
 ```typescript
-// Put document
 const put = await db.json.put("customers", "cust_100", {
   name: "Grace Hopper",
   plan: "enterprise",
@@ -169,104 +211,156 @@ const put = await db.json.put("customers", "cust_100", {
   tags: ["vip", "core"],
 }, { ifVersion: 0n });
 
-// Get document
-const doc = await db.json.get("customers", "cust_100");
-console.log(doc?.value);
+const doc = await db.json.get<{ name: string }>("customers", "cust_100");
+console.log(doc?.value.name, doc?.version);
 
-// Scan documents
+await db.json.delete("customers", "cust_100", { ifVersion: put.version });
+
 const list = await db.json.scan("customers", { limit: 50 });
+```
 
-// --- Dynamic Secondary Indexing ---
-// Create an index on a JSON field or path (backfills existing docs and auto-indexes arrays)
+`JsonEntry<T>` is `{ space: string, id: string, value: T, version: bigint }`.
+
+### Dynamic Secondary Indexes
+
+`createIndex` backfills existing documents and indexes array elements (multikey).
+
+```typescript
+// Field name; JSON path defaults to $.field
 await db.json.createIndex("customers", "plan");
-await db.json.createIndex("customers", "email", { name: "idx_custom_email" });
 
-// List indexes
+// Explicit JSON path
+await db.json.createIndex("customers", "email", "$.email");
+
+// Named index
+await db.json.createIndex("customers", "email", { name: "idx_custom_email", path: "$.email" });
+
+// List and drop
 const indexes = await db.json.listIndexes("customers");
-
-// Find documents matching query criteria (auto-accelerated by index when available)
-const enterpriseCustomers = await db.json.find("customers", { plan: "enterprise" }, { limit: 10 });
-
-// Stream search results with automatic pagination
-for await (const customer of db.json.findStream("customers", { plan: "enterprise" }, { batchSize: 50 })) {
-  console.log(customer.id, customer.value);
-}
-
-// Drop an index
+// [{ space, indexName, jsonPath }]
 await db.json.dropIndex("customers", "idx_custom_email");
 ```
 
----
-
-### Embedded Graph Engine (`db.graph`)
-
-Directed graph modeling with nodes, edges, neighbor traversals, and reachability:
+### Querying
 
 ```typescript
-// Nodes
-await db.graph.setNode("social", "user_1", "User", { name: "Alice" });
-await db.graph.setNode("social", "user_2", "User", { name: "Bob" });
+// One or more fields (AND). Index-accelerated when possible, otherwise scans.
+const enterprise = await db.json.find("customers", { plan: "enterprise" }, { limit: 10 });
+const activeEnterprise = await db.json.find("customers", { plan: "enterprise", active: true });
 
-// Edges
-await db.graph.addEdge("social", "user_1", "user_2", "FOLLOWS");
+// Multikey match: documents whose `tags` array contains "vip"
+const vip = await db.json.find("customers", { tags: "vip" });
 
-// Traversal
-const neighbors = await db.graph.neighbors("social", "user_1", { direction: "outgoing" });
-const network = await db.graph.reachability("social", ["user_1"], { direction: "outgoing" });
+// Exact lookup by index name
+const byEmail = await db.json.findByIndex("customers", "idx_custom_email", "grace@example.com");
 ```
 
+`limit` defaults to `100` for scans and finds. `findByIndex` accepts
+`string | number | boolean` values.
+
 ---
 
-### Full-Text Search (`db.fts`)
-
-Integrated SQLite FTS5 with BM25 scoring and snippet generation:
+## 7. Graph Engine (`db.graph`)
 
 ```typescript
-// Index text document
-await db.fts.index("articles", "art_1", "LiliaDB delivers unified SQLite multi-model storage.");
+await db.graph.setNode("social", "user_1", "User", { name: "Alice" });
+await db.graph.setNode("social", "user_2", "User", { name: "Bob" });
+await db.graph.addEdge("social", "user_1", "user_2", "FOLLOWS");
 
-// Search with BM25 ranking & snippet extraction
-const hits = await db.fts.search("articles", "multi-model storage", { limit: 5 });
+const neighbors = await db.graph.neighbors("social", "user_1", {
+  direction: "outgoing", // "outgoing" | "incoming" | "both"
+  kind: "FOLLOWS",
+});
+
+const network = await db.graph.reachability("social", ["user_1"], {
+  direction: "outgoing",
+});
+// includes the starting nodes and every reachable node
+```
+
+Node and edge deletion is performed through `db.batch()` using `graph_delete_node` and
+`graph_remove_edge`.
+
+---
+
+## 8. Full-Text Search (`db.fts`)
+
+SQLite FTS5 with BM25 scoring and snippet extraction.
+
+```typescript
+await db.fts.index("articles", "art_1", "LiliaDB delivers unified SQLite multimodel storage.");
+
+const hits = await db.fts.search("articles", "multimodel storage", { limit: 5 });
 for (const hit of hits) {
-  console.log(`Hit ${hit.docId} (rank: ${hit.rank}): ${hit.snippet}`);
+  console.log(hit.docId, hit.rank, hit.snippet);
 }
 ```
 
+`FtsHit` is `{ collection, docId, snippet, rank }`. Remove an indexed document with the
+`fts_delete` batch operation.
+
 ---
 
-### Vector Search & HNSW (`db.vector`)
+## 9. Vector Search (`db.vector`)
 
-Native high-dimensional vector storage and approximate nearest neighbor (ANN) search:
+Native HNSW-backed vector storage and approximate nearest neighbor search.
 
 ```typescript
-// Store vector embedding (Float32, Int8, or 1-bit binary)
-await db.vector.set("catalog", "item_1", [0.15, -0.42, 0.91, 0.05], {
-  elementType: "float32",
+// Dimension inferred from the array for Float32
+await db.vector.set("catalog", "item_1", [0.15, -0.42, 0.91, 0.05]);
+
+// Explicit dimension and element type
+await db.vector.set("catalog", "item_2", new Float32Array([0.1, 0.2, 0.3]), {
+  dim: 3,
+  elementType: "float32", // "float32" | "int8" | "bit"
 });
 
-// Retrieve vector
-const entry = await db.vector.get("catalog", "item_1");
-console.log("Vector dim:", entry?.dim, entry?.vector);
+// Raw encoded bytes, or null when missing
+const raw: Uint8Array | null = await db.vector.get("catalog", "item_1");
 
-// HNSW Approximate Nearest Neighbor Search
+// ANN search
 const hits = await db.vector.search("catalog", [0.12, -0.40, 0.88, 0.02], {
   metric: "cosine", // "cosine" | "l2" | "dot" | "hamming"
   limit: 5,
 });
 for (const hit of hits) {
-  console.log(`Match ${hit.id} (distance: ${hit.distance})`);
+  console.log(hit.id, hit.distance);
 }
+
+await db.vector.delete("catalog", "item_2");
+```
+
+`VectorHit` is `{ collection, id, distance }`. `metric` defaults to `"cosine"` and
+`limit` to `10`. For `int8` and `bit` inputs supplied as a raw `Uint8Array`, pass `dim`
+explicitly.
+
+### Quantization Helpers
+
+```typescript
+import { quantization } from "@liliadb/node";
+
+const floats = [0.15, -0.42, 0.91, 0.05];
+
+// Int8 scalar quantization -> { quantized: Int8Array, scale: number }
+const { quantized, scale } = quantization.toInt8(floats);
+
+// 1-bit binary packing -> Uint8Array
+const packed = quantization.toBit(floats);
+
+// Cosine distance, clamped to [0, 2]
+const distance = quantization.cosineDistance(floats, [0.10, -0.40, 0.90, 0.0]);
 ```
 
 ---
 
-### Hybrid Search & Reciprocal Rank Fusion (`db.hybrid`)
+## 10. Hybrid Search (`db.hybrid`)
 
-Atomically combine lexical FTS5 BM25 search with semantic vector search in a single call:
+Reciprocal Rank Fusion (RRF) of BM25 text ranking and vector distance in one call.
+Provide `query`, `vector`, or both.
 
 ```typescript
-const hybridHits = await db.hybrid.search("catalog", {
-  ftsQuery: "wireless headphones",
+const hits = await db.hybrid.search("catalog", {
+  query: "wireless headphones",
   vector: [0.12, -0.40, 0.88, 0.02],
   metric: "cosine",
   rrfK: 60,
@@ -275,62 +369,82 @@ const hybridHits = await db.hybrid.search("catalog", {
   limit: 10,
 });
 
-for (const hit of hybridHits) {
-  console.log(`${hit.id} - RRF: ${hit.rrfScore.toFixed(4)} (FTS rank: ${hit.ftsRank}, Vec dist: ${hit.vectorDistance})`);
+for (const hit of hits) {
+  console.log(
+    hit.id,
+    hit.rrfScore,
+    hit.ftsRank,
+    hit.ftsSnippet,
+    hit.vectorRank,
+    hit.vectorDistance,
+  );
 }
 ```
 
+`HybridHit` is `{ id, rrfScore, ftsRank?, ftsSnippet?, vectorRank?, vectorDistance? }`.
+Defaults: `rrfK` `60`, `ftsWeight` `1.0`, `vectorWeight` `1.0`, `limit` `10`.
+
 ---
 
-### Synchronous Mode (`db.sync`)
+## 11. Synchronous Embedded API (`db.sync`)
 
-Direct low-latency synchronous accessors for embedded Node.js and Bun workloads:
+Direct, Promise-free accessors for embedded workloads. Available only in embedded mode;
+using it in daemon mode or after `close()` throws.
 
 ```typescript
-// Synchronous KV
-db.sync.kv.set("cache", "k1", "v1");
-const val = db.sync.kv.get("cache", "k1");
+const enc = new TextEncoder();
 
-// Synchronous JSON
+// KV
+const write = db.sync.kv.set("cache", "k1", enc.encode("v1"));
+const val = db.sync.kv.get("cache", "k1");
+const all = db.sync.kv.scan("cache", { limit: 100 });
+const deleted = db.sync.kv.delete("cache", "k1");
+
+// JSON
 db.sync.json.put("users", "u1", { name: "Rayane" });
 const user = db.sync.json.get("users", "u1");
+const docs = db.sync.json.scan("users");
 
-// Synchronous SQL
+// Atomic batch
+const results = db.sync.batch([
+  { model: "kv_set", namespace: "cache", key: enc.encode("k2"), value: enc.encode("v2") },
+  { model: "json_put", space: "users", id: "u2", value: { name: "Bob" } },
+]);
+
+// SQL
 const rows = db.sync.sql.query("SELECT * FROM lilia_json WHERE space = ?1", ["users"]);
+const { rowsAffected } = db.sync.sql.execute(
+  "UPDATE _lilia_json SET version = version + 1 WHERE space = ?1",
+  ["users"],
+);
+const raw = db.sync.sql.raw("SELECT id FROM lilia_json WHERE space = ?1", ["users"]);
+
+// Tagged template
+const tagged = db.sync.sql<{ id: string }>`
+  SELECT id FROM lilia_json WHERE json_extract(value, '$.role') = ${"admin"}
+`;
 ```
+
+`db.sync` exposes `kv` (`get`, `set`, `delete`, `scan`), `json` (`get`, `put`, `delete`,
+`scan`), `batch`, and `sql` (`query`, `execute`, `raw`, tagged template). It does not
+expose graph, FTS, vector, or watch operations.
 
 ---
 
-### Vector Quantization Helpers (`quantization`)
+## 12. Declarative SQL (`db.sql`)
 
-Built-in utilities for Int8 scalar quantization and 1-bit binary packing:
+SQLite views over multimodel storage. The scalar functions `lilia_decode_kv` and
+`lilia_decode_json` transparently decrypt values when an encryption codec is enabled.
 
-```typescript
-import { quantization } from "@liliadb/node";
+| View | Columns |
+| --- | --- |
+| `lilia_json` | `(space, id, value, version)` — `value` is decoded plaintext JSON |
+| `lilia_kv` | `(namespace, key, value, version, expires_at_ms)` — `value` is decoded bytes |
+| `lilia_graph_nodes` | `(graph, id, kind, metadata)` |
+| `lilia_graph_edges` | `(graph, source, target, kind)` |
 
-const floats = [0.15, -0.42, 0.91, 0.05];
+### Typed Queries (`db.sql.query`)
 
-// Quantize to Int8 (4x RAM reduction)
-const { quantized, scale } = quantization.toInt8(floats);
-
-// Pack to 1-bit binary (32x RAM reduction)
-const bitPacked = quantization.toBit(floats);
-
-// Fast cosine distance
-const dist = quantization.cosineDistance(floats, [0.10, -0.40, 0.90, 0.0]);
-```
-
----
-
-### Declarative SQL Querying (`db.sql`)
-
-LiliaDB exposes structured SQLite views with on-the-fly transparent decryption functions:
-- `lilia_json`: `(space, id, value, version)`
-- `lilia_kv`: `(namespace, key, value, version, expires_at_ms)`
-- `lilia_graph_nodes`: `(graph, id, kind, metadata)`
-- `lilia_graph_edges`: `(graph, source, target, kind)`
-
-#### Typed Queries (`db.sql.query`)
 ```typescript
 interface UserRow {
   id: string;
@@ -339,49 +453,93 @@ interface UserRow {
 }
 
 const users = await db.sql.query<UserRow>(
-  `SELECT id, json_extract(value, '$.name') AS name, json_extract(value, '$.role') AS role
+  `SELECT id,
+          json_extract(value, '$.name') AS name,
+          json_extract(value, '$.role') AS role
    FROM lilia_json
    WHERE space = ?1`,
-  ["users"]
+  ["users"],
 );
 ```
 
-#### Raw Projections (`db.sql.raw`)
+### Tagged Templates
+
+`db.sql` and `db.sync.sql` are callable as tagged template literals. Interpolated values
+are bound as numbered parameters (`?1`, `?2`, ...):
+
 ```typescript
-const { columns, rows } = await db.sql.raw(
-  "SELECT id, json_extract(value, '$.role') AS role FROM lilia_json WHERE space = ?1",
-  ["users"]
-);
+const role = "admin";
+const rows = await db.sql<{ id: string; name: string }>`
+  SELECT id, json_extract(value, '$.name') AS name
+  FROM lilia_json
+  WHERE space = 'users' AND json_extract(value, '$.role') = ${role}
+`;
 ```
 
-#### Executing Mutations (`db.sql.execute`)
+### Raw Projections (`db.sql.raw`)
+
+```typescript
+const raw = await db.sql.raw(
+  "SELECT id, json_extract(value, '$.role') AS role FROM lilia_json WHERE space = ?1",
+  ["users"],
+);
+raw.columns;      // ["id", "role"]
+raw.rows;         // [["ada", "admin"], ...]
+raw.rowsAffected; // 0 for SELECT
+```
+
+### Mutations (`db.sql.execute`)
+
 ```typescript
 const { rowsAffected } = await db.sql.execute(
   "UPDATE _lilia_json SET version = version + 1 WHERE space = ?1",
-  ["users"]
+  ["users"],
 );
 ```
 
+`query`, `raw`, and `execute` accept `(sql, params?, { signal? })`. Mutations are routed
+through the write queue; write to the underlying `_lilia_*` tables (for example
+`_lilia_json`).
+
 ---
 
-### Keyset Streaming & Node.js Streams
+## 13. Streaming & Node.js Streams
 
-Stream unbounded datasets without loading them entirely into memory:
+All streaming APIs use transparent keyset pagination and are memory-bounded.
 
-#### Asynchronous Iteration (`for await`)
+### Async Iteration (`for await`)
+
 ```typescript
-// Stream JSON documents with automatic keyset pagination
+// JSON documents with automatic chunking
 for await (const doc of db.json.scanStream("events", { batchSize: 200, limit: 1000 })) {
   console.log(doc.id, doc.value);
 }
 
-// Stream Key/Value pairs
+// Key/Value pairs
 for await (const entry of db.kv.scanStream("analytics", { batchSize: 500 })) {
   console.log(entry.key, entry.value);
 }
+
+// Filtered JSON queries
+for await (const doc of db.json.findStream("users", { role: "admin" }, { batchSize: 50 })) {
+  console.log(doc.id);
+}
 ```
 
-#### Node.js Standard Streams (`createReadStream`)
+`scanStream` and `stream` are aliases. Options are
+`{ after?, limit?, batchSize?, signal? }`; `batchSize` defaults to `100`. Breaking out of
+the loop stops further fetching.
+
+### Resume from a Cursor (`after`)
+
+```typescript
+for await (const doc of db.json.scanStream("events", { after: "event_0500", batchSize: 100 })) {
+  console.log(doc.id);
+}
+```
+
+### Node.js Streams (`createReadStream`)
+
 ```typescript
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
@@ -389,7 +547,7 @@ import { Transform } from "node:stream";
 const readStream = db.json.createReadStream("records", { batchSize: 100 });
 const toCsv = new Transform({
   objectMode: true,
-  transform(doc, _, callback) {
+  transform(doc, _encoding, callback) {
     callback(null, `${doc.id},${JSON.stringify(doc.value)}\n`);
   },
 });
@@ -397,29 +555,66 @@ const toCsv = new Transform({
 await pipeline(readStream, toCsv, process.stdout);
 ```
 
+### WHATWG Streams (`readableStream`)
+
+```typescript
+const stream = db.json.readableStream("records", { batchSize: 100 });
+for await (const doc of stream) {
+  console.log(doc.id);
+}
+```
+
+Streaming surface summary:
+
+| Namespace | Async iterator | WHATWG stream | Node.js stream |
+| --- | --- | --- | --- |
+| `db.kv` | `scanStream`, `stream` | `readableStream` | `createReadStream` |
+| `db.json` | `scanStream`, `stream` | `readableStream` | `createReadStream` |
+| `db.json` (filtered) | `findStream` | `findReadableStream` | — |
+
 ---
 
-### Real-Time CDC Watch Subscriptions (`db.watch`)
+## 14. Real-Time CDC (`db.watch`)
 
-Subscribe to reactive database mutations with namespace filtering:
+Subscribe to live mutations across KV, JSON, Graph, FTS, and Vector collections.
 
 ```typescript
 const sub = await db.watch("orders", (event) => {
-  console.log(`[CDC] ${event.type}: ${event.id || event.key} (deleted: ${event.deleted})`);
+  console.log(`[CDC] ${event.type}`, event);
 });
 
-// Mutate data -> triggers callback
+// Mutate data -> triggers the callback
 await db.json.put("orders", "ord_100", { total: 49.99 });
 
 // Cleanup
-sub.unsubscribe();
+await sub.unsubscribe();
 ```
+
+- `db.watch(namespace?, callback, options?)` observes everything when no namespace is
+  given.
+- `db.kv.watch(namespace, callback, options?)` and
+  `db.json.watch(space, callback, options?)` are scoped aliases.
+- Pass `{ signal }` to unsubscribe automatically on abort.
+
+Event variants:
+
+| `type` | Fields |
+| --- | --- |
+| `kv_mutated` | `namespace`, `key`, `version?`, `deleted` |
+| `json_mutated` | `space`, `id`, `version?`, `deleted` |
+| `graph_node_mutated` | `graph`, `id`, `deleted` |
+| `graph_edge_mutated` | `graph`, `source`, `target`, `kind`, `deleted` |
+| `fts_mutated` | `collection`, `docId`, `deleted` |
+| `vector_mutated` | `collection`, `id`, `deleted` |
+
+A `WatchSubscription` is a callable unsubscribe function and also provides
+`unsubscribe()`, `Symbol.dispose`, and `Symbol.asyncDispose`.
 
 ---
 
-### Atomic Multi-Model Transactions (`db.batch`)
+## 15. Atomic Multi-Model Transactions (`db.batch`)
 
-Combine operations across KV, JSON, Graph, and FTS into a single atomic ACID commit:
+Combine operations across models into a single ACID commit:
 
 ```typescript
 const results = await db.batch([
@@ -437,26 +632,66 @@ const results = await db.batch([
     value: new TextEncoder().encode(new Date().toISOString()),
   },
   {
-    model: "kv_delete",
-    namespace: "pending_verifications",
-    key: new TextEncoder().encode("ada"),
+    model: "graph_add_edge",
+    graph: "social",
+    source: "ada",
+    target: "grace",
+    kind: "FOLLOWS",
   },
 ]);
+// results[i] corresponds to operations[i]
 ```
 
+Supported models:
+
+| Model | Fields |
+| --- | --- |
+| `kv_set` | `namespace`, `key`, `value`, `ifVersion?`, `expiresAtMs?` |
+| `kv_delete` | `namespace`, `key`, `ifVersion?` |
+| `json_put` | `space`, `id`, `value`, `ifVersion?` |
+| `json_delete` | `space`, `id`, `ifVersion?` |
+| `graph_set_node` | `graph`, `id`, `kind`, `metadata?` |
+| `graph_delete_node` | `graph`, `id` |
+| `graph_add_edge` | `graph`, `source`, `target`, `kind` |
+| `graph_remove_edge` | `graph`, `source`, `target`, `kind` |
+| `fts_index` | `collection`, `docId`, `content` |
+| `fts_delete` | `collection`, `docId` |
+| `vector_set` | `collection`, `id`, `dim`, `elementType?`, `vector` |
+| `vector_delete` | `collection`, `id` |
+
+If any operation fails, the whole batch rolls back and the call rejects.
+
 ---
 
-## 6. Version Precision & OCC
+## 16. Version Precision & OCC
 
-- All versions returned by reads, scans, and mutations are `bigint`.
-- Expected versions in conditional mutations (`ifVersion`) must be `bigint` (where `0n` signifies *key does not exist*).
-- Out-of-bounds versions throw structured `LiliaError` with code `INVALID_INPUT`.
+- Versions returned by reads, scans, and mutations are always `bigint`.
+- `ifVersion` must be a `bigint` in `0..=18446744073709551615`; `0n` means
+  *the entry does not exist*.
+- Out-of-bounds versions throw `LiliaError` with code `INVALID_INPUT`.
+- A stale `ifVersion` fails with a conflict and changes nothing.
 
 ---
 
-## 7. Error Handling
+## 17. Cancellation (`AbortSignal`)
 
-Operations throw typed `LiliaError` instances:
+All asynchronous methods and streams accept `{ signal }`. An already-aborted signal
+rejects immediately; aborting later rejects the pending Promise or ends the iterator.
+
+```typescript
+const controller = new AbortController();
+const pending = db.json.scan("events", { signal: controller.signal });
+controller.abort();
+await pending; // rejects with the signal reason
+```
+
+Signals are also accepted by `Database.open()`, `db.close()`, and `db.watch()`.
+
+---
+
+## 18. Error Handling
+
+Every SDK operation throws a structured `LiliaError` on failure:
 
 ```typescript
 import { LiliaError } from "@liliadb/node";
@@ -464,26 +699,213 @@ import { LiliaError } from "@liliadb/node";
 try {
   await db.json.put("users", "ada", { status: "updated" }, { ifVersion: 99n });
 } catch (error) {
-  if (error instanceof LiliaError) {
-    console.error(`Code: ${error.code}`);         // e.g. "CONFLICT", "CLOSED", "TIMEOUT"
+  if (LiliaError.isLiliaError(error)) {
+    console.error(`Code: ${error.code}`);          // "CONFLICT", "CLOSED", "TIMEOUT", "INVALID_INPUT", ...
     console.error(`Message: ${error.message}`);
-    console.error(`Retryable: ${error.retryable}`); // boolean
+    console.error(`Retryable: ${error.retryable}`); // true for transient failures
     console.error(`RequestId: ${error.requestId}`);
+    console.error(`Details: ${JSON.stringify(error.details)}`);
+    console.error(`Cause: ${error.cause}`);
   }
+}
+```
+
+`LiliaError` extends `Error` with `code`, `retryable`, `details`, `requestId`, and
+`cause`. Use `instanceof LiliaError` or the static `LiliaError.isLiliaError(value)`.
+
+---
+
+## 19. Lifecycle & Graceful Shutdown
+
+```typescript
+await db.close({ timeoutMs: 5_000 });
+
+// SQLite integrity check
+const ok: boolean = await db.integrityCheck();
+
+// Atomic online backup
+await db.backup("./snapshots/app.lilia");
+```
+
+- `close()` drains accepted in-flight operations, then releases locks and workers.
+- `timeoutMs` defaults to `5_000` and must be an integer in `0..=2147483647`.
+- A timeout rejects with `TIMEOUT` (`retryable: true`) without cancelling accepted work.
+- Operations started after `close()` reject with `CLOSED`.
+- `close()` is idempotent and can be awaited again.
+
+### Explicit resource management
+
+```typescript
+await using db = await Database.open({ path: "app.lilia" });
+await db.json.put("users", "ada", { name: "Ada" });
+// db.close() runs automatically when the scope exits
+
+using sub = await db.watch("orders", (event) => console.log(event));
+// sub.unsubscribe() runs automatically when the scope exits
+```
+
+---
+
+## 20. Live Differential Queries (`db.liveQuery`)
+
+Subscribe to SQL query results with granular, row-level diffs powered by the SQLite Session API:
+
+```typescript
+const sub = await db.liveQuery(
+  "SELECT id, json_extract(value, '$.status') AS status FROM lilia_json WHERE space = 'orders'",
+  (diff) => {
+    console.log("Initial load:", diff.isInitial);
+    console.log("Added rows:", diff.added);
+    console.log("Updated rows:", diff.updated);
+    console.log("Removed rows:", diff.removed);
+  }
+);
+
+// Unsubscribe when done
+await sub.unsubscribe();
+```
+
+---
+
+## 21. Materialized Views & IVM (`db.createMaterializedView`)
+
+Incremental View Maintenance computes and maintains aggregates in $O(1)$ time without rescanning full source tables:
+
+```typescript
+// Create an incrementally updated materialized view
+await db.createMaterializedView(
+  "order_stats",
+  "SELECT json_extract(value, '$.status') AS status, COUNT(*) AS total, SUM(json_extract(value, '$.total')) AS revenue FROM lilia_json WHERE space = 'orders' GROUP BY status"
+);
+
+// List views
+const views = await db.listMaterializedViews();
+
+// Query the view directly via SQL
+const stats = await db.sql.query("SELECT * FROM _lilia_ivm_order_stats");
+
+// Drop view
+await db.dropMaterializedView("order_stats");
+```
+
+---
+
+## 22. Time Travel & Undo / Redo (`db.undo`, `db.redo`)
+
+Track transactional change history and revert or replay mutations:
+
+```typescript
+// Undo the last mutation batch
+const undone = await db.undo();
+console.log("Reverted transaction:", undone?.batchId);
+
+// Redo the reverted mutation
+const redone = await db.redo();
+
+// Inspect undo history
+const history = await db.undoHistory();
+for (const entry of history) {
+  console.log(`[${entry.timestampMs}] ${entry.model} op on ${entry.id}`);
 }
 ```
 
 ---
 
-## 8. Graceful Shutdown
+## 23. Conflict-Free Replicated Data Types (CRDTs)
+
+Distributed primitives that merge deterministically across edge nodes:
 
 ```typescript
-// Drain active in-flight queries before releasing file locks and worker threads
-await db.close({ timeoutMs: 5_000 });
+// Distributed PN-Counter
+await db.crdt.pnCounter("counters", "visitors").increment(1n, "node-1");
+await db.crdt.pnCounter("counters", "visitors").decrement(1n, "node-2");
+const total = await db.crdt.pnCounter("counters", "visitors").read();
+
+// Observed-Remove Set (OR-Set)
+await db.crdt.orSet("tags", "doc-1").add("database", "node-1");
+await db.crdt.orSet("tags", "doc-1").remove("draft", "node-2");
+const tags = await db.crdt.orSet("tags", "doc-1").read();
+
+// Last-Write-Wins (LWW) JSON Document
+await db.crdt.doc("profiles", "user-1").setField("email", "ada@example.com", "node-1");
+const profile = await db.crdt.doc("profiles", "user-1").read();
 ```
 
 ---
 
-## 9. License
+## 24. GPS Tracking & Geofencing (`db.geo`)
+
+High-precision spatial boundaries and GPS trajectory analysis:
+
+```typescript
+// Register a circular geofence (lat, lon, radius in meters)
+await db.geo.addFence("warehouse", {
+  kind: "circle",
+  center: [48.8566, 2.3522],
+  radiusMeters: 500,
+});
+
+// Test a point
+const matches = await db.geo.testPoint([48.8570, 2.3530]);
+console.log("Inside fences:", matches);
+
+// Evaluate GPS track breach events
+const track = [
+  { lat: 48.8560, lon: 2.3520, timestampMs: 1700000000000 },
+  { lat: 48.8600, lon: 2.3600, timestampMs: 1700000060000 },
+];
+const breaches = await db.geo.evaluateGpsTrack("device-1", track);
+```
+
+---
+
+## 25. Time-Series Telemetry & Downsampling (`db.ts`)
+
+Telemetry streaming with Gorilla compression and aggregation:
+
+```typescript
+// Append points to a time-series
+await db.ts.append("sensors", [
+  { timestampMs: Date.now(), value: 24.5 },
+  { timestampMs: Date.now() + 1000, value: 24.8 },
+]);
+
+// Query range with Gorilla decompression
+const points = await db.ts.queryRange("sensors", {
+  fromMs: Date.now() - 3600_000,
+  toMs: Date.now(),
+});
+
+// Downsample into 5-minute buckets
+const rollups = await db.ts.downsample("sensors", {
+  windowMs: 300_000,
+  aggregation: "avg",
+});
+```
+
+---
+
+## 26. Type Guards & Public Types
+
+```typescript
+import { isKvEntry, isJsonEntry, LiliaError } from "@liliadb/node";
+
+if (isKvEntry(value)) console.log(value.version);
+if (isJsonEntry(value)) console.log(value.id);
+if (LiliaError.isLiliaError(error)) console.log(error.code);
+```
+
+Exported types include: `OpenOptions`, `DatabaseMode`, `Durability`, `KvEntry`,
+`JsonEntry`, `JsonIndexInfo`, `CreateIndexOptions`, `JsonGetOptions`, `JsonPutOptions`,
+`JsonDeleteOptions`, `JsonScanOptions`, `JsonFindOptions`, `KvGetOptions`,
+`KvSetOptions`, `KvDeleteOptions`, `KvScanOptions`, `ScanStreamOptions`, `WatchOptions`,
+`WatchSubscription`, `CloseOptions`, `GraphDirection`, `FtsHit`, `VectorElementType`,
+`VectorMetric`, `VectorHit`, `HybridHit`, `BatchOperation`, `DatabaseEvent`,
+`MutationResult`, `SqlQueryResult`, `SqlQueryOptions`, `SqlFunction`,
+`SyncSqlFunction`, `LiliaErrorShape`, and the `quantization` helper object.
+
+---
+
+## 27. License
 
 Apache-2.0

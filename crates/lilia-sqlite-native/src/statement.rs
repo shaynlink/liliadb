@@ -9,6 +9,33 @@ use lilia_core::{ErrorCode, LiliaError, Result};
 
 use crate::ffi;
 
+/// Per-statement counters reported by `sqlite3_stmt_status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StmtStatus {
+    /// Rows stepped over by forward full-table-scan loops (a scan that no index served).
+    FullscanStep,
+    /// Number of sort operations performed.
+    Sort,
+    /// Rows inserted into transient automatic indexes.
+    AutoIndex,
+    /// Virtual machine operations executed.
+    VmStep,
+    /// Number of times the statement has run.
+    Run,
+}
+
+impl StmtStatus {
+    fn code(self) -> c_int {
+        match self {
+            Self::FullscanStep => ffi::SQLITE_STMTSTATUS_FULLSCAN_STEP,
+            Self::Sort => ffi::SQLITE_STMTSTATUS_SORT,
+            Self::AutoIndex => ffi::SQLITE_STMTSTATUS_AUTOINDEX,
+            Self::VmStep => ffi::SQLITE_STMTSTATUS_VM_STEP,
+            Self::Run => ffi::SQLITE_STMTSTATUS_RUN,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct NativeStatement {
     raw: *mut ffi::sqlite3_stmt,
@@ -62,6 +89,30 @@ impl NativeStatement {
             Err(LiliaError::new(
                 ErrorCode::Storage,
                 format!("failed to bind text static col={col}: rc={rc}"),
+                false,
+            ))
+        }
+    }
+
+    /// Bind a UTF-8 text parameter using `SQLITE_TRANSIENT` (copies into SQLite).
+    #[inline]
+    pub fn bind_text_transient(&mut self, col: i32, val: &str) -> Result<()> {
+        let rc = unsafe {
+            ffi::sqlite3_bind_text64(
+                self.raw,
+                col as c_int,
+                val.as_ptr().cast::<c_char>(),
+                val.len() as u64,
+                ffi::sqlite_transient(),
+                ffi::SQLITE_UTF8,
+            )
+        };
+        if rc == ffi::SQLITE_OK {
+            Ok(())
+        } else {
+            Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("failed to bind text transient col={col}: rc={rc}"),
                 false,
             ))
         }
@@ -291,19 +342,27 @@ impl NativeStatement {
     /// Step the statement. Returns `Ok(true)` for SQLITE_ROW, `Ok(false)` for SQLITE_DONE.
     #[inline]
     pub fn step(&mut self) -> Result<bool> {
-        let rc = unsafe { ffi::sqlite3_step(self.raw) };
-        match rc {
-            ffi::SQLITE_ROW => Ok(true),
-            ffi::SQLITE_DONE => Ok(false),
-            _ => {
-                let db = unsafe { ffi::sqlite3_db_handle(self.raw) };
-                let msg = if db.is_null() {
-                    format!("sqlite step failed with rc={rc}")
-                } else {
-                    let err = unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(db)).to_string_lossy() };
-                    format!("sqlite step failed: {err} (rc={rc})")
-                };
-                Err(ffi::sqlite_code_to_lilia(rc, msg))
+        loop {
+            let rc = unsafe { ffi::sqlite3_step(self.raw) };
+            match rc {
+                ffi::SQLITE_ROW => return Ok(true),
+                ffi::SQLITE_DONE => return Ok(false),
+                _ => {
+                    let db = unsafe { ffi::sqlite3_db_handle(self.raw) };
+                    if crate::connection::is_shared_cache_locked(db, rc) {
+                        unsafe { ffi::sqlite3_reset(self.raw) };
+                        crate::connection::wait_for_unlock_notify(db)?;
+                        continue;
+                    }
+                    let msg = if db.is_null() {
+                        format!("sqlite step failed with rc={rc}")
+                    } else {
+                        let err =
+                            unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(db)).to_string_lossy() };
+                        format!("sqlite step failed: {err} (rc={rc})")
+                    };
+                    return Err(ffi::sqlite_code_to_lilia(rc, msg));
+                }
             }
         }
     }
@@ -377,6 +436,14 @@ impl NativeStatement {
     pub fn readonly(&self) -> bool {
         let r = unsafe { ffi::sqlite3_stmt_readonly(self.raw) };
         r != 0
+    }
+
+    /// Reads a statement counter, optionally resetting it to zero afterwards.
+    #[inline]
+    pub fn status(&self, counter: StmtStatus, reset: bool) -> u64 {
+        let value =
+            unsafe { ffi::sqlite3_stmt_status(self.raw, counter.code(), c_int::from(reset)) };
+        u64::try_from(value).unwrap_or(0)
     }
 }
 

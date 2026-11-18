@@ -15,7 +15,7 @@ use lilia_core::{
 use lilia_sqlite_native::NativeConnection;
 
 use crate::cache::CacheManager;
-use crate::json::decode_json_value;
+use crate::json::{decode_json_value, decode_stored_doc};
 use crate::storage::{now_ms, parse_version};
 
 /// Options configuring the Markov predictive cache and prefetching engine.
@@ -324,19 +324,16 @@ fn prefetch_single_target(
             if cache.get_json(space, id).is_some() {
                 return Ok(());
             }
-            let mut stmt = conn.prepare("SELECT value, version FROM _lilia_json WHERE space = ?1 AND id = ?2;")?;
+            let mut stmt = conn.prepare("SELECT value, format, dict_id, version FROM _lilia_json WHERE space = ?1 AND id = ?2;")?;
             stmt.bind_text_static(1, space)?;
             stmt.bind_text_static(2, id)?;
             if stmt.step()? {
-                let raw_encoded = stmt.column_text(0);
-                let version = parse_version(stmt.column_int64(1))?;
-                let value = decode_json_value(raw_encoded, codec)?;
-                let entry = Arc::new(JsonEntry {
-                    space: space.clone(),
-                    id: id.clone(),
-                    value,
-                    version,
-                });
+                let format = stmt.column_int64(1);
+                let dict_id = stmt.column_int64(2);
+                let version = parse_version(stmt.column_int64(3))?;
+                let dict_reg = lilia_core::DictionaryRegistry::default();
+                let doc = decode_stored_doc(&stmt, 0, format, dict_id, space, codec, &dict_reg, None)?;
+                let entry = Arc::new(JsonEntry::new(space.clone(), id.clone(), doc, version));
                 cache.put_json(space, id, entry);
             }
         }

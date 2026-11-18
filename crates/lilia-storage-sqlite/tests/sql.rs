@@ -201,7 +201,7 @@ fn test_sql_mutations_and_rows_affected() {
 
     // Read back via json_get
     let doc = db.json_get("tasks", "task_1").unwrap().expect("must exist");
-    assert_eq!(doc.value["title"], "Buy milk");
+    assert_eq!(doc.value()["title"], "Buy milk");
 
     // Update via SQL
     let update_res = db
@@ -213,7 +213,7 @@ fn test_sql_mutations_and_rows_affected() {
     assert_eq!(update_res.rows_affected, 1);
 
     let doc_updated = db.json_get("tasks", "task_1").unwrap().unwrap();
-    assert_eq!(doc_updated.value["title"], "Buy coffee");
+    assert_eq!(doc_updated.value()["title"], "Buy coffee");
     assert_eq!(doc_updated.version, 2);
 
     // Delete via SQL

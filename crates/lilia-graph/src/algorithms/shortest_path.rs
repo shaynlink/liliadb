@@ -29,6 +29,7 @@ impl PartialOrd for MinHeapItem {
     }
 }
 
+#[must_use]
 pub fn dijkstra(
     view: &GraphView,
     start: &str,
@@ -111,6 +112,7 @@ pub fn dijkstra(
     }
 }
 
+#[must_use]
 pub fn all_shortest_paths(
     view: &GraphView,
     start: &str,

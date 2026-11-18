@@ -7,11 +7,23 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = []
+default = ["simd", "jit"]
+simd = ["dep:simd-json"]
+jit = [
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-jit",
+    "dep:cranelift-module",
+    "dep:cranelift-native",
+]
 
 [dependencies]
 aes-gcm.workspace = true
+aes-siv.workspace = true
+base64.workspace = true
+blake3.workspace = true
 h3o.workspace = true
+hex.workspace = true
 miniz_oxide.workspace = true
 pbkdf2.workspace = true
 rand.workspace = true
@@ -19,8 +31,18 @@ serde.workspace = true
 serde_bytes.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+simd-json = { workspace = true, optional = true }
 thiserror.workspace = true
 uuid.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cranelift-codegen = { workspace = true, optional = true }
+cranelift-frontend = { workspace = true, optional = true }
+cranelift-jit = { workspace = true, optional = true }
+cranelift-module = { workspace = true, optional = true }
+cranelift-native = { workspace = true, optional = true }
+parking_lot = { workspace = true }
+zstd.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
@@ -28,6 +50,8 @@ windows-sys.workspace = true
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom_v2 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_v4 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+ruzstd.workspace = true
 uuid = { workspace = true, features = ["js"] }
 
 [lints]

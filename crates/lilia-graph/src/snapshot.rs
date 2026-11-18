@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use lilia_core::{Direction, Result};
+use lilia_core::{Direction, ErrorCode, LiliaError, Result};
 
 use crate::GraphStore;
 
@@ -50,7 +50,13 @@ impl GraphView {
                 node_names.push(edge.target.clone());
             }
             if !kind_indices.contains_key(&edge.kind) {
-                let kid = kinds.len() as u16;
+                let kid = u16::try_from(kinds.len()).map_err(|_| {
+                    LiliaError::new(
+                        ErrorCode::InvalidInput,
+                        "a graph view supports at most 65536 edge kinds",
+                        false,
+                    )
+                })?;
                 kind_indices.insert(edge.kind.clone(), kid);
                 kinds.push(edge.kind.clone());
             }

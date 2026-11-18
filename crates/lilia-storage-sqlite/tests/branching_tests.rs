@@ -71,7 +71,7 @@ fn test_user_scenario_promo_noel() {
     // For keyboard: price=80, cost=60 -> margin=20
     // Expected sum(margin) = 100 + 20 + 20 = 140
     let laptop_sim = simulation.json().get("products", "laptop").unwrap().unwrap();
-    assert_eq!(laptop_sim.value["price"], 800.0);
+    assert_eq!(laptop_sim.value()["price"], 800.0);
 
     // Update margin in the simulation
     simulation
@@ -107,7 +107,7 @@ fn test_user_scenario_promo_noel() {
 
     // MAIN IS UNTOUCHED
     let main_laptop = db.json().get("products", "laptop").unwrap().unwrap();
-    assert_eq!(main_laptop.value["price"], 1000.0);
+    assert_eq!(main_laptop.value()["price"], 1000.0);
     assert_eq!(
         db.sql()
             .query("SELECT sum(margin) FROM products")
@@ -124,7 +124,7 @@ fn test_user_scenario_promo_noel() {
 
     // Main now reflects the simulation state!
     let merged_laptop = db.json().get("products", "laptop").unwrap().unwrap();
-    assert_eq!(merged_laptop.value["price"], 800.0);
+    assert_eq!(merged_laptop.value()["price"], 800.0);
     assert_eq!(
         db.sql()
             .query("SELECT sum(margin) FROM products")
@@ -221,8 +221,8 @@ fn test_ai_agent_dreaming_multi_branch_simulation() {
     // Evaluate each scenario: calculate simulated portfolio return
     let mut scores = Vec::new();
     for (name, branch, shock) in &branches {
-        let p_alpha = branch.json().get("market", "asset_alpha").unwrap().unwrap().value["price"].as_f64().unwrap();
-        let p_beta = branch.json().get("market", "asset_beta").unwrap().unwrap().value["price"].as_f64().unwrap();
+        let p_alpha = branch.json().get("market", "asset_alpha").unwrap().unwrap().value()["price"].as_f64().unwrap();
+        let p_beta = branch.json().get("market", "asset_beta").unwrap().unwrap().value()["price"].as_f64().unwrap();
 
         // Utility score = expected return / risk
         let portfolio_value = p_alpha * 10.0 + p_beta * 5.0;
@@ -250,7 +250,7 @@ fn test_ai_agent_dreaming_multi_branch_simulation() {
     db.merge_branch(win, MergeStrategy::FastForward).unwrap();
 
     // Main database now reflects the winning scenario!
-    let alpha_final = db.json().get("market", "asset_alpha").unwrap().unwrap().value["price"].as_f64().unwrap();
+    let alpha_final = db.json().get("market", "asset_alpha").unwrap().unwrap().value()["price"].as_f64().unwrap();
     assert!((alpha_final - (100.0 * best_shock)).abs() < 1e-4);
 }
 
@@ -287,7 +287,7 @@ fn test_merge_strategy_fast_forward_conflict_detection() {
 
     // Main timeout is still 45
     assert_eq!(
-        db.json().get("config", "timeout").unwrap().unwrap().value["seconds"],
+        db.json().get("config", "timeout").unwrap().unwrap().value()["seconds"],
         45
     );
 }
@@ -322,7 +322,7 @@ fn test_merge_strategy_replace_overwrites_conflict() {
     assert!(res.is_ok());
 
     assert_eq!(
-        db.json().get("users", "u1").unwrap().unwrap().value["status"],
+        db.json().get("users", "u1").unwrap().unwrap().value()["status"],
         "active"
     );
 }

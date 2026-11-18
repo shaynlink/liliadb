@@ -628,7 +628,7 @@ mod tests {
             version: "1.0.0".into(),
             abi_major: ABI_MAJOR,
             abi_minor: ABI_MINOR,
-            engine_requirement: ">=0.1.0-alpha.1,<0.2.0".into(),
+            engine_requirement: ">=0.1.0-alpha.1,<0.3.0".into(),
             target: host_target().into(),
             library: "plugin.so".into(),
             library_sha256: "0".repeat(64),

@@ -324,23 +324,26 @@ mod tests {
         assert_eq!(kv_entry.value, b"top_secret_aes_payload");
 
         let json_entry = db.json_get("identities", "user42").unwrap().unwrap();
-        assert_eq!(json_entry.value["role"], "admin");
-        assert_eq!(json_entry.value["token"], "xyz");
+        assert_eq!(json_entry.value()["role"], "admin");
+        assert_eq!(json_entry.value()["token"], "xyz");
 
         drop(db);
 
-        // Verify SQLite raw database without codec contains encrypted bytes and envelopes
-        let raw_db = Database::open(DatabaseOptions::durable(&db_path)).unwrap();
-        let raw_kv = raw_db.kv_get("vault", b"secret_key").unwrap().unwrap();
-        assert_ne!(raw_kv.value, b"top_secret_aes_payload");
-
-        let raw_json_res = raw_db
-            .sql_query(
-                "SELECT value FROM _lilia_json WHERE space = 'identities' AND id = 'user42'",
-                &[],
-            )
+        // Verify SQLite raw database contains encrypted bytes and envelopes
+        let raw_conn = lilia_sqlite_native::NativeConnection::open_file(&db_path).unwrap();
+        let mut stmt = raw_conn
+            .prepare("SELECT value FROM _lilia_kv WHERE namespace = 'vault' AND key = ?1")
             .unwrap();
-        let raw_json = raw_json_res.rows[0][0].as_str().unwrap();
+        stmt.bind_blob_static(1, b"secret_key").unwrap();
+        assert!(stmt.step().unwrap());
+        let raw_kv = stmt.column_blob(0).to_vec();
+        assert_ne!(raw_kv, b"top_secret_aes_payload");
+
+        let mut stmt = raw_conn
+            .prepare("SELECT value FROM _lilia_json WHERE space = 'identities' AND id = 'user42'")
+            .unwrap();
+        assert!(stmt.step().unwrap());
+        let raw_json = stmt.column_text(0).to_string();
         assert!(!raw_json.contains("top_secret_aes_payload"));
         assert!(!raw_json.contains("admin"));
         assert!(raw_json.contains("$codec"));

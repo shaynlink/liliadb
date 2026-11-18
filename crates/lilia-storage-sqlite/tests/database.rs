@@ -140,7 +140,7 @@ fn online_backup_contains_confirmed_commits() {
             .json_get("people", "ada")
             .expect("read backup")
             .expect("backed up record")
-            .value,
+            .value(),
         json!({"name":"Ada"})
     );
     assert!(backup.integrity_check().expect("backup integrity"));

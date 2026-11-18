@@ -1,12 +1,17 @@
+pub mod dict;
+
 use crate::{ErrorCode, LiliaError, Result};
 
-/// Compress arbitrary bytes using Deflate (miniz_oxide level 6).
+/// Compress arbitrary bytes using Deflate (`miniz_oxide` level 6).
 #[must_use]
 pub fn compress_bytes(input: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(input, 6)
 }
 
 /// Decompress Deflate-compressed bytes.
+///
+/// # Errors
+/// `Corrupt` when `compressed` is not a valid Deflate stream.
 pub fn decompress_bytes(compressed: &[u8]) -> Result<Vec<u8>> {
     miniz_oxide::inflate::decompress_to_vec(compressed).map_err(|error| {
         LiliaError::new(
@@ -26,7 +31,7 @@ mod tests {
         let original =
             b"The quick brown fox jumps over the lazy dog. Repetition repetition repetition!";
         let compressed = compress_bytes(original);
-        assert!(!compressed.is_empty());
+        assert_ne!(compressed, b"");
         let decompressed = decompress_bytes(&compressed).expect("decompression succeeds");
         assert_eq!(decompressed, original);
     }

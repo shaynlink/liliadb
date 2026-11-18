@@ -102,7 +102,7 @@ fn test_markov_learning_and_prefetch_hit() {
     // 5. Subsequent reads: should hit L1 Cache immediately (0.00 ms)!
     let msg1 = db.json_get("messages", "msg_1").expect("get msg1");
     assert!(msg1.is_some());
-    assert_eq!(msg1.unwrap().value["text"], "Message #1");
+    assert_eq!(msg1.unwrap().value()["text"], "Message #1");
 
     let stats_after = db.cache_stats();
     // Verify that at least one predicted document was a cache hit
@@ -125,7 +125,7 @@ fn test_cache_invalidation_consistency() {
 
     // First read -> populates cache
     let t1 = db.json_get("tasks", "task_1").unwrap().unwrap();
-    assert_eq!(t1.value["status"], "todo");
+    assert_eq!(t1.value()["status"], "todo");
 
     // Update doc via batch
     db.batch(&[BatchOperation::JsonPut {
@@ -138,7 +138,7 @@ fn test_cache_invalidation_consistency() {
 
     // Second read -> MUST return updated value "done", never stale "todo"
     let t2 = db.json_get("tasks", "task_1").unwrap().unwrap();
-    assert_eq!(t2.value["status"], "done");
+    assert_eq!(t2.value()["status"], "done");
 
     // Delete doc
     db.batch(&[BatchOperation::JsonDelete {
@@ -225,7 +225,7 @@ fn test_markov_model_sqlite_persistence() {
 
         let hit_b = db.json_get("docs", "B").unwrap();
         assert!(hit_b.is_some());
-        assert_eq!(hit_b.unwrap().value["name"], "B");
+        assert_eq!(hit_b.unwrap().value()["name"], "B");
     }
 }
 

@@ -70,6 +70,26 @@ pub struct WasmFtsHit {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmFtsSuggestion {
+    pub term: String,
+    pub distance: u8,
+    pub doc_count: u32,
+    pub exact_prefix: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmFtsFuzzyHit {
+    pub collection: String,
+    pub doc_id: String,
+    pub snippet: String,
+    pub rank: f64,
+    pub edit_distance: u8,
+    pub matched_terms: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmVectorHit {
     pub collection: String,
     pub id: String,
@@ -268,6 +288,25 @@ impl WasmDatabase {
     }
 
     #[wasm_bindgen]
+    pub fn json_extract(
+        &self,
+        space: String,
+        id: String,
+        path: String,
+    ) -> Result<Option<String>, JsValue> {
+        let val = self
+            .inner
+            .json_extract(&space, &id, &path)
+            .map_err(to_js_err)?;
+        match val {
+            Some(v) => serde_json::to_string(&v)
+                .map(Some)
+                .map_err(|err| JsValue::from_str(&err.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    #[wasm_bindgen]
     pub fn json_scan(
         &self,
         space: String,
@@ -287,9 +326,11 @@ impl WasmDatabase {
         space: String,
         name: String,
         path: String,
+        filter: Option<String>,
     ) -> Result<(), JsValue> {
+        let options = lilia_core::IndexOptions { filter };
         self.inner
-            .create_json_index(&space, &name, &path)
+            .create_json_index_with_options(&space, &name, &path, options)
             .map_err(to_js_err)
     }
 
@@ -407,6 +448,66 @@ impl WasmDatabase {
                 doc_id: h.doc_id,
                 snippet: h.snippet,
                 rank: h.rank,
+            })
+            .collect();
+        serde_wasm_bindgen::to_value(&wasm_hits).map_err(to_js_err)
+    }
+
+    #[wasm_bindgen]
+    pub fn fts_suggest(
+        &self,
+        collection: String,
+        prefix: String,
+        max_distance: Option<u8>,
+        limit: Option<u32>,
+    ) -> Result<JsValue, JsValue> {
+        let items = self
+            .inner
+            .fts_suggest(
+                &collection,
+                &prefix,
+                max_distance.unwrap_or(1),
+                limit.unwrap_or(10),
+            )
+            .map_err(to_js_err)?;
+        let wasm_items: Vec<WasmFtsSuggestion> = items
+            .into_iter()
+            .map(|s| WasmFtsSuggestion {
+                term: s.term,
+                distance: s.distance,
+                doc_count: s.doc_count,
+                exact_prefix: s.exact_prefix,
+            })
+            .collect();
+        serde_wasm_bindgen::to_value(&wasm_items).map_err(to_js_err)
+    }
+
+    #[wasm_bindgen]
+    pub fn fts_fuzzy_search(
+        &self,
+        collection: String,
+        query: String,
+        max_distance: Option<u8>,
+        limit: Option<u32>,
+    ) -> Result<JsValue, JsValue> {
+        let hits = self
+            .inner
+            .fts_fuzzy_search(
+                &collection,
+                &query,
+                max_distance.unwrap_or(1),
+                limit.unwrap_or(10),
+            )
+            .map_err(to_js_err)?;
+        let wasm_hits: Vec<WasmFtsFuzzyHit> = hits
+            .into_iter()
+            .map(|h| WasmFtsFuzzyHit {
+                collection: h.collection,
+                doc_id: h.doc_id,
+                snippet: h.snippet,
+                rank: h.rank,
+                edit_distance: h.edit_distance,
+                matched_terms: h.matched_terms,
             })
             .collect();
         serde_wasm_bindgen::to_value(&wasm_hits).map_err(to_js_err)

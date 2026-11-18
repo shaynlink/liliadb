@@ -29,7 +29,10 @@ fn seed(path: &Path) {
         !path.exists(),
         "fixture must never overwrite an existing database"
     );
-    let database = Database::open(DatabaseOptions::durable(path)).unwrap();
+    // The versions below are forced with raw SQL, which a ledger would rightly report as
+    // tampering. Seeding without one leaves no history: the first open records the forced state
+    // as its genesis commit.
+    let database = Database::open(DatabaseOptions::durable(path).with_ledger(false)).unwrap();
     for id in ["high", "edge"] {
         database.batch(&put(id, None)).unwrap();
     }

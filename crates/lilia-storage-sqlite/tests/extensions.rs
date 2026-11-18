@@ -2,6 +2,11 @@ use lilia_core::{BatchOperation, DatabaseEvent, Direction};
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
+/// Little-endian bytes of an `f32` vector, as stored by `vector_set`.
+fn to_bytes(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
 #[test]
 fn test_secondary_indexing_and_prefix_scan() {
     let dir = tempfile::tempdir().unwrap();
@@ -356,14 +361,6 @@ fn test_vector_lifecycle_and_similarity_search() {
         0.0,
     ];
 
-    fn to_bytes(v: &[f32]) -> Vec<u8> {
-        let mut b = Vec::with_capacity(v.len() * 4);
-        for f in v {
-            b.extend_from_slice(&f.to_le_bytes());
-        }
-        b
-    }
-
     db.vector_set(
         "docs",
         "doc1",
@@ -414,8 +411,8 @@ fn test_vector_lifecycle_and_similarity_search() {
     // Test Int8 Quantized search
     let (q1, _) = lilia_core::quantization::quantize_f32_to_i8(&v1);
     let (q2, _) = lilia_core::quantization::quantize_f32_to_i8(&v2);
-    let q1_bytes: Vec<u8> = q1.iter().map(|&x| x as u8).collect();
-    let q2_bytes: Vec<u8> = q2.iter().map(|&x| x as u8).collect();
+    let q1_bytes: Vec<u8> = q1.iter().map(|&x| x.cast_unsigned()).collect();
+    let q2_bytes: Vec<u8> = q2.iter().map(|&x| x.cast_unsigned()).collect();
 
     db.vector_set(
         "int8_docs",
@@ -477,14 +474,6 @@ fn test_rrf_hybrid_search() {
     )
     .unwrap();
 
-    fn to_bytes(v: &[f32]) -> Vec<u8> {
-        let mut b = Vec::with_capacity(v.len() * 4);
-        for f in v {
-            b.extend_from_slice(&f.to_le_bytes());
-        }
-        b
-    }
-
     // Index embeddings
     let v_rust_db: Vec<f32> = vec![0.9, 0.1, 0.0];
     let v_go: Vec<f32> = vec![0.0, 0.9, 0.1];
@@ -543,20 +532,13 @@ fn test_rrf_hybrid_search() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn test_hybrid_json_index_and_graph_vector() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(DatabaseOptions::durable(
         dir.path().join("hybrid_filtering.lilia"),
     ))
     .unwrap();
-
-    fn to_bytes(v: &[f32]) -> Vec<u8> {
-        let mut b = Vec::with_capacity(v.len() * 4);
-        for f in v {
-            b.extend_from_slice(&f.to_le_bytes());
-        }
-        b
-    }
 
     // 1. Setup JSON index
     db.create_json_index("products", "by_category", "$.category")
@@ -715,14 +697,6 @@ fn test_sql_vector_functions_and_view() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(DatabaseOptions::durable(dir.path().join("sql_vec.lilia"))).unwrap();
 
-    fn to_bytes(v: &[f32]) -> Vec<u8> {
-        let mut b = Vec::with_capacity(v.len() * 4);
-        for f in v {
-            b.extend_from_slice(&f.to_le_bytes());
-        }
-        b
-    }
-
     db.vector_set(
         "items",
         "i1",
@@ -766,14 +740,6 @@ fn test_sql_vector_functions_and_view() {
 fn test_hnsw_lifecycle_persistence_and_search() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("hnsw_test.lilia");
-
-    fn to_bytes(v: &[f32]) -> Vec<u8> {
-        let mut b = Vec::with_capacity(v.len() * 4);
-        for f in v {
-            b.extend_from_slice(&f.to_le_bytes());
-        }
-        b
-    }
 
     {
         let db = Database::open(DatabaseOptions::durable(&db_path)).unwrap();
@@ -889,14 +855,6 @@ fn test_hnsw_two_stage_sq8_quantization_reranking() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(DatabaseOptions::durable(dir.path().join("sq8_hnsw.lilia"))).unwrap();
 
-    fn to_bytes(v: &[f32]) -> Vec<u8> {
-        let mut b = Vec::with_capacity(v.len() * 4);
-        for f in v {
-            b.extend_from_slice(&f.to_le_bytes());
-        }
-        b
-    }
-
     // Configure collection with SQ8 Int8 quantization
     let config = lilia_core::HnswConfig {
         m: 16,
@@ -962,20 +920,13 @@ fn test_hnsw_two_stage_sq8_quantization_reranking() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
 fn test_hnsw_pre_filtered_search_and_hybrid_rrf() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(DatabaseOptions::durable(
         dir.path().join("prefiltered_hybrid.lilia"),
     ))
     .unwrap();
-
-    fn to_bytes(v: &[f32]) -> Vec<u8> {
-        let mut b = Vec::with_capacity(v.len() * 4);
-        for f in v {
-            b.extend_from_slice(&f.to_le_bytes());
-        }
-        b
-    }
 
     // 1. Create HNSW index
     let config = lilia_core::HnswConfig {

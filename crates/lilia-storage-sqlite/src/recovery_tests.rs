@@ -69,7 +69,18 @@ fn crash_writer_child() {
             .iter()
             .chain(mutations("partial", 99).iter())
         {
-            apply(&mut transaction, operation, &lilia_core::IdentityCodec).unwrap();
+            apply(
+                &mut transaction,
+                operation,
+                &lilia_core::IdentityCodec,
+                &lilia_core::DictionaryRegistry::new(),
+                &crate::engine::JsonOptions::default(),
+                database.hlc().as_ref(),
+                database.cas(),
+                None,
+                None,
+            )
+            .unwrap();
         }
         // Force dirty transaction pages into WAL without committing them.
         transaction.cache_flush().unwrap();
@@ -129,7 +140,7 @@ fn killed_writer_recovers_confirmed_multimodel_commits() {
             assert_eq!(kv.value, vec![id; 4096]);
             assert_eq!(kv.version, 1);
             let json = database.json_get("recovery", &key).unwrap().unwrap();
-            assert_eq!(json.value, serde_json::json!({ "value": id }));
+            assert_eq!(json.value(), serde_json::json!({ "value": id }));
             assert_eq!(json.version, 1);
             let node = database.graph_get_node("recovery", &key).unwrap().unwrap();
             assert_eq!(node.kind, "entity");
@@ -161,7 +172,7 @@ fn killed_writer_recovers_confirmed_multimodel_commits() {
 fn page_quota_failure_rolls_back_batch_and_releases_writer() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db.lilia");
-    let database = Database::open(DatabaseOptions::durable(&path)).unwrap();
+    let database = Database::open(DatabaseOptions::durable(&path).with_cas_enabled(false)).unwrap();
     database.batch(&mutations("confirmed", 1)).unwrap();
     {
         let writer = database.lock_writer().unwrap();
@@ -193,7 +204,7 @@ fn page_quota_failure_rolls_back_batch_and_releases_writer() {
             .json_get("recovery", "confirmed")
             .unwrap()
             .unwrap()
-            .value,
+            .value(),
         serde_json::json!({"value": 1})
     );
     assert_eq!(

@@ -110,6 +110,10 @@ fn diff_recursive(source: &Value, target: &Value, path: &str, ops: &mut Vec<Valu
 }
 
 /// Apply an RFC 6902 JSON Patch to a document.
+///
+/// # Errors
+/// `InvalidInput` when `patch` is not an array of valid operations, or when an operation
+/// targets a missing path or fails its `test`.
 pub fn apply(mut doc: Value, patch: &Value) -> Result<Value> {
     let Value::Array(operations) = patch else {
         return Err(LiliaError::new(
@@ -451,7 +455,7 @@ mod tests {
         let patch = diff(&v1, &v2);
         assert!(patch.is_array());
         let operations = patch.as_array().unwrap();
-        assert!(!operations.is_empty());
+        assert_ne!(*operations, Vec::<Value>::new());
 
         let reconstructed = apply(v1.clone(), &patch).unwrap();
         assert_eq!(reconstructed, v2);

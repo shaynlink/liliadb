@@ -54,7 +54,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Put document users/ada");
 
     let doc = db.json_get("users", "ada")?.expect("document should exist");
-    println!("  Get document users/ada (v{}): {}", doc.version, doc.value);
+    println!(
+        "  Get document users/ada (v{}): {}",
+        doc.version,
+        doc.value()
+    );
 
     // 3. Multi-Model Atomic Transaction (KV + JSON in 1 commit)
     println!("\n[4] Multi-Model Atomic Transaction:");

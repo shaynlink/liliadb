@@ -1,11 +1,15 @@
 #![allow(clippy::missing_errors_doc)]
 
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use lilia_sqlite_native::StmtSlot;
 
-use crate::storage::{normalize_limit, validate_name};
+use crate::storage::{normalize_limit, now_ms, validate_name};
 use crate::Database;
-use lilia_core::{Direction, ErrorCode, GraphEdge, GraphNode, LiliaError, Result};
+use lilia_core::{
+    BatchOperation, CollectionKind, Direction, ErrorCode, GraphEdge, GraphNode, LiliaError, Result,
+    StorageTier,
+};
 
 impl Database {
     pub fn graph_set_node(
@@ -29,28 +33,38 @@ impl Database {
     ) -> Result<()> {
         validate_name("graph", graph)?;
         validate_name("id", id)?;
-        let meta_str = serde_json::to_string(metadata)
-            .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
-        let mut writer = self.lock_writer()?;
-        let stmt = writer.slot(StmtSlot::GraphNodeSet)?;
-        stmt.reset()?;
-        stmt.bind_text_static(1, graph)?;
-        stmt.bind_text_static(2, id)?;
-        stmt.bind_text_static(3, kind)?;
-        stmt.bind_text_static(4, &meta_str)?;
-        if let Some(space) = doc_space {
-            stmt.bind_text_static(5, space)?;
-        } else {
-            stmt.bind_null(5)?;
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                self.mem_engine.graph_set_node(GraphNode {
+                    graph: graph.to_owned(),
+                    id: id.to_owned(),
+                    kind: kind.to_owned(),
+                    metadata: metadata.clone(),
+                    doc_space: doc_space.map(ToOwned::to_owned),
+                    doc_id: doc_id.map(ToOwned::to_owned),
+                })?;
+                return Ok(());
+            }
+            StorageTier::Buffered => {
+                return self.ring_core.push_op(BatchOperation::GraphSetNode {
+                    graph: graph.to_owned(),
+                    id: id.to_owned(),
+                    kind: kind.to_owned(),
+                    metadata: metadata.clone(),
+                    doc_space: doc_space.map(ToOwned::to_owned),
+                    doc_id: doc_id.map(ToOwned::to_owned),
+                });
+            }
+            StorageTier::Disk => {}
         }
-        if let Some(did) = doc_id {
-            stmt.bind_text_static(6, did)?;
-        } else {
-            stmt.bind_null(6)?;
-        }
-        stmt.step()?;
-        stmt.reset()?;
-        self.cache.invalidate_graph_node(graph, id);
+        self.batch(&[BatchOperation::GraphSetNode {
+            graph: graph.to_owned(),
+            id: id.to_owned(),
+            kind: kind.to_owned(),
+            metadata: metadata.clone(),
+            doc_space: doc_space.map(ToOwned::to_owned),
+            doc_id: doc_id.map(ToOwned::to_owned),
+        }])?;
         Ok(())
     }
 
@@ -66,6 +80,19 @@ impl Database {
             return Ok(Some((*cached).clone()));
         }
 
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                return Ok(self
+                    .mem_engine
+                    .graph_nodes
+                    .get(graph, id.as_bytes(), now_ms(), true)
+                    .map(|snap| snap.value));
+            }
+            StorageTier::Buffered => {
+                self.ring_core.flush()?;
+            }
+            StorageTier::Disk => {}
+        }
         let conn = self.read_lock()?;
         let mut stmt = conn.prepare(
             "SELECT kind, metadata, doc_space, doc_id FROM _lilia_graph_nodes WHERE graph = ?1 AND id = ?2;",
@@ -116,40 +143,30 @@ impl Database {
         let Some(node) = self.graph_get_node(graph, id)? else {
             return Ok(None);
         };
-        if let Some(ref space) = node.doc_space {
-            let doc_id = node.doc_id.as_deref().unwrap_or(id);
-            return Ok(self.json_get(space, doc_id)?.map(|e| e.value));
-        }
-        // Cascade resolution: check if kind matches an existing JSON space containing id
-        if let Ok(Some(entry)) = self.json_get(&node.kind, id) {
-            return Ok(Some(entry.value));
-        }
-        Ok(None)
+        let Some(space) = node.doc_space.as_deref() else {
+            return Ok(None);
+        };
+        let doc_id = node.doc_id.as_deref().unwrap_or(id);
+        Ok(self.json_get(space, doc_id)?.map(|entry| entry.value()))
     }
 
     pub fn graph_delete_node(&self, graph: &str, id: &str) -> Result<bool> {
         validate_name("graph", graph)?;
         validate_name("id", id)?;
-        let mut writer = self.lock_writer()?;
-        let mut tx = writer.transaction()?;
-        let mut stmt_edges = tx.prepare(
-            "DELETE FROM _lilia_graph_edges WHERE graph = ?1 AND (source = ?2 OR target = ?2);",
-        )?;
-        stmt_edges.bind_text_static(1, graph)?;
-        stmt_edges.bind_text_static(2, id)?;
-        stmt_edges.step()?;
-        drop(stmt_edges);
-
-        let stmt_node = tx.slot(StmtSlot::GraphNodeDelete)?;
-        stmt_node.reset()?;
-        stmt_node.bind_text_static(1, graph)?;
-        stmt_node.bind_text_static(2, id)?;
-        stmt_node.step()?;
-        stmt_node.reset()?;
-        let deleted = tx.conn().changes() > 0;
-        tx.commit()?;
-        self.cache.invalidate_graph_node(graph, id);
-        Ok(deleted)
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                return Ok(self.mem_engine.graph_delete_node(graph, id));
+            }
+            StorageTier::Buffered => {
+                self.ring_core.flush()?;
+            }
+            StorageTier::Disk => {}
+        }
+        let results = self.batch(&[BatchOperation::GraphDeleteNode {
+            graph: graph.to_owned(),
+            id: id.to_owned(),
+        }])?;
+        Ok(results.first().is_some_and(|result| result.deleted))
     }
 
     pub fn graph_list_nodes(
@@ -159,6 +176,30 @@ impl Database {
         limit: u32,
     ) -> Result<Vec<GraphNode>> {
         validate_name("graph", graph)?;
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                let norm_limit = usize::try_from(normalize_limit(limit)).unwrap_or(usize::MAX);
+                let scanned =
+                    self.mem_engine
+                        .graph_nodes
+                        .scan(Some(graph), None, usize::MAX, now_ms());
+                let mut nodes = Vec::new();
+                for (_, _, snap) in scanned {
+                    if kind_filter.is_some_and(|k| snap.value.kind != k) {
+                        continue;
+                    }
+                    nodes.push(snap.value);
+                    if nodes.len() >= norm_limit {
+                        break;
+                    }
+                }
+                return Ok(nodes);
+            }
+            StorageTier::Buffered => {
+                self.ring_core.flush()?;
+            }
+            StorageTier::Disk => {}
+        }
         let conn = self.read_lock()?;
         let mut stmt = if kind_filter.is_some() {
             conn.prepare(
@@ -228,6 +269,28 @@ impl Database {
         validate_name("graph", graph)?;
         validate_name("source", source)?;
         validate_name("target", target)?;
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                self.mem_engine.graph_add_edge(GraphEdge {
+                    graph: graph.to_owned(),
+                    source: source.to_owned(),
+                    target: target.to_owned(),
+                    kind: kind.to_owned(),
+                    weight,
+                })?;
+                return Ok(());
+            }
+            StorageTier::Buffered => {
+                return self.ring_core.push_op(BatchOperation::GraphAddEdge {
+                    graph: graph.to_owned(),
+                    source: source.to_owned(),
+                    target: target.to_owned(),
+                    kind: kind.to_owned(),
+                    weight,
+                });
+            }
+            StorageTier::Disk => {}
+        }
         let mut writer = self.lock_writer()?;
         let stmt = writer.slot(StmtSlot::GraphEdgeSet)?;
         stmt.reset()?;
@@ -251,6 +314,17 @@ impl Database {
         validate_name("graph", graph)?;
         validate_name("source", source)?;
         validate_name("target", target)?;
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                return Ok(self
+                    .mem_engine
+                    .graph_remove_edge(graph, source, target, kind));
+            }
+            StorageTier::Buffered => {
+                self.ring_core.flush()?;
+            }
+            StorageTier::Disk => {}
+        }
         let mut writer = self.lock_writer()?;
         let stmt = writer.slot(StmtSlot::GraphEdgeDelete)?;
         stmt.reset()?;
@@ -273,6 +347,37 @@ impl Database {
         limit: u32,
     ) -> Result<Vec<GraphEdge>> {
         validate_name("graph", graph)?;
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                let norm_limit = usize::try_from(normalize_limit(limit)).unwrap_or(usize::MAX);
+                let mut edges: Vec<GraphEdge> = self
+                    .mem_engine
+                    .graph_edges
+                    .scan(Some(graph), None, usize::MAX, now_ms())
+                    .into_iter()
+                    .map(|(_, _, snap)| snap.value)
+                    .filter(|e| {
+                        source.is_none_or(|s| e.source == s)
+                            && target.is_none_or(|t| e.target == t)
+                            && kind.is_none_or(|k| e.kind == k)
+                    })
+                    .collect();
+                edges.sort_by(|a, b| {
+                    a.source
+                        .cmp(&b.source)
+                        .then_with(|| a.target.cmp(&b.target))
+                        .then_with(|| a.kind.cmp(&b.kind))
+                });
+                if edges.len() > norm_limit {
+                    edges.truncate(norm_limit);
+                }
+                return Ok(edges);
+            }
+            StorageTier::Buffered => {
+                self.ring_core.flush()?;
+            }
+            StorageTier::Disk => {}
+        }
         let conn = self.read_lock()?;
         let mut stmt = conn.prepare(
             "SELECT source, target, kind, weight FROM _lilia_graph_edges \
@@ -320,6 +425,47 @@ impl Database {
         validate_name("graph", graph)?;
         if start_nodes.is_empty() {
             return Ok(Vec::new());
+        }
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                let edges: Vec<GraphEdge> = self
+                    .mem_engine
+                    .graph_edges
+                    .scan(Some(graph), None, usize::MAX, now_ms())
+                    .into_iter()
+                    .map(|(_, _, snap)| snap.value)
+                    .collect();
+                let mut visited = BTreeSet::new();
+                let mut queue = VecDeque::new();
+                for start in start_nodes {
+                    if visited.insert(start.clone()) {
+                        queue.push_back(start.clone());
+                    }
+                }
+                while let Some(cur) = queue.pop_front() {
+                    for edge in &edges {
+                        let next = match direction {
+                            Direction::Outgoing | Direction::Both if edge.source == cur => {
+                                Some(&edge.target)
+                            }
+                            Direction::Incoming | Direction::Both if edge.target == cur => {
+                                Some(&edge.source)
+                            }
+                            _ => None,
+                        };
+                        if let Some(neighbor) = next {
+                            if visited.insert(neighbor.clone()) {
+                                queue.push_back(neighbor.clone());
+                            }
+                        }
+                    }
+                }
+                return Ok(visited.into_iter().collect());
+            }
+            StorageTier::Buffered => {
+                self.ring_core.flush()?;
+            }
+            StorageTier::Disk => {}
         }
         let conn = self.read_lock()?;
         let starts_json = serde_json::to_string(start_nodes)
@@ -379,6 +525,42 @@ impl Database {
     ) -> Result<Vec<String>> {
         validate_name("graph", graph)?;
         validate_name("node", node)?;
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                let edges =
+                    self.mem_engine
+                        .graph_edges
+                        .scan(Some(graph), None, usize::MAX, now_ms());
+                let mut neighbors = BTreeSet::new();
+                for (_, _, snap) in edges {
+                    let edge = snap.value;
+                    if kind_filter.is_some_and(|k| edge.kind != k) {
+                        continue;
+                    }
+                    match direction {
+                        Direction::Outgoing if edge.source == node => {
+                            neighbors.insert(edge.target);
+                        }
+                        Direction::Incoming if edge.target == node => {
+                            neighbors.insert(edge.source);
+                        }
+                        Direction::Both => {
+                            if edge.source == node {
+                                neighbors.insert(edge.target);
+                            } else if edge.target == node {
+                                neighbors.insert(edge.source);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                return Ok(neighbors.into_iter().collect());
+            }
+            StorageTier::Buffered => {
+                self.ring_core.flush()?;
+            }
+            StorageTier::Disk => {}
+        }
         let conn = self.read_lock()?;
         let sql = match direction {
             Direction::Outgoing => {

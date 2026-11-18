@@ -23,6 +23,7 @@ pub fn quantize_f32_to_i8(floats: &[f32]) -> (Vec<i8>, f32) {
     let inv_scale = 1.0 / scale;
     let mut quantized = Vec::with_capacity(floats.len());
     for &val in floats {
+        #[allow(clippy::cast_possible_truncation)] // rounded and clamped to the i8 range: exact
         let q = (val * inv_scale).round().clamp(-128.0, 127.0) as i8;
         quantized.push(q);
     }
@@ -32,7 +33,7 @@ pub fn quantize_f32_to_i8(floats: &[f32]) -> (Vec<i8>, f32) {
 /// Dequantizes a slice of signed 8-bit integers back to 32-bit floating point numbers using `scale`.
 #[must_use]
 pub fn dequantize_i8_to_f32(i8s: &[i8], scale: f32) -> Vec<f32> {
-    i8s.iter().map(|&q| (q as f32) * scale).collect()
+    i8s.iter().map(|&q| f32::from(q) * scale).collect()
 }
 
 /// Quantizes a slice of 32-bit floating point numbers to 1-bit binary representations.
@@ -67,8 +68,8 @@ pub fn cosine_distance_f32(a: &[f32], b: &[f32]) -> f64 {
     let mut norm_a = 0.0f64;
     let mut norm_b = 0.0f64;
     for i in 0..len {
-        let va = a[i] as f64;
-        let vb = b[i] as f64;
+        let va = f64::from(a[i]);
+        let vb = f64::from(b[i]);
         dot += va * vb;
         norm_a += va * va;
         norm_b += vb * vb;
@@ -82,8 +83,8 @@ pub fn cosine_distance_f32(a: &[f32], b: &[f32]) -> f64 {
 
 /// Calculates the cosine distance directly between two signed 8-bit integer vectors.
 ///
-/// Because symmetric scale factors cancel out in cosine similarity ($\frac{s_a \cdot a \cdot s_b \cdot b}{\|s_a \cdot a\| \|s_b \cdot b\|} = \frac{a \cdot b}{\|a\| \|b\|}$),
-/// no float dequantization is necessary.
+/// The symmetric scale factors cancel out in cosine similarity
+/// (`cos(s_a * a, s_b * b) = cos(a, b)`), so no float dequantization is necessary.
 #[must_use]
 pub fn cosine_distance_i8(a: &[i8], b: &[i8]) -> f64 {
     let len = a.len().min(b.len());
@@ -94,8 +95,8 @@ pub fn cosine_distance_i8(a: &[i8], b: &[i8]) -> f64 {
     let mut norm_a = 0i64;
     let mut norm_b = 0i64;
     for i in 0..len {
-        let va = a[i] as i64;
-        let vb = b[i] as i64;
+        let va = i64::from(a[i]);
+        let vb = i64::from(b[i]);
         dot += va * vb;
         norm_a += va * va;
         norm_b += vb * vb;
@@ -103,6 +104,8 @@ pub fn cosine_distance_i8(a: &[i8], b: &[i8]) -> f64 {
     if norm_a <= 0 || norm_b <= 0 {
         return 1.0;
     }
+    // Sums of i8 products stay below 2^53 for any vector under 2^38 dimensions: exact in f64.
+    #[allow(clippy::cast_precision_loss)]
     let sim = (dot as f64) / ((norm_a as f64).sqrt() * (norm_b as f64).sqrt());
     (1.0 - sim).clamp(0.0, 2.0)
 }
@@ -116,7 +119,7 @@ pub fn l2_distance_f32(a: &[f32], b: &[f32]) -> f64 {
     }
     let mut sum_sq = 0.0f64;
     for i in 0..len {
-        let diff = (a[i] - b[i]) as f64;
+        let diff = f64::from(a[i] - b[i]);
         sum_sq += diff * diff;
     }
     sum_sq.sqrt()
@@ -128,7 +131,7 @@ pub fn dot_distance_f32(a: &[f32], b: &[f32]) -> f64 {
     let len = a.len().min(b.len());
     let mut dot = 0.0f64;
     for i in 0..len {
-        dot += (a[i] * b[i]) as f64;
+        dot += f64::from(a[i] * b[i]);
     }
     -dot
 }

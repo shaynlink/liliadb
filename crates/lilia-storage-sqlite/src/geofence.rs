@@ -14,7 +14,7 @@ impl Database {
     /// Registers a polygonal geofence into the spatial R*Tree index (`_lilia_geofences`).
     ///
     /// # Arguments
-    /// * `id` - Unique identifier for the geofence (e.g. "central_park")
+    /// * `id` - Unique identifier for the geofence (e.g. "`central_park`")
     /// * `name` - Human-readable label (e.g. "Central Park Track")
     /// * `category` - Classification tag (e.g. "running", "hazard", "home")
     /// * `polygon_json` - Valid geopoly JSON coordinate array `[[lon1, lat1], [lon2, lat2], ...]`

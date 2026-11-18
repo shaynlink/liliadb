@@ -4,6 +4,18 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 
 ---
 
+## [0.2.0] - 2026-11-17
+
+### Added
+- Native Node-API support for v0.2.0 engine core:
+  - Cranelift JIT acceleration for query filters and batch operations.
+  - Transparent support for Row-Level Security contexts and Dynamic Data Masking policies.
+  - Flash wear-leveling endurance monitoring and telemetry hooks.
+  - Automatic Reed-Solomon parity repair integration for corrupted pages.
+  - Invertible Bloom Filter (IBF) set reconciliation primitives.
+
+---
+
 ## [0.1.0-alpha.7] - 2026-11-10
 
 ### Added

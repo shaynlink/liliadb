@@ -401,19 +401,19 @@ mod tests {
     fn test_cache_l1_json_roundtrip_and_invalidation() {
         let cache = CacheManager::new(64, 128);
 
-        let entry = Arc::new(JsonEntry {
-            space: "users".into(),
-            id: "ada".into(),
-            value: json!({"name": "Ada Lovelace"}),
-            version: 1,
-        });
+        let entry = Arc::new(JsonEntry::new(
+            "users",
+            "ada",
+            lilia_core::json::BinaryDoc::from_json_value(&json!({"name": "Ada Lovelace"})).unwrap(),
+            1,
+        ));
 
         assert!(cache.get_json("users", "ada").is_none());
         cache.put_json("users", "ada", Arc::clone(&entry));
 
         let hit = cache.get_json("users", "ada");
         assert!(hit.is_some());
-        assert_eq!(hit.unwrap().value["name"], "Ada Lovelace");
+        assert_eq!(hit.unwrap().value()["name"], "Ada Lovelace");
 
         let stats = cache.stats();
         assert_eq!(stats.l1_hits, 1);
