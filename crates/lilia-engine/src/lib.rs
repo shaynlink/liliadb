@@ -31,6 +31,7 @@ mod table;
 mod version;
 
 pub use batch::{Expectation, Op, WriteBatch};
+pub use commit::{GroupCommit, Member};
 pub use db::{Db, Entry, RangeIter, Snapshot, Stats, Versioned};
 pub use error::{Error, Result};
 pub use key::MAX_SEQUENCE;

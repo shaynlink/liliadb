@@ -42,6 +42,7 @@ pub struct Expectation {
 pub struct WriteBatch {
     pub(crate) ops: Vec<Op>,
     pub(crate) expectations: Vec<Expectation>,
+    pub(crate) position: Option<u64>,
     bytes: usize,
 }
 
@@ -68,6 +69,14 @@ impl WriteBatch {
     /// Commits only if the newest version of `key` is `version` (`None`: absent).
     pub fn expect(&mut self, key: impl Into<Bytes>, version: Option<u64>) -> &mut Self {
         self.expectations.push(Expectation { key: key.into(), version });
+        self
+    }
+
+    /// Commits only if the first write of the batch gets sequence number `first`, that is, only
+    /// if no other write commits between the caller reading [`crate::Db::last_sequence`] and this
+    /// batch. Lets a caller that serializes its own writes know their versions in advance.
+    pub fn at_sequence(&mut self, first: u64) -> &mut Self {
+        self.position = Some(first);
         self
     }
 

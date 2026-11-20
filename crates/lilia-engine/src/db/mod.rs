@@ -17,7 +17,7 @@ use parking_lot::{Condvar, Mutex, RwLock};
 
 pub use self::read::{Entry, RangeIter, Snapshot, Versioned};
 use crate::batch::{self, WriteBatch};
-use crate::commit::CommitQueue;
+use crate::commit::GroupCommit;
 use crate::compaction::{Retention, RunSink};
 use crate::error::{corruption, Error, Result};
 use crate::files::{self, FileKind, TableStore};
@@ -67,7 +67,7 @@ pub(crate) struct Inner {
     pub current: RwLock<Arc<SuperVersion>>,
     pub versions: Mutex<VersionSet>,
     pub journal: Mutex<JournalWriter>,
-    pub queue: CommitQueue,
+    pub queue: GroupCommit<WriteBatch, Result<u64>>,
     /// Newest sequence number visible to readers.
     pub visible: AtomicU64,
     /// Live snapshots: sequence → count.
@@ -224,7 +224,7 @@ impl Db {
             current: RwLock::new(Arc::new(super_version)),
             versions: Mutex::new(versions),
             journal: Mutex::new(JournalWriter::new(journal_file)),
-            queue: CommitQueue::default(),
+            queue: GroupCommit::default(),
             visible: AtomicU64::new(last_sequence),
             snapshots: Mutex::new(BTreeMap::new()),
             work: Mutex::new(WorkState::default()),
@@ -287,6 +287,13 @@ impl Db {
     /// As [`Db::get`].
     pub fn get_versioned(&self, key: &[u8]) -> Result<Option<Versioned>> {
         self.inner.get_at(key, self.inner.visible.load(Ordering::Acquire))
+    }
+
+    /// Sequence number of the newest visible write (0 for an empty database). The next batch
+    /// commits at `last_sequence() + 1` unless another one commits first.
+    #[must_use]
+    pub fn last_sequence(&self) -> u64 {
+        self.inner.visible.load(Ordering::Acquire)
     }
 
     /// A consistent view of the database as of now; reads through it ignore later writes.

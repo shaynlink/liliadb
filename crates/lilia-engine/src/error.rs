@@ -17,6 +17,11 @@ pub enum Error {
     #[error("version conflict on key {key:?}: expected {expected:?}, found {actual:?}")]
     Conflict { key: Vec<u8>, expected: Option<u64>, actual: Option<u64> },
 
+    /// A batch pinned to a sequence number ([`crate::WriteBatch::at_sequence`]) would have
+    /// committed at another one. Nothing of the batch was applied.
+    #[error("sequence moved: the batch expected to commit at {expected}, the next sequence is {actual}")]
+    SequenceMoved { expected: u64, actual: u64 },
+
     /// A write or sync failed earlier; the engine refuses further writes because the state of
     /// the journal on disk is unknown. Reads keep working. Reopen the database to recover.
     #[error("writes are disabled after an earlier failure: {0}")]

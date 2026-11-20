@@ -38,6 +38,19 @@ fn point_writes_reads_versions_and_conditional_batches() {
     let mut recreate = WriteBatch::new();
     recreate.expect("a", None).put("a", "back");
     db.write(recreate).unwrap();
+
+    let next = db.last_sequence() + 1;
+    let mut stale_position = WriteBatch::new();
+    stale_position.at_sequence(next + 1).put("c", "late");
+    match db.write(stale_position) {
+        Err(Error::SequenceMoved { expected, actual }) => assert_eq!((expected, actual), (next + 1, next)),
+        other => panic!("expected a moved sequence, got {other:?}"),
+    }
+    let mut pinned = WriteBatch::new();
+    pinned.at_sequence(next).put("c", "now").put("d", "too");
+    assert_eq!(db.write(pinned).unwrap(), next);
+    assert_eq!(db.last_sequence(), next + 1);
+    assert_eq!(db.get_versioned(b"d").unwrap().unwrap().version, next + 1);
     db.close().unwrap();
 }
 

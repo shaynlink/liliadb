@@ -9,7 +9,10 @@ use lilia_io::OpenMode;
 
 use super::{Inner, SuperVersion};
 use crate::batch::{self, Op, WriteBatch};
-use crate::commit::Writer;
+use crate::commit::Member;
+
+/// A batch waiting in the commit queue.
+type Writer = Member<WriteBatch, Result<u64>>;
 use crate::error::{Error, Result};
 use crate::files;
 use crate::journal::JournalWriter;
@@ -21,7 +24,10 @@ impl Inner {
         if let Some(error) = self.failure() {
             return Err(error);
         }
-        self.queue.commit(batch, self.options.max_group_bytes, |group| self.commit_group(group))
+        let weight = batch.approximate_bytes();
+        self.queue
+            .commit(batch, weight, self.options.max_group_bytes, |group| self.commit_group(group))
+            .unwrap_or_else(|| Err(crate::error::corruption("commit leader left a batch without a result")))
     }
 
     /// Newest version of `key` among committed writes; `None` if absent or deleted.
@@ -44,19 +50,19 @@ impl Inner {
         let mut accepted: Vec<(&Arc<Writer>, u64)> = Vec::new();
         let mut records: Vec<Vec<u8>> = Vec::new();
         for writer in group {
-            match Self::admit(&current, &writer.batch, &written, next) {
+            match Self::admit(&current, &writer.item, &written, next) {
                 Err(error) => writer.finish(Err(error)),
-                Ok(()) if writer.batch.is_empty() => writer.finish(Ok(next - 1)),
+                Ok(()) if writer.item.is_empty() => writer.finish(Ok(next - 1)),
                 Ok(()) => {
-                    let mut record = Vec::with_capacity(writer.batch.approximate_bytes() + 16);
-                    batch::encode(&mut record, next, writer.batch.ops());
+                    let mut record = Vec::with_capacity(writer.item.approximate_bytes() + 16);
+                    batch::encode(&mut record, next, writer.item.ops());
                     records.push(record);
-                    for (i, op) in writer.batch.ops().iter().enumerate() {
+                    for (i, op) in writer.item.ops().iter().enumerate() {
                         let version = matches!(op, Op::Put { .. }).then_some(next + i as u64);
                         written.insert(op.key().clone(), version);
                     }
                     accepted.push((writer, next));
-                    next += writer.batch.len() as u64;
+                    next += writer.item.len() as u64;
                 }
             }
         }
@@ -82,7 +88,7 @@ impl Inner {
             return;
         }
         for &(writer, first) in &accepted {
-            for (i, op) in writer.batch.ops().iter().enumerate() {
+            for (i, op) in writer.item.ops().iter().enumerate() {
                 current.mem.insert(first + i as u64, op);
             }
         }
@@ -96,6 +102,9 @@ impl Inner {
     fn admit(current: &SuperVersion, batch: &WriteBatch, written: &HashMap<Bytes, Option<u64>>, next: u64) -> Result<()> {
         if next + batch.len() as u64 > MAX_SEQUENCE {
             return Err(Error::InvalidArgument("sequence numbers exhausted".into()));
+        }
+        if let Some(expected) = batch.position.filter(|&p| p != next) {
+            return Err(Error::SequenceMoved { expected, actual: next });
         }
         for expectation in &batch.expectations {
             let actual = match written.get(&expectation.key) {
