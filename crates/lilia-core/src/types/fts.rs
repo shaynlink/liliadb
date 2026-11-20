@@ -46,3 +46,21 @@ impl Default for FtsFuzzyOptions {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FtsPhoneticHit {
+    pub collection: String,
+    pub doc_id: String,
+    pub snippet: String,
+    pub rank: f64,
+    pub matched_terms: Vec<String>,
+    pub phonetic_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PhoneticAlgorithm {
+    Soundex,
+    DoubleMetaphone,
+    #[default]
+    All,
+}

@@ -73,7 +73,10 @@ impl Database {
         )?;
         tx.commit()?;
 
-        // Update in-memory trie if already loaded
+        // Update in-memory trie and phonetic vocabulary if already loaded
+        let indexed_content = lilia_core::prepare_cjk_for_indexing(content);
+        let unique_tokens = crate::transaction::tokenize_terms(&indexed_content);
+
         if let Some(trie_arc) = self
             .fts_trie_cache
             .read()
@@ -81,9 +84,21 @@ impl Database {
             .and_then(|c| c.get(collection).cloned())
         {
             if let Ok(mut trie) = trie_arc.write() {
-                let unique_tokens = crate::transaction::tokenize_terms(content);
-                for token in unique_tokens {
-                    trie.insert(&token, 1);
+                for token in &unique_tokens {
+                    trie.insert(token, 1);
+                }
+            }
+        }
+
+        if let Some(vocab_arc) = self
+            .fts_phonetic_cache
+            .read()
+            .ok()
+            .and_then(|c| c.get(collection).cloned())
+        {
+            if let Ok(mut vocab) = vocab_arc.write() {
+                for token in &unique_tokens {
+                    vocab.insert(token, 1);
                 }
             }
         }
@@ -131,15 +146,25 @@ impl Database {
         };
         let conn = self.read_lock()?;
         let mut stmt = conn.prepare(sql)?;
-        let match_query = if query.contains(':')
-            || query.contains('"')
-            || query.contains("AND")
-            || query.contains("OR")
-            || query.contains('*')
+        let processed_query = if lilia_core::contains_cjk(query)
+            && !query.contains(':')
+            && !query.contains('"')
+            && !query.contains('*')
         {
-            query.to_string()
+            lilia_core::prepare_cjk_for_search(query)
         } else {
-            let tokens: Vec<String> = query
+            query.to_string()
+        };
+
+        let match_query = if processed_query.contains(':')
+            || processed_query.contains('"')
+            || processed_query.contains("AND")
+            || processed_query.contains("OR")
+            || processed_query.contains('*')
+        {
+            processed_query
+        } else {
+            let tokens: Vec<String> = processed_query
                 .split_whitespace()
                 .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
                 .collect();
@@ -237,6 +262,71 @@ impl Database {
         Ok(trie_arc)
     }
 
+    /// Retrieves or lazily loads the [`lilia_core::PhoneticVocabulary`] for a collection.
+    pub(crate) fn get_or_load_fts_phonetic(
+        &self,
+        collection: &str,
+    ) -> Result<std::sync::Arc<std::sync::RwLock<lilia_core::PhoneticVocabulary>>> {
+        validate_name("collection", collection)?;
+        {
+            let cache = self.fts_phonetic_cache.read().map_err(|_| {
+                LiliaError::new(ErrorCode::Storage, "fts phonetic lock poisoned", false)
+            })?;
+            if let Some(vocab) = cache.get(collection) {
+                return Ok(std::sync::Arc::clone(vocab));
+            }
+        }
+
+        let mut cache = self.fts_phonetic_cache.write().map_err(|_| {
+            LiliaError::new(ErrorCode::Storage, "fts phonetic lock poisoned", false)
+        })?;
+        if let Some(vocab) = cache.get(collection) {
+            return Ok(std::sync::Arc::clone(vocab));
+        }
+
+        let tier = self.catalog.tier_for(CollectionKind::Fts, collection);
+        let sql = if tier == StorageTier::Memory {
+            "SELECT term, doc_count FROM _lilia_mem._lilia_mem_fts_terms WHERE collection = ?1;"
+        } else {
+            "SELECT term, doc_count FROM _lilia_fts_terms WHERE collection = ?1;"
+        };
+
+        let conn = self.read_lock()?;
+        let mut stmt = conn.prepare(sql)?;
+        stmt.bind_text_static(1, collection)?;
+
+        let mut vocab = lilia_core::PhoneticVocabulary::new();
+        let mut row_count = 0;
+        while stmt.step()? {
+            let term = stmt.column_text(0);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let count = stmt.column_int64(1).max(1) as u32;
+            vocab.insert(term, count);
+            row_count += 1;
+        }
+
+        // If _lilia_fts_terms had no rows, fallback to scanning _lilia_fts
+        if row_count == 0 {
+            let fallback_sql = if tier == StorageTier::Memory {
+                "SELECT content FROM _lilia_mem._lilia_mem_fts WHERE collection = ?1;"
+            } else {
+                "SELECT content FROM _lilia_fts WHERE collection = ?1;"
+            };
+            let mut fts_stmt = conn.prepare(fallback_sql)?;
+            fts_stmt.bind_text_static(1, collection)?;
+            while fts_stmt.step()? {
+                let content = fts_stmt.column_text(0);
+                for token in crate::transaction::tokenize_terms(content) {
+                    vocab.insert(&token, 1);
+                }
+            }
+        }
+
+        let vocab_arc = std::sync::Arc::new(std::sync::RwLock::new(vocab));
+        cache.insert(collection.to_owned(), std::sync::Arc::clone(&vocab_arc));
+        Ok(vocab_arc)
+    }
+
     /// Performs fast fuzzy autocompletion / term suggestion against the collection vocabulary
     /// using a compiled Levenshtein automaton.
     pub fn fts_suggest(
@@ -328,7 +418,21 @@ impl Database {
             } else if effective_dist > 0 {
                 // Look up closest candidates with Levenshtein automaton
                 let auto = lilia_core::LevenshteinAutomaton::for_exact(word, effective_dist);
-                let candidates = trie.search_automaton(&auto, 3);
+                let mut candidates = trie.search_automaton(&auto, 3);
+                if candidates.is_empty() {
+                    if let Ok(vocab_arc) = self.get_or_load_fts_phonetic(collection) {
+                        if let Ok(vocab) = vocab_arc.read() {
+                            for pc in vocab.find_candidates(word, 3) {
+                                candidates.push(lilia_core::FtsSuggestion {
+                                    term: pc.term,
+                                    distance: 1,
+                                    doc_count: pc.doc_count,
+                                    exact_prefix: false,
+                                });
+                            }
+                        }
+                    }
+                }
                 if candidates.is_empty() {
                     expanded_clauses.push(format!("\"{}\"", word.replace('"', "\"\"")));
                 } else {
@@ -419,6 +523,154 @@ impl Database {
         Ok(hits)
     }
 
+    /// Performs phonetic full-text search using Double Metaphone and Soundex candidate expansion.
+    ///
+    /// Finds documents where words phonetically match the query (e.g., "Gérard" finds "Guerard",
+    /// "Smith" finds "Smyth", "Pfizer" finds "Fizer").
+    #[allow(clippy::too_many_lines)]
+    pub fn fts_phonetic_search(
+        &self,
+        collection: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<lilia_core::FtsPhoneticHit>> {
+        validate_name("collection", collection)?;
+        let tier = self.catalog.tier_for(CollectionKind::Fts, collection);
+        if tier == StorageTier::Buffered {
+            self.ring_core.flush()?;
+        }
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let vocab_arc = self.get_or_load_fts_phonetic(collection)?;
+        let vocab = vocab_arc.read().map_err(|_| {
+            LiliaError::new(ErrorCode::Storage, "fts phonetic lock poisoned", false)
+        })?;
+
+        // Extract words from query
+        let query_words: Vec<String> = query
+            .split_whitespace()
+            .map(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
+            .filter(|w| !w.is_empty())
+            .collect();
+
+        if query_words.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut expanded_clauses = Vec::new();
+        let mut term_similarities: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+        let mut phonetic_codes = Vec::new();
+
+        for word in &query_words {
+            let dm = lilia_core::double_metaphone(word);
+            let sx = lilia_core::soundex(word);
+            if !dm.primary.is_empty() && !phonetic_codes.contains(&dm.primary) {
+                phonetic_codes.push(dm.primary.clone());
+            }
+            if let Some(ref alt) = dm.alternate {
+                if !alt.is_empty() && !phonetic_codes.contains(alt) {
+                    phonetic_codes.push(alt.clone());
+                }
+            }
+            if !sx.is_empty() && !phonetic_codes.contains(&sx) {
+                phonetic_codes.push(sx.clone());
+            }
+
+            let candidates = vocab.find_candidates(word, 5);
+            let mut or_parts = Vec::new();
+            or_parts.push(format!("\"{}\"", word.replace('"', "\"\"")));
+            term_similarities.insert(word.clone(), 1.0);
+
+            for cand in candidates {
+                term_similarities
+                    .entry(cand.term.clone())
+                    .and_modify(|s| *s = (*s).max(cand.similarity))
+                    .or_insert(cand.similarity);
+                or_parts.push(format!("\"{}\"", cand.term.replace('"', "\"\"")));
+            }
+
+            if or_parts.len() == 1 {
+                expanded_clauses.push(or_parts.remove(0));
+            } else {
+                expanded_clauses.push(format!("({})", or_parts.join(" OR ")));
+            }
+        }
+
+        let match_query = expanded_clauses.join(" AND ");
+
+        let sql = if tier == StorageTier::Memory {
+            "SELECT doc_id, snippet(_lilia_mem_fts, 2, '<b>', '</b>', '...', 32), rank \
+             FROM _lilia_mem._lilia_mem_fts \
+             WHERE collection = ?1 AND _lilia_mem_fts MATCH ?2 \
+             ORDER BY rank \
+             LIMIT ?3;"
+        } else {
+            "SELECT doc_id, snippet(_lilia_fts, 2, '<b>', '</b>', '...', 32), rank \
+             FROM _lilia_fts \
+             WHERE collection = ?1 AND _lilia_fts MATCH ?2 \
+             ORDER BY rank \
+             LIMIT ?3;"
+        };
+
+        let conn = self.read_lock()?;
+        let mut stmt = conn.prepare(sql)?;
+        stmt.bind_text_static(1, collection)?;
+        stmt.bind_text_static(2, &match_query)?;
+        stmt.bind_int64(3, normalize_limit(limit))?;
+
+        let mut hits = Vec::new();
+        while stmt.step()? {
+            let doc_id = stmt.column_text(0).to_string();
+            let snippet = stmt.column_text(1).to_string();
+            let base_rank = stmt.column_double(2);
+
+            if !self.is_fts_doc_authorized(collection, &doc_id, &snippet) {
+                continue;
+            }
+
+            let snippet_lower = snippet.to_lowercase();
+            let mut matched_terms = Vec::new();
+            let mut max_sim: f64 = 0.5;
+
+            for (term, &sim) in &term_similarities {
+                if snippet_lower.contains(&term.to_lowercase()) {
+                    matched_terms.push(term.clone());
+                    max_sim = max_sim.max(sim);
+                }
+            }
+
+            let adjusted_rank = if base_rank < 0.0 {
+                base_rank * max_sim
+            } else {
+                base_rank / max_sim.max(0.1)
+            };
+
+            hits.push(lilia_core::FtsPhoneticHit {
+                collection: collection.to_owned(),
+                doc_id,
+                snippet,
+                rank: adjusted_rank,
+                matched_terms,
+                phonetic_codes: phonetic_codes.clone(),
+            });
+        }
+
+        hits.sort_by(|a, b| {
+            a.rank
+                .partial_cmp(&b.rank)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(hits)
+    }
+
     /// Loads custom dictionary terms into a collection's vocabulary index and in-memory trie.
     pub fn fts_load_dictionary(&self, collection: &str, words: &[&str]) -> Result<()> {
         validate_name("collection", collection)?;
@@ -462,6 +714,22 @@ impl Database {
                     let term = word.trim().to_lowercase();
                     if !term.is_empty() {
                         trie.insert(&term, 1);
+                    }
+                }
+            }
+        }
+
+        if let Some(vocab_arc) = self
+            .fts_phonetic_cache
+            .read()
+            .ok()
+            .and_then(|c| c.get(collection).cloned())
+        {
+            if let Ok(mut vocab) = vocab_arc.write() {
+                for &word in words {
+                    let term = word.trim().to_lowercase();
+                    if !term.is_empty() {
+                        vocab.insert(&term, 1);
                     }
                 }
             }
