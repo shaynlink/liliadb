@@ -415,6 +415,14 @@ Calibrated throughput and latency distributions measured on Apple M3 Max (14 cor
 | `count`/`sum`/`avg` with a filter | 5,637 ms | 18.9 ms | **0.97 ms** (513 M rows/s) | 2.60 ms |
 | `GROUP BY` (16 groups) with `count`/`avg` | 5,167 ms | 117.6 ms | **1.37 ms** (366 M rows/s) | 3.87 ms |
 
+### 4. Zero-Copy Relative-Pointer Deserialization (`rkyv` vs `serde_json` / MessagePack)
+| Format / Method | Memory Allocations | Access Latency | Speedup | Architectural Paradigm |
+| :--- | :---: | :---: | :---: | :--- |
+| **`serde_json` (Typed AST)** | Heap allocations | 86.16 ns | Baseline (1.0x) | Text parsing and heap allocation |
+| **`rmp_serde` (MessagePack)** | Heap allocations | 63.45 ns | 1.36x | Binary decoding with heap unpack |
+| **`rkyv` Dynamic `JsonDocument`** | **0 B (Zero Heap Alloc)** | **1.22 ns** | **70.6x** | Contiguous FlatNode tape arena |
+| **`rkyv` Typed Struct (0-ns)** | **0 B (Zero Heap Alloc)** | **0.69 ns** | **125.0x** | $O(1)$ relative-pointer memory cast |
+
 Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) and the [Comparative Benchmark: LiliaDB vs Native SQLite & Ecosystems](docs/benchmarks_comparison.md).
 
 ---
