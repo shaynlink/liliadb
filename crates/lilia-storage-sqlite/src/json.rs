@@ -373,14 +373,18 @@ impl Database {
                 return cell
                     .value
                     .state
-                    .map(|(val, seq, _)| {
-                        let mut v = val.clone();
+                    .as_ref()
+                    .map(|(aligned, seq, _)| {
+                        let archived = unsafe {
+                            lilia_core::json::access_archived_doc_unchecked(aligned)
+                        };
+                        let mut v = archived.to_serde();
                         let _ = lilia_core::decrypt_json_fields(
                             &mut v,
                             &self.key_registry,
                             lilia_core::DecryptionMode::Tolerant,
                         );
-                        json_snapshot_to_entry(space, id.to_owned(), &v, seq)
+                        json_snapshot_to_entry(space, id.to_owned(), &v, *seq)
                     })
                     .transpose();
             }
@@ -492,6 +496,23 @@ impl Database {
                 return Ok(Some(f(archived)));
             }
         }
+        let now = crate::storage::now_ms();
+        if let Some(cell) = self
+            .ring_core
+            .overlay
+            .json
+            .get(space, id.as_bytes(), now, false)
+        {
+            return match cell.value.state {
+                Some((ref aligned, _, _)) => {
+                    let archived = unsafe {
+                        lilia_core::json::access_archived_doc_unchecked(aligned)
+                    };
+                    Ok(Some(f(archived)))
+                }
+                None => Ok(None),
+            };
+        }
         let Some(entry) = self.json_get(space, id)? else {
             return Ok(None);
         };
@@ -500,6 +521,14 @@ impl Database {
         let bytes = doc.to_archived_bytes()?;
         let archived = lilia_core::json::access_archived_doc(&bytes)?;
         Ok(Some(f(archived)))
+    }
+
+    /// Read an archived JSON document view directly with in-situ path extraction.
+    pub fn with_archived_json_view<R, F>(&self, space: &str, id: &str, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(lilia_core::json::ArchivedJsonView<'_>) -> R,
+    {
+        self.with_archived_json(space, id, |doc| f(doc.view()))
     }
 
     pub fn json_extract(
@@ -764,7 +793,16 @@ impl Database {
                 continue;
             }
             match snap.value.state {
-                Some((val, seq, _)) => {
+                Some((ref aligned, seq, _)) => {
+                    let archived = unsafe {
+                        lilia_core::json::access_archived_doc_unchecked(aligned)
+                    };
+                    let mut val = archived.to_serde();
+                    let _ = lilia_core::decrypt_json_fields(
+                        &mut val,
+                        &self.key_registry,
+                        lilia_core::DecryptionMode::Tolerant,
+                    );
                     merged.insert(
                         id.clone(),
                         Some(json_snapshot_to_entry(space, id, &val, seq)?),

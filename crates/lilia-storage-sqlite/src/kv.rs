@@ -430,10 +430,41 @@ impl Database {
                 return Ok(Some(f(archived)));
             }
         }
+        let now = crate::storage::now_ms();
+        if let Some(cell) = self.ring_core.overlay.kv.get(namespace, key, now, false) {
+            return match cell.value.state {
+                Some((ref encoded, _seq, expires_at_ms)) => {
+                    if expires_at_ms.is_some_and(|exp| exp <= now) {
+                        return Ok(None);
+                    }
+                    let raw_bytes = self.codec.decode(encoded)?;
+                    let archived = lilia_core::access_archived::<T>(&raw_bytes)?;
+                    Ok(Some(f(archived)))
+                }
+                None => Ok(None),
+            };
+        }
         let Some(entry) = self.kv_get(namespace, key)? else {
             return Ok(None);
         };
         let archived = lilia_core::access_archived::<T>(&entry.value)?;
         Ok(Some(f(archived)))
+    }
+
+    /// Convenient alias for `with_archived_kv`.
+    pub fn typed_get_archived<T, R, F>(
+        &self,
+        namespace: &str,
+        key: &[u8],
+        f: F,
+    ) -> Result<Option<R>>
+    where
+        T: rkyv::Archive,
+        T::Archived: for<'a> rkyv::bytecheck::CheckBytes<
+            rkyv::api::high::HighValidator<'a, rkyv::rancor::Error>,
+        >,
+        F: FnOnce(&T::Archived) -> R,
+    {
+        self.with_archived_kv::<T, R, F>(namespace, key, f)
     }
 }

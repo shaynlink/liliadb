@@ -1,4 +1,4 @@
-use lilia_core::{BatchOperation, ErrorCode};
+use lilia_core::{BatchOperation, CollectionKind, ErrorCode, OverflowPolicy, RingBufferConfig};
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
@@ -203,4 +203,115 @@ fn test_zero_copy_typed_and_json_access() {
         })
         .expect("with archived json");
     assert_eq!(temp, Some(Some(42.5)));
+}
+
+#[test]
+fn test_zero_copy_overlay_aligned_vec_ryow() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let opts = DatabaseOptions::durable(directory.path().join("buffered_test.lilia"))
+        .with_ring_buffer(RingBufferConfig {
+            capacity: 16_384,
+            max_batch_size: 2_048,
+            flush_interval_ms: 60_000,
+            watermark_trigger: 16_384,
+            overflow_policy: OverflowPolicy::Block {
+                timeout_ms: Some(2_000),
+            },
+            coalesce_timeseries: true,
+            coalesce_kv_writes: true,
+            enable_read_overlay: true,
+        })
+        .with_buffered_kv("buffered_events")
+        .with_buffered_collection(CollectionKind::Json, "buffered_devices");
+    let db = Database::open(opts).expect("open buffered db");
+
+    // 1. Buffered JSON Put -> stays in PendingOverlay as AlignedVec
+    db.batch(&[BatchOperation::JsonPut {
+        space: "buffered_devices".into(),
+        id: "sensor-100".into(),
+        value: json!({
+            "location": "datacenter-east",
+            "active": true,
+            "metrics": {
+                "temp_c": 23.4,
+                "power_w": 120.0
+            }
+        }),
+        if_version: None,
+    }])
+    .expect("batch json put");
+
+    // RYOW via with_archived_json directly from PendingOverlay (0 ns pointer cast)
+    let temp = db
+        .with_archived_json("buffered_devices", "sensor-100", |archived| {
+            assert_eq!(archived.extract_str("location"), Some("datacenter-east"));
+            assert_eq!(archived.extract_bool("active"), Some(true));
+            archived.extract_f64("metrics.temp_c")
+        })
+        .expect("with_archived_json from overlay");
+    assert_eq!(temp, Some(Some(23.4)));
+
+    // RYOW via with_archived_json_view directly from PendingOverlay
+    let power = db
+        .with_archived_json_view("buffered_devices", "sensor-100", |view| {
+            assert_eq!(view.extract_str("location"), Some("datacenter-east"));
+            view.extract_f64("metrics.power_w")
+        })
+        .expect("with_archived_json_view from overlay");
+    assert_eq!(power, Some(Some(120.0)));
+
+    // 2. Buffered KV Put -> stays in PendingOverlay.kv
+    let account = AccountRecord {
+        account_id: 7777,
+        owner: "Alan Turing".to_string(),
+        balance: 4500.0,
+    };
+    let encoded = lilia_core::archive_to_bytes(&account)
+        .expect("serialize account")
+        .to_vec();
+    db.batch(&[BatchOperation::KvSet {
+        namespace: "buffered_events".into(),
+        key: b"acc:7777".to_vec(),
+        value: encoded,
+        if_version: None,
+        expires_at_ms: None,
+    }])
+    .expect("batch kv set");
+
+    // Read RYOW via with_archived_kv and typed_get_archived
+    let owner = db
+        .typed_get_archived::<AccountRecord, _, _>(
+            "buffered_events",
+            b"acc:7777",
+            |archived| archived.owner.as_str().to_string(),
+        )
+        .expect("typed_get_archived from overlay")
+        .expect("account exists");
+    assert_eq!(owner, "Alan Turing");
+
+    // 3. Deletion tombstone in overlay
+    db.batch(&[BatchOperation::JsonDelete {
+        space: "buffered_devices".into(),
+        id: "sensor-100".into(),
+        if_version: None,
+    }])
+    .expect("batch json delete");
+
+    let deleted = db
+        .with_archived_json("buffered_devices", "sensor-100", |_| ())
+        .expect("read tombstoned json");
+    assert_eq!(deleted, None);
+
+    // 4. Flush writes to disk and verify disk persistence
+    db.flush_writes().expect("flush writes");
+
+    let post_flush = db
+        .typed_get_archived::<AccountRecord, _, _>(
+            "buffered_events",
+            b"acc:7777",
+            |archived| archived.owner.as_str().to_string(),
+        )
+        .expect("typed_get_archived post flush")
+        .expect("account exists");
+    assert_eq!(post_flush, "Alan Turing");
 }

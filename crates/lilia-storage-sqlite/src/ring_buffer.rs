@@ -39,7 +39,7 @@ pub(crate) struct OverlayTsCell {
 #[derive(Debug)]
 pub(crate) struct PendingOverlay {
     pub kv: ShardedMemTable<OverlayCell<Vec<u8>>>,
-    pub json: ShardedMemTable<OverlayCell<serde_json::Value>>,
+    pub json: ShardedMemTable<OverlayCell<rkyv::util::AlignedVec>>,
     pub ts: ShardedMemTable<OverlayTsCell>,
 }
 
@@ -111,9 +111,10 @@ impl PendingOverlay {
         }
     }
 
-    pub fn record_json(&self, space: &str, id: &str, state: Option<serde_json::Value>) {
+    pub fn record_json(&self, space: &str, id: &str, state: Option<rkyv::util::AlignedVec>) {
         let key = id.as_bytes();
-        let shard_idx = ShardedMemTable::<OverlayCell<serde_json::Value>>::shard_index(space, key);
+        let shard_idx =
+            ShardedMemTable::<OverlayCell<rkyv::util::AlignedVec>>::shard_index(space, key);
         let seq = self.json.next_seq();
         let mut shard = self.json.shards_write_at(shard_idx);
         let _ = ShardedMemTable::mutate_locked(
@@ -123,15 +124,12 @@ impl PendingOverlay {
             key,
             now_ms(),
             |existing| {
-                let bytes = state
-                    .as_ref()
-                    .and_then(|v| serde_json::to_vec(v).ok())
-                    .map_or(16, |b| b.len() + 16);
+                let payload_bytes = state.as_ref().map_or(16, |b| b.len() + 16);
                 if let Some(entry) = existing {
                     let prev_ver = entry.value.state.as_ref().map_or(1, |(_, ver, _)| ver + 1);
                     entry.value.pending_ops = entry.value.pending_ops.saturating_add(1);
                     entry.value.state = state.map(|v| (v, prev_ver, None));
-                    entry.payload_bytes = space.len() + key.len() + bytes;
+                    entry.payload_bytes = space.len() + key.len() + payload_bytes;
                     entry.last_access_seq = seq;
                     Ok(None)
                 } else {
@@ -144,11 +142,19 @@ impl PendingOverlay {
                         expires_at_ms: None,
                         inserted_seq: seq,
                         last_access_seq: seq,
-                        payload_bytes: space.len() + key.len() + bytes,
+                        payload_bytes: space.len() + key.len() + payload_bytes,
                     }))
                 }
             },
         );
+    }
+
+    pub fn record_json_from_serde(&self, space: &str, id: &str, value: Option<&serde_json::Value>) {
+        let state = value.and_then(|v| {
+            let doc = lilia_core::json::JsonDocument::from_serde(v);
+            doc.to_archived_bytes().ok()
+        });
+        self.record_json(space, id, state);
     }
 
     pub fn release_json(&self, space: &str, id: &str, count: u32) {
@@ -156,7 +162,8 @@ impl PendingOverlay {
             return;
         }
         let key = id.as_bytes();
-        let shard_idx = ShardedMemTable::<OverlayCell<serde_json::Value>>::shard_index(space, key);
+        let shard_idx =
+            ShardedMemTable::<OverlayCell<rkyv::util::AlignedVec>>::shard_index(space, key);
         let lookup = (space.to_owned(), key.to_vec());
         let mut shard = self.json.shards_write_at(shard_idx);
         let remove = if let Some(entry) = shard.get_mut(&lookup) {
@@ -519,7 +526,7 @@ impl WriteRingBuffer {
                 value,
                 if_version: None,
             } => {
-                self.overlay.record_json(space, id, Some(value.clone()));
+                self.overlay.record_json_from_serde(space, id, Some(value));
                 Some(OverlayTag::Json {
                     space: space.clone(),
                     id: id.clone(),
@@ -1404,13 +1411,20 @@ mod vtab_buffered {
                         .map(|snap| {
                             let id_str = String::from_utf8_lossy(i).into_owned();
                             match snap.value.state {
-                                Some((v, ver, _)) => (
-                                    s.to_owned(),
-                                    id_str,
-                                    serde_json::to_string(&v).unwrap_or_else(|_| "null".into()),
-                                    ver,
-                                    0i64,
-                                ),
+                                Some((ref aligned, ver, _)) => {
+                                    let archived = unsafe {
+                                        lilia_core::json::access_archived_doc_unchecked(aligned)
+                                    };
+                                    let json_val = archived.to_serde();
+                                    (
+                                        s.to_owned(),
+                                        id_str,
+                                        serde_json::to_string(&json_val)
+                                            .unwrap_or_else(|_| "null".into()),
+                                        ver,
+                                        0i64,
+                                    )
+                                }
                                 None => (s.to_owned(), id_str, "null".into(), 0, 1i64),
                             }
                         })
@@ -1423,13 +1437,20 @@ mod vtab_buffered {
                     .map(|(s, i, snap)| {
                         let id_str = String::from_utf8_lossy(&i).into_owned();
                         match snap.value.state {
-                            Some((v, ver, _)) => (
-                                s,
-                                id_str,
-                                serde_json::to_string(&v).unwrap_or_else(|_| "null".into()),
-                                ver,
-                                0i64,
-                            ),
+                            Some((ref aligned, ver, _)) => {
+                                let archived = unsafe {
+                                    lilia_core::json::access_archived_doc_unchecked(aligned)
+                                };
+                                let json_val = archived.to_serde();
+                                (
+                                    s,
+                                    id_str,
+                                    serde_json::to_string(&json_val)
+                                        .unwrap_or_else(|_| "null".into()),
+                                    ver,
+                                    0i64,
+                                )
+                            }
                             None => (s, id_str, "null".into(), 0, 1i64),
                         }
                     })
