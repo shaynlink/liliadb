@@ -4358,8 +4358,10 @@ dependencies = [
 name = "lilia-protocol"
 version = "0.1.0-alpha.8"
 dependencies = [
+ "criterion",
  "lilia-core",
  "rkyv",
+ "rmp-serde",
  "serde",
  "serde_bytes",
  "serde_json",

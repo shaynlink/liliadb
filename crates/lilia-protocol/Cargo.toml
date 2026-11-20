@@ -15,7 +15,13 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+criterion = { workspace = true }
+rmp-serde = { workspace = true }
 serde_json.workspace = true
+
+[[bench]]
+name = "protocol_framing"
+harness = false
 
 [lints]
 workspace = true
