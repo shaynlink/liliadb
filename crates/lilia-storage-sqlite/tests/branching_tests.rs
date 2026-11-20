@@ -70,7 +70,11 @@ fn test_user_scenario_promo_noel() {
     // For mouse: price=40, cost=20 -> margin=20
     // For keyboard: price=80, cost=60 -> margin=20
     // Expected sum(margin) = 100 + 20 + 20 = 140
-    let laptop_sim = simulation.json().get("products", "laptop").unwrap().unwrap();
+    let laptop_sim = simulation
+        .json()
+        .get("products", "laptop")
+        .unwrap()
+        .unwrap();
     assert_eq!(laptop_sim.value()["price"], 800.0);
 
     // Update margin in the simulation
@@ -221,8 +225,22 @@ fn test_ai_agent_dreaming_multi_branch_simulation() {
     // Evaluate each scenario: calculate simulated portfolio return
     let mut scores = Vec::new();
     for (name, branch, shock) in &branches {
-        let p_alpha = branch.json().get("market", "asset_alpha").unwrap().unwrap().value()["price"].as_f64().unwrap();
-        let p_beta = branch.json().get("market", "asset_beta").unwrap().unwrap().value()["price"].as_f64().unwrap();
+        let p_alpha = branch
+            .json()
+            .get("market", "asset_alpha")
+            .unwrap()
+            .unwrap()
+            .value()["price"]
+            .as_f64()
+            .unwrap();
+        let p_beta = branch
+            .json()
+            .get("market", "asset_beta")
+            .unwrap()
+            .unwrap()
+            .value()["price"]
+            .as_f64()
+            .unwrap();
 
         // Utility score = expected return / risk
         let portfolio_value = p_alpha * 10.0 + p_beta * 5.0;
@@ -233,7 +251,9 @@ fn test_ai_agent_dreaming_multi_branch_simulation() {
     scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     let (best_name, best_score, best_shock) = scores.first().unwrap();
 
-    println!("Best AI scenario: {best_name} with portfolio value {best_score} (shock={best_shock})");
+    println!(
+        "Best AI scenario: {best_name} with portfolio value {best_score} (shock={best_shock})"
+    );
 
     // Drop non-optimal branches
     let mut winning_branch = None;
@@ -250,7 +270,14 @@ fn test_ai_agent_dreaming_multi_branch_simulation() {
     db.merge_branch(win, MergeStrategy::FastForward).unwrap();
 
     // Main database now reflects the winning scenario!
-    let alpha_final = db.json().get("market", "asset_alpha").unwrap().unwrap().value()["price"].as_f64().unwrap();
+    let alpha_final = db
+        .json()
+        .get("market", "asset_alpha")
+        .unwrap()
+        .unwrap()
+        .value()["price"]
+        .as_f64()
+        .unwrap();
     assert!((alpha_final - (100.0 * best_shock)).abs() < 1e-4);
 }
 

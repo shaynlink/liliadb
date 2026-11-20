@@ -2,10 +2,14 @@ pub mod aggregation;
 pub mod autotune;
 pub mod calendar;
 pub mod cas;
+pub mod cjk;
 mod codec;
 pub mod compression;
 pub mod crdt;
+pub mod dataflow;
 pub mod embed;
+pub mod energy;
+pub mod envelope;
 mod error;
 pub mod fle;
 pub mod geo;
@@ -20,6 +24,7 @@ pub mod ledger;
 pub mod levenshtein;
 pub mod markov;
 pub mod parity;
+pub mod phonetic;
 pub mod quantization;
 pub mod rules;
 pub mod security;
@@ -30,11 +35,13 @@ pub mod timeseries;
 mod types;
 mod version;
 pub mod wear;
+#[cfg(feature = "zk")]
+pub mod zk;
 
 pub use aggregation::{
     accumulators::{
-        AnomalyAccumulator, Centroid, CountAccumulator, HyperLogLog, MaxAccumulator,
-        MinAccumulator, SumAccumulator, TDigest, WelfordAccumulator,
+        AnomalyAccumulator, Centroid, CountAccumulator, HomomorphicSumAccumulator, HyperLogLog,
+        MaxAccumulator, MinAccumulator, SumAccumulator, TDigest, WelfordAccumulator,
     },
     filter::FilterExpr,
     types::{Aggregate, Sort, SortDirection},
@@ -51,6 +58,10 @@ pub use cas::{
     extract_blob_hashes_from_value, is_kv_pointer, BlobDescriptor, BlobGcStats, CasHashAlgorithm,
     CasHasher, CasOptions, CAS_KV_MAGIC, CAS_KV_POINTER_LEN,
 };
+pub use cjk::{
+    cjk_segment, contains_cjk, is_cjk, is_cjk_ideograph, is_hangul, is_hiragana, is_katakana,
+    prepare_cjk_for_indexing, prepare_cjk_for_search,
+};
 pub use codec::{Aes256GcmCodec, IdentityCodec, ValueCodec};
 pub use compression::dict::{
     compress_with_dict, decompress_with_dict, extract_symbol_signature, hash_token_to_mask,
@@ -61,12 +72,28 @@ pub use compression::{compress_bytes, decompress_bytes};
 pub use crdt::{
     CvRdt, LogicalClock, LwwClock, LwwField, LwwJsonDocument, LwwRegister, OrSet, PNCounter,
 };
+pub use dataflow::{
+    DataflowAggKind, Diff, DiffAvg, DiffCount, DiffMax, DiffMin, DiffSum, DiffWeight, OrderedFloat,
+    ViewDiff,
+};
 pub use embed::{AutoEmbedConfig, BuiltinModel, EmbedOptions, EmbedStatus, Embedder};
+pub use energy::{
+    DeviceEnergyProfile, EnergyCoefficients, EnergyDiagnosis, QueryEnergyDiagnostic,
+    QueryEnergyMetrics,
+};
+pub use envelope::{
+    CipherAlgorithm, CompressionAlgorithm, CompressionProfile, DualHeaderEnvelope,
+    EncryptionMetadata, EnvelopeConfig, EnvelopeHeader, EnvelopeRecoveryOutcome, HeaderRole,
+    KdfAlgorithm, CHECKSUM_OFFSET, ENVELOPE_FORMAT_VERSION, ENVELOPE_HEADER_SIZE, ENVELOPE_MAGIC,
+    MIN_ENVELOPE_FILE_SIZE,
+};
 pub use error::{ConstraintKind, ErrorCode, LiliaError, Result};
 pub use fle::{
-    decrypt_gcm, decrypt_json_fields, decrypt_siv, encrypt_gcm, encrypt_json_fields, encrypt_siv,
-    CompartmentInfo, DecryptionMode, EncryptedEnvelope, FieldCipherAlgorithm, FieldEncryptionRule,
-    FlePolicy, KeyMaterial, KeyRegistry, ENC_PREFIX,
+    decrypt_gcm, decrypt_json_fields, decrypt_paillier_f64, decrypt_paillier_i64, decrypt_siv,
+    encrypt_gcm, encrypt_json_fields, encrypt_paillier_f64, encrypt_paillier_i64, encrypt_siv,
+    paillier_ops, CompartmentInfo, DecryptionMode, EncryptedEnvelope, FieldCipherAlgorithm,
+    FieldEncryptionRule, FlePolicy, KeyMaterial, KeyRegistry, PaillierCiphertext, PaillierKeypair,
+    PaillierPrivateKey, PaillierPublicKey, ENC_PREFIX,
 };
 pub use geo::{
     circle_to_geopoly_json, coords_to_geopoly_json, haversine_distance_meters, GeofenceMatch,
@@ -105,6 +132,10 @@ pub use parity::{
     compute_page_checksum, Gf256, PageChecksum, PageRepairOutcome, ParityConfig, ReedSolomon,
     RepairSummary, GF,
 };
+pub use phonetic::{
+    double_metaphone, is_phonetic_match, remove_accents, soundex, DoubleMetaphoneResult,
+    PhoneticCandidate, PhoneticVocabulary,
+};
 pub use rules::{
     eval_rule_condition_json, eval_rule_condition_kv, eval_rule_condition_value,
     infer_target_collection, interpolate_string, interpolate_value, Action, Rule, RuleBuilder,
@@ -132,12 +163,12 @@ pub use timeseries::{
 pub use types::{
     BatchOperation, BitemporalEntry, BranchDiff, CentralityType, CheckpointStats, ComponentType,
     CypherResult, DatabaseEvent, DictStats, Direction, Durability, FtsFuzzyHit, FtsFuzzyOptions,
-    FtsHit, FtsSuggestion, GraphEdge, GraphNode, HlcMutationOutcome, HlcRecord, HnswConfig,
-    HybridHit, ImpactAnalysis, IndexOptions, JsonEntry, JsonIndexInfo, JsonRevisionInfo, KvEntry,
-    LiveQueryDiff, MaterializedViewInfo, MergeResult, MergeStrategy, MutationResult, NodeScore,
-    PageRankConfig, PathEdge, RedoResult, ResourceProfile, SqlQueryResult, TableDiff,
-    TableStorageStat, UndoEntry, UndoResult, VectorElementType, VectorHit, VectorIndexInfo,
-    VectorMetric, Version, WeightedPath,
+    FtsHit, FtsPhoneticHit, FtsSuggestion, GraphEdge, GraphNode, HlcMutationOutcome, HlcRecord,
+    HnswConfig, HybridHit, ImpactAnalysis, IndexOptions, JsonEntry, JsonIndexInfo,
+    JsonRevisionInfo, KvEntry, LiveQueryDiff, MaterializedViewInfo, MergeResult, MergeStrategy,
+    MutationResult, NodeScore, PageRankConfig, PathEdge, PhoneticAlgorithm, RedoResult,
+    ResourceProfile, SqlQueryResult, TableDiff, TableStorageStat, UndoEntry, UndoResult,
+    VectorElementType, VectorHit, VectorIndexInfo, VectorMetric, Version, WeightedPath,
 };
 pub use wear::{FlashWearTelemetry, FlashWearTier, FlashWearTracker, WearLevelingPolicy};
 

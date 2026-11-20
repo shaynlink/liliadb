@@ -456,10 +456,7 @@ fn test_h3_sql_scalar_functions() {
     // 6. lilia_h3_k_ring (returns JSON array)
     let kring_res = db
         .sql()
-        .query_with_params(
-            "SELECT lilia_h3_k_ring(?1, 1) AS disk;",
-            &[json!(cell_val)],
-        )
+        .query_with_params("SELECT lilia_h3_k_ring(?1, 1) AS disk;", &[json!(cell_val)])
         .unwrap();
     let disk_json = kring_res.rows[0][0].as_str().unwrap();
     let disk_arr: Vec<u64> = serde_json::from_str(disk_json).unwrap();

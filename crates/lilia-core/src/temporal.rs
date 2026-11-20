@@ -1,7 +1,12 @@
-#![allow(clippy::missing_errors_doc, clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 
-use serde::{Deserialize, Serialize};
 use crate::error::{ErrorCode, LiliaError, Result};
+use serde::{Deserialize, Serialize};
 
 pub const BITEMPORAL_INFINITY: i64 = i64::MAX;
 pub const BITEMPORAL_NEG_INFINITY: i64 = i64::MIN;
@@ -91,13 +96,25 @@ pub fn parse_iso_to_ms(s: &str) -> Result<i64> {
     }
 
     let year: i32 = date_segs[0].parse().map_err(|_| {
-        LiliaError::new(ErrorCode::InvalidInput, format!("invalid year: {}", date_segs[0]), false)
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid year: {}", date_segs[0]),
+            false,
+        )
     })?;
     let month: u32 = date_segs[1].parse().map_err(|_| {
-        LiliaError::new(ErrorCode::InvalidInput, format!("invalid month: {}", date_segs[1]), false)
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid month: {}", date_segs[1]),
+            false,
+        )
     })?;
     let day: u32 = date_segs[2].parse().map_err(|_| {
-        LiliaError::new(ErrorCode::InvalidInput, format!("invalid day: {}", date_segs[2]), false)
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid day: {}", date_segs[2]),
+            false,
+        )
     })?;
 
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
@@ -135,10 +152,18 @@ pub fn parse_iso_to_ms(s: &str) -> Result<i64> {
         }
 
         let hour: i64 = time_segs[0].parse().map_err(|_| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid hour: {}", time_segs[0]), false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid hour: {}", time_segs[0]),
+                false,
+            )
         })?;
         let min: i64 = time_segs[1].parse().map_err(|_| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid minute: {}", time_segs[1]), false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid minute: {}", time_segs[1]),
+                false,
+            )
         })?;
 
         let mut sec: i64 = 0;
@@ -172,11 +197,19 @@ pub fn parse_iso_to_ms(s: &str) -> Result<i64> {
 fn parse_tz_offset(s: &str) -> Result<i64> {
     let parts: Vec<&str> = s.split(':').collect();
     let hours: i64 = parts[0].parse().map_err(|_| {
-        LiliaError::new(ErrorCode::InvalidInput, format!("invalid timezone offset: {s}"), false)
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid timezone offset: {s}"),
+            false,
+        )
     })?;
     let mins: i64 = if parts.len() > 1 {
         parts[1].parse().map_err(|_| {
-            LiliaError::new(ErrorCode::InvalidInput, format!("invalid timezone offset: {s}"), false)
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid timezone offset: {s}"),
+                false,
+            )
         })?
     } else {
         0
@@ -296,12 +329,17 @@ impl BitemporalInterval {
     pub fn inclusive_days(from_day: impl AsRef<str>, to_day: impl AsRef<str>) -> Result<Self> {
         let from_ms = parse_iso_to_ms(from_day.as_ref())?;
         let to_str = to_day.as_ref().trim();
-        let to_ms = if to_str.eq_ignore_ascii_case("infinity") || to_str.eq_ignore_ascii_case("+infinity") {
+        let to_ms = if to_str.eq_ignore_ascii_case("infinity")
+            || to_str.eq_ignore_ascii_case("+infinity")
+        {
             BITEMPORAL_INFINITY
         } else {
             let base_to = parse_iso_to_ms(to_str)?;
             // If user supplied a date-only YYYY-MM-DD, add 24 hours to include the entire day
-            if !to_str.contains('T') && !to_str.contains(' ') && base_to < BITEMPORAL_INFINITY - 86_400_000 {
+            if !to_str.contains('T')
+                && !to_str.contains(' ')
+                && base_to < BITEMPORAL_INFINITY - 86_400_000
+            {
                 base_to + 86_400_000
             } else {
                 base_to
@@ -330,7 +368,10 @@ impl BitemporalInterval {
         let start = self.from.max(other.from);
         let end = self.to.min(other.to);
         if start < end {
-            Some(Self { from: start, to: end })
+            Some(Self {
+                from: start,
+                to: end,
+            })
         } else {
             None
         }

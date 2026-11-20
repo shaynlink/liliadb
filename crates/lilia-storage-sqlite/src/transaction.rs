@@ -66,11 +66,13 @@ pub(crate) fn apply_fts_index(
         return Ok(disk_result(None, false));
     }
 
+    let indexed_content = lilia_core::prepare_cjk_for_indexing(&clean_content);
+
     let stmt_ins = tx.slot(StmtSlot::fts_insert_for(in_memory_db))?;
     stmt_ins.reset()?;
     stmt_ins.bind_text_static(1, collection)?;
     stmt_ins.bind_text_static(2, doc_id)?;
-    stmt_ins.bind_text_static(3, &clean_content)?;
+    stmt_ins.bind_text_static(3, &indexed_content)?;
     stmt_ins.step()?;
     stmt_ins.reset()?;
 
@@ -85,7 +87,7 @@ pub(crate) fn apply_fts_index(
          ON CONFLICT(collection, term) DO UPDATE SET doc_count = doc_count + 1;"
     };
     let mut term_stmt = tx.conn().prepare(terms_sql)?;
-    let unique_tokens = tokenize_terms(&clean_content);
+    let unique_tokens = tokenize_terms(&indexed_content);
     for token in unique_tokens {
         term_stmt.reset()?;
         term_stmt.bind_text_static(1, collection)?;

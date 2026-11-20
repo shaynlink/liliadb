@@ -76,7 +76,9 @@ fn test_markov_learning_and_prefetch_hit() {
     for _ in 0..3 {
         let _ = db.json_get("conversations", "conv_12").expect("get conv");
         for i in 1..=5 {
-            let _ = db.json_get("messages", &format!("msg_{i}")).expect("get msg");
+            let _ = db
+                .json_get("messages", &format!("msg_{i}"))
+                .expect("get msg");
         }
         let _ = db.json_get("profiles", "alice").expect("get alice");
         let _ = db.json_get("profiles", "bob").expect("get bob");
@@ -260,7 +262,8 @@ fn test_all_data_models_caching_and_prefetching() {
 
     // Bitemporal
     let bt_store = db.bitemporal();
-    let period = lilia_core::BitemporalInterval::inclusive_days("2026-11-01", "2026-11-30").unwrap();
+    let period =
+        lilia_core::BitemporalInterval::inclusive_days("2026-11-01", "2026-11-30").unwrap();
     let point = lilia_core::BitemporalPoint::at("2026-11-15").unwrap();
 
     let res = db

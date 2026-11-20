@@ -1,8 +1,8 @@
 #![allow(clippy::missing_errors_doc)]
 
+use lilia_sqlite_native::StmtSlot;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use lilia_sqlite_native::StmtSlot;
 
 use crate::storage::{normalize_limit, parse_version, validate_name};
 use crate::Database;
@@ -2122,13 +2122,11 @@ impl<'a> JsonStore<'a> {
     }
 
     pub fn delete(&self, space: &str, id: &str) -> Result<bool> {
-        let results = self
-            .db
-            .batch(&[lilia_core::BatchOperation::JsonDelete {
-                space: space.to_owned(),
-                id: id.to_owned(),
-                if_version: None,
-            }])?;
+        let results = self.db.batch(&[lilia_core::BatchOperation::JsonDelete {
+            space: space.to_owned(),
+            id: id.to_owned(),
+            if_version: None,
+        }])?;
         Ok(results.first().is_some_and(|r| r.deleted))
     }
 

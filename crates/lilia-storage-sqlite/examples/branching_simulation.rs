@@ -10,7 +10,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Liliadb Instant Database Branching & What-If Simulation   ");
     println!("============================================================");
 
-    println!("\n[1] Initializing production database at: {}", db_path.display());
+    println!(
+        "\n[1] Initializing production database at: {}",
+        db_path.display()
+    );
     let db = Database::open(DatabaseOptions::durable(&db_path))?;
 
     // Seed production catalog
@@ -58,8 +61,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t0 = std::time::Instant::now();
     let simulation = db.branch("simulation_promo_noel")?;
     let branch_latency = t0.elapsed();
-    println!("  -> Branch 'simulation_promo_noel' created in {:?}", branch_latency);
-    println!("  -> Dirty pages in memory: {}", simulation.dirty_page_count());
+    println!(
+        "  -> Branch 'simulation_promo_noel' created in {:?}",
+        branch_latency
+    );
+    println!(
+        "  -> Dirty pages in memory: {}",
+        simulation.dirty_page_count()
+    );
     println!("  -> Extra disk bytes: 0 bytes");
 
     // [3] Apply simulated modifications inside the isolated branch
@@ -92,7 +101,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .scalar_f64()
         .unwrap_or(0.0);
     println!("  -> Branch Projected Margin: ${projected_margin:.2}");
-    println!("  -> Branch Dirty Pages in RAM: {}", simulation.dirty_page_count());
+    println!(
+        "  -> Branch Dirty Pages in RAM: {}",
+        simulation.dirty_page_count()
+    );
     println!("  -> Branch RAM Usage: {} bytes", simulation.memory_bytes());
 
     // Verify main database is 100% unaffected
@@ -111,11 +123,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let branch = db.branch(&name)?;
 
         let multiplier = 1.0 - (discount_pct as f64 / 100.0);
-        branch.json().update_all("products", doc! { "$mul": { "price": multiplier } })?;
+        branch
+            .json()
+            .update_all("products", doc! { "$mul": { "price": multiplier } })?;
 
         // Simulated volume elasticity: volume increases as discount increases
         let volume_factor = 1.0 + (discount_pct as f64 * 0.08); // 8% more sales per 1% discount
-        let simulated_revenue = (1500.0 * multiplier + 1200.0 * multiplier + 600.0 * multiplier) * volume_factor;
+        let simulated_revenue =
+            (1500.0 * multiplier + 1200.0 * multiplier + 600.0 * multiplier) * volume_factor;
 
         scenarios.push((name, branch, simulated_revenue, discount_pct));
     }
@@ -127,7 +142,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (best_name, _, best_rev, best_pct) = scenarios.first().unwrap();
-    println!("\n  Optimal Scenario Chosen: {} ({}% discount) -> ${:.2}", best_name, best_pct, best_rev);
+    println!(
+        "\n  Optimal Scenario Chosen: {} ({}% discount) -> ${:.2}",
+        best_name, best_pct, best_rev
+    );
 
     // [5] Fusion Atomique dans Main
     println!("\n[5] Atomic Merge into Production (FastForward):");

@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Target entity in LiliaDB that can be tracked and prefetched.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -114,7 +114,12 @@ impl StateNode {
         }
     }
 
-    fn record_transition(&mut self, target: AccessTarget, max_transitions: usize, decay_threshold: u16) {
+    fn record_transition(
+        &mut self,
+        target: AccessTarget,
+        max_transitions: usize,
+        decay_threshold: u16,
+    ) {
         if let Some((_, count)) = self.transitions.iter_mut().find(|(t, _)| *t == target) {
             *count = count.saturating_add(1);
         } else {
@@ -124,7 +129,7 @@ impl StateNode {
         self.total_weight = self.total_weight.saturating_add(1);
 
         // Sort descending by count
-        self.transitions.sort_by(|a, b| b.1.cmp(&a.1));
+        self.transitions.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         // Truncate to max transitions allowed
         if self.transitions.len() > max_transitions {
@@ -290,9 +295,7 @@ impl MarkovModel {
 
     /// Mutably records an access prediction increment.
     pub fn mark_predictions_generated(&mut self, count: usize) {
-        self.predictions_generated = self
-            .predictions_generated
-            .saturating_add(count as u64);
+        self.predictions_generated = self.predictions_generated.saturating_add(count as u64);
     }
 
     /// Returns telemetry and memory statistics for the Markov model.

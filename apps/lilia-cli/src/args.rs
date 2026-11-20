@@ -100,6 +100,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: LedgerCommand,
     },
+    Zk {
+        #[command(subcommand)]
+        command: ZkCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -275,19 +279,58 @@ pub(crate) enum LedgerCommand {
     VerifyDb,
 }
 
+#[derive(Debug, Subcommand)]
+pub(crate) enum ZkCommand {
+    /// Generate a cryptographic proving key (PK) and verifying key (VK) for circuit templates
+    Setup {
+        #[arg(long, default_value = "solde_age")]
+        template: String,
+        #[arg(long)]
+        out_pk: PathBuf,
+        #[arg(long)]
+        out_vk: PathBuf,
+    },
+    /// Export the Poseidon cryptographic commitment anchor for a document
+    Commit {
+        space: String,
+        id: String,
+        #[arg(long)]
+        salt: Option<String>,
+    },
+    /// Generate a Zero-Knowledge Proof certifying a condition (e.g. "balance >= 1000 AND age >= 18")
+    /// on a private document without revealing the private values
+    Prove {
+        space: String,
+        id: String,
+        #[arg(long)]
+        condition: String,
+        #[arg(long)]
+        salt: Option<String>,
+        #[arg(long)]
+        pk: Option<PathBuf>,
+    },
+    /// Verify a Zero-Knowledge Proof mathematically in < 1 ms without seeing private data
+    Verify {
+        #[arg(long)]
+        proof: PathBuf,
+        #[arg(long)]
+        vk: Option<PathBuf>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub(crate) enum DirectionArg {
     #[default]
-    Outgoing,
-    Incoming,
+    Outbound,
+    Inbound,
     Both,
 }
 
 impl From<DirectionArg> for lilia_core::Direction {
     fn from(arg: DirectionArg) -> Self {
         match arg {
-            DirectionArg::Outgoing => Self::Outgoing,
-            DirectionArg::Incoming => Self::Incoming,
+            DirectionArg::Outbound => Self::Outbound,
+            DirectionArg::Inbound => Self::Inbound,
             DirectionArg::Both => Self::Both,
         }
     }
@@ -353,6 +396,12 @@ pub(crate) enum FtsCommand {
         query: String,
         #[arg(long, default_value_t = 1)]
         max_distance: u8,
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
+    },
+    Phonetic {
+        collection: String,
+        query: String,
         #[arg(long, default_value_t = 10)]
         limit: u32,
     },

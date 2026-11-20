@@ -504,6 +504,87 @@ impl<'a> JsonCollection<'a> {
         self.db
             .demote_collection(CollectionKind::Json, &self.name, target)
     }
+
+    /// Computes the Poseidon commitment anchor for a document's values and salt.
+    #[cfg(feature = "zk")]
+    pub fn zk_commit(&self, id: &str, salt: Option<&str>) -> Result<String> {
+        let entry = self.get(id)?.ok_or_else(|| {
+            LiliaError::new(
+                ErrorCode::Storage,
+                format!("document {id} not found"),
+                false,
+            )
+        })?;
+        let json_val = entry.to_json_value();
+        let balance = json_val.get("balance").and_then(Value::as_u64).unwrap_or(0);
+        let age = json_val.get("age").and_then(Value::as_u64).unwrap_or(0);
+
+        let doc_id_fr = lilia_zk::str_to_fr(id);
+        let balance_fr = lilia_zk::u64_to_fr(balance);
+        let age_fr = lilia_zk::u64_to_fr(age);
+        let salt_fr = match salt {
+            Some(s) => lilia_zk::hex_to_fr(s).unwrap_or_else(|_| lilia_zk::str_to_fr(s)),
+            None => {
+                if let Some(s) = json_val.get("_salt").and_then(Value::as_str) {
+                    lilia_zk::hex_to_fr(s).unwrap_or_else(|_| lilia_zk::str_to_fr(s))
+                } else if let Some(s) = json_val.get("salt").and_then(Value::as_str) {
+                    lilia_zk::hex_to_fr(s).unwrap_or_else(|_| lilia_zk::str_to_fr(s))
+                } else {
+                    lilia_zk::str_to_fr(&format!("{}:{id}", self.name))
+                }
+            }
+        };
+
+        let commitment = lilia_zk::poseidon_hash_4(doc_id_fr, balance_fr, age_fr, salt_fr);
+        Ok(lilia_zk::fr_to_hex(&commitment))
+    }
+
+    /// Generates a Zero-Knowledge Proof (zk-SNARK) certifying conditions on the document
+    /// without disclosing its exact values.
+    #[cfg(feature = "zk")]
+    pub fn zk_prove(
+        &self,
+        id: &str,
+        statement: &lilia_zk::ZkStatement,
+        salt: Option<&str>,
+        pk: Option<&lilia_zk::ProvingKey>,
+    ) -> Result<lilia_zk::ZkProofBundle> {
+        let entry = self.get(id)?.ok_or_else(|| {
+            LiliaError::new(
+                ErrorCode::Storage,
+                format!("document {id} not found"),
+                false,
+            )
+        })?;
+        let json_val = entry.to_json_value();
+
+        let mut witness = std::collections::BTreeMap::new();
+        if let Some(b) = json_val.get("balance").and_then(Value::as_u64) {
+            witness.insert("balance".to_string(), b);
+        }
+        if let Some(a) = json_val.get("age").and_then(Value::as_u64) {
+            witness.insert("age".to_string(), a);
+        }
+
+        let salt_fr = match salt {
+            Some(s) => lilia_zk::hex_to_fr(s)
+                .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?,
+            None => {
+                if let Some(s) = json_val.get("_salt").and_then(Value::as_str) {
+                    lilia_zk::hex_to_fr(s)
+                        .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?
+                } else if let Some(s) = json_val.get("salt").and_then(Value::as_str) {
+                    lilia_zk::hex_to_fr(s)
+                        .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?
+                } else {
+                    lilia_zk::str_to_fr(&format!("{}:{id}", self.name))
+                }
+            }
+        };
+
+        lilia_zk::ZkProver::prove_statement(id, statement, &witness, salt_fr, pk)
+            .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))
+    }
 }
 
 /// Typed handle for a tier-routed `TimeSeries` stream.
@@ -729,6 +810,16 @@ impl FtsCollection<'_> {
     ) -> Result<Vec<FtsFuzzyHit>> {
         self.db
             .fts_fuzzy_search(&self.name, query, max_distance, limit)
+    }
+
+    /// # Errors
+    /// Propagates errors from the operations it performs.
+    pub fn phonetic_search(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<lilia_core::FtsPhoneticHit>> {
+        self.db.fts_phonetic_search(&self.name, query, limit)
     }
 
     /// # Errors

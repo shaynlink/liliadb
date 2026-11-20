@@ -139,13 +139,13 @@ fn test_memory_tier_zero_disk_and_all_models() {
         graph_col.add_edge("a", "b", "calls").unwrap();
         assert_eq!(
             graph_col
-                .reachability(&["a".to_string()], Direction::Outgoing)
+                .reachability(&["a".to_string()], Direction::Outbound)
                 .unwrap(),
             vec!["a", "b"]
         );
         assert_eq!(
             graph_col
-                .neighbors("a", Direction::Outgoing, Some("calls"))
+                .neighbors("a", Direction::Outbound, Some("calls"))
                 .unwrap(),
             vec!["b"]
         );

@@ -99,6 +99,14 @@ pub struct DatabaseOptions {
     pub parity_config: Option<lilia_core::ParityConfig>,
     /// Dynamic flash wear leveling and adaptive WAL fsync policy.
     pub wear_policy: lilia_core::WearLevelingPolicy,
+    /// Optional Shared Memory (SHM) sub-engine configuration for sub-50ns zero-copy multi-process access.
+    pub shm_options: Option<lilia_shm::ShmOptions>,
+    /// In-memory Optimistic Concurrency Control (OCC) configuration.
+    pub occ_options: crate::occ::OccOptions,
+    /// Target hardware energy profile for battery-aware query profiling (defaults based on `profile`).
+    pub energy_profile: Option<lilia_core::DeviceEnergyProfile>,
+    /// Whether the crash-resistant dual-header envelope is enabled.
+    pub envelope_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +154,10 @@ impl DatabaseOptions {
             analytics_options: crate::columnar::AnalyticsOptions::default(),
             parity_config: None,
             wear_policy: lilia_core::WearLevelingPolicy::default(),
+            shm_options: None,
+            occ_options: crate::occ::OccOptions::default(),
+            energy_profile: None,
+            envelope_enabled: false,
         }
     }
 
@@ -187,6 +199,10 @@ impl DatabaseOptions {
             analytics_options: crate::columnar::AnalyticsOptions::default(),
             parity_config: Some(lilia_core::ParityConfig::default()),
             wear_policy: lilia_core::WearLevelingPolicy::default(),
+            shm_options: None,
+            occ_options: crate::occ::OccOptions::default(),
+            energy_profile: Some(lilia_core::DeviceEnergyProfile::Smartphone),
+            envelope_enabled: false,
         }
     }
 
@@ -228,6 +244,10 @@ impl DatabaseOptions {
             analytics_options: crate::columnar::AnalyticsOptions::default(),
             parity_config: Some(lilia_core::ParityConfig::default()),
             wear_policy: lilia_core::WearLevelingPolicy::default(),
+            shm_options: None,
+            occ_options: crate::occ::OccOptions::default(),
+            energy_profile: Some(lilia_core::DeviceEnergyProfile::Smartwatch),
+            envelope_enabled: false,
         }
     }
 
@@ -278,7 +298,35 @@ impl DatabaseOptions {
                 enabled: false,
                 ..Default::default()
             },
+            shm_options: None,
+            occ_options: crate::occ::OccOptions::default(),
+            energy_profile: None,
+            envelope_enabled: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_envelope(mut self, enabled: bool) -> Self {
+        self.envelope_enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub fn with_occ_options(mut self, options: crate::occ::OccOptions) -> Self {
+        self.occ_options = options;
+        self
+    }
+
+    #[must_use]
+    pub fn with_energy_profile(mut self, profile: lilia_core::DeviceEnergyProfile) -> Self {
+        self.energy_profile = Some(profile);
+        self
+    }
+
+    #[must_use]
+    pub fn with_shared_memory(mut self, options: lilia_shm::ShmOptions) -> Self {
+        self.shm_options = Some(options);
+        self
     }
 
     #[must_use]
@@ -568,6 +616,14 @@ pub struct Database {
             std::collections::HashMap<String, Arc<std::sync::RwLock<lilia_core::TermTrie>>>,
         >,
     >,
+    pub(crate) fts_phonetic_cache: Arc<
+        std::sync::RwLock<
+            std::collections::HashMap<
+                String,
+                Arc<std::sync::RwLock<lilia_core::PhoneticVocabulary>>,
+            >,
+        >,
+    >,
     pub(crate) live_query_manager: Arc<crate::live_query::LiveQueryManager>,
     pub(crate) rule_engine: Arc<crate::rules::RuleEngine>,
     #[allow(dead_code)]
@@ -593,6 +649,10 @@ pub struct Database {
     pub(crate) wear_manager: Arc<crate::wear::FlashWearManager>,
     pub(crate) wasm_registry: Arc<crate::wasm_udf::WasmUdfRegistry>,
     pub(crate) jit_cache: Arc<lilia_core::json::JitPredicateCache>,
+    pub(crate) shm_engine: Option<Arc<lilia_shm::ShmEngine>>,
+    pub(crate) occ_manager: Arc<crate::occ::OccManager>,
+    pub(crate) dataflow_engine: Arc<crate::dataflow::DataflowEngine>,
+    pub(crate) energy_profiler: Arc<std::sync::RwLock<crate::energy::BatteryAwareProfiler>>,
 }
 
 #[derive(Debug)]
@@ -644,6 +704,7 @@ impl WalBackpressure {
             "journal_size_limit",
             i64::try_from(limit_bytes).unwrap_or(-1),
         )?;
+
         Ok(Self { limit_frames })
     }
 
@@ -783,8 +844,8 @@ pub(crate) fn op_requires_sync(op: &BatchOperation) -> bool {
             if_version: Some(_),
             ..
         } | BatchOperation::JsonPutHlc { .. }
-        | BatchOperation::BitemporalPut { .. }
-        | BatchOperation::BitemporalDelete { .. }
+            | BatchOperation::BitemporalPut { .. }
+            | BatchOperation::BitemporalDelete { .. }
     )
 }
 
@@ -945,6 +1006,9 @@ impl Database {
             ));
         }
         prepare_parent(&options.path)?;
+        if options.path.exists() {
+            let _ = crate::envelope::EnvelopeManager::verify_and_heal_file(&options.path)?;
+        }
         let synchronous = match options.durability {
             Durability::Durable => "FULL",
             Durability::Balanced => "NORMAL",
@@ -1172,6 +1236,7 @@ impl Database {
         let events = Arc::new(tokio::sync::broadcast::channel(1024).0);
         let hnsw_cache = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
         let fts_trie_cache = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+        let fts_phonetic_cache = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
         let ring_buffer = Arc::new(crate::ring_buffer::RingBufferEngine::start(
             &options.ring_buffer,
             &resources,
@@ -1217,12 +1282,14 @@ impl Database {
         }
 
         let rule_engine = Arc::new(crate::rules::RuleEngine::new());
+        let dataflow_engine = Arc::new(crate::dataflow::DataflowEngine::new());
         {
             let writer_guard = resources.writer.lock().map_err(|_| {
                 LiliaError::new(ErrorCode::Storage, "database lock poisoned", false)
             })?;
             if let Some(writer_conn) = writer_guard.as_ref() {
                 rule_engine.load_from_connection(writer_conn)?;
+                dataflow_engine.load_persisted_views(writer_conn);
             }
         }
 
@@ -1327,6 +1394,37 @@ impl Database {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(worker);
         }
 
+        let shm_engine = if let Some(ref shm_opts) = options.shm_options {
+            Some(Arc::new(
+                lilia_shm::ShmEngine::open_or_create(shm_opts.clone()).map_err(|e| {
+                    LiliaError::new(
+                        ErrorCode::Storage,
+                        format!("failed to open SHM sub-engine: {e}"),
+                        false,
+                    )
+                })?,
+            ))
+        } else {
+            None
+        };
+
+        let occ_manager = Arc::new(crate::occ::OccManager::new(options.occ_options));
+
+        let energy_profile = options
+            .energy_profile
+            .unwrap_or_else(|| match options.profile {
+                ResourceProfile::Constrained => lilia_core::DeviceEnergyProfile::Smartwatch,
+                ResourceProfile::Mobile | ResourceProfile::Server => {
+                    lilia_core::DeviceEnergyProfile::Smartphone
+                }
+            });
+        let energy_profiler = Arc::new(std::sync::RwLock::new(
+            crate::energy::BatteryAwareProfiler::new(
+                energy_profile,
+                Arc::clone(wear_manager.tracker()),
+            ),
+        ));
+
         Ok(Self {
             path: options.path,
             #[cfg(all(feature = "analytics", not(target_arch = "wasm32")))]
@@ -1342,6 +1440,7 @@ impl Database {
             events,
             hnsw_cache,
             fts_trie_cache,
+            fts_phonetic_cache,
             live_query_manager: Arc::new(crate::live_query::LiveQueryManager::new()),
             rule_engine,
             undo_log_capacity: options.undo_log_capacity,
@@ -1365,6 +1464,10 @@ impl Database {
             wear_manager,
             wasm_registry,
             jit_cache: Arc::new(lilia_core::json::JitPredicateCache::default()),
+            shm_engine,
+            occ_manager,
+            dataflow_engine,
+            energy_profiler,
         })
     }
 
@@ -1372,6 +1475,83 @@ impl Database {
     #[must_use]
     pub fn jit_cache(&self) -> &Arc<lilia_core::json::JitPredicateCache> {
         &self.jit_cache
+    }
+
+    /// Access the shared memory sub-engine if enabled.
+    #[must_use]
+    pub fn shm_engine(&self) -> Option<Arc<lilia_shm::ShmEngine>> {
+        self.shm_engine.as_ref().map(Arc::clone)
+    }
+
+    /// Create a lightweight standalone reader for secondary processes (widgets, daemons).
+    pub fn shm_reader(&self) -> Option<lilia_shm::ShmReader> {
+        self.shm_engine
+            .as_ref()
+            .and_then(|e| e.create_reader().ok())
+    }
+
+    /// Read a key-value entry zero-copy from shared memory (< 50 nanoseconds).
+    pub fn shm_get<'a>(
+        &'a self,
+        space: &str,
+        key: &[u8],
+    ) -> Option<lilia_shm::ShmZeroCopyEntry<'a>> {
+        self.shm_engine
+            .as_ref()
+            .and_then(|e| e.get_zero_copy(space, key))
+    }
+
+    /// Read a binary JSON entry zero-copy from shared memory (< 50 nanoseconds).
+    pub fn shm_json_get<'a>(
+        &'a self,
+        space: &str,
+        id: &str,
+    ) -> Option<lilia_shm::ShmZeroCopyJson<'a>> {
+        self.shm_engine
+            .as_ref()
+            .and_then(|e| e.json_get_zero_copy(space, id))
+    }
+
+    pub(crate) fn sync_operations_to_shm(
+        &self,
+        operations: &[BatchOperation],
+        results: &[MutationResult],
+    ) {
+        let Some(ref shm) = self.shm_engine else {
+            return;
+        };
+        for (op, res) in operations.iter().zip(results) {
+            match op {
+                BatchOperation::KvSet {
+                    namespace,
+                    key,
+                    value,
+                    expires_at_ms,
+                    ..
+                } => {
+                    let version = res.version.unwrap_or(1);
+                    let _ = shm.put_kv(namespace, key, value, version, *expires_at_ms);
+                }
+                BatchOperation::KvDelete { namespace, key, .. } => {
+                    let _ = shm.delete(namespace, key);
+                }
+                BatchOperation::JsonPut {
+                    space, id, value, ..
+                } => {
+                    let version = res.version.unwrap_or(1);
+                    if let Ok(bytes) = serde_json::to_vec(value) {
+                        if let Ok(binary_doc) = lilia_core::json::parse_json_slice_to_binary(&bytes)
+                        {
+                            let _ = shm.put_json(space, id, binary_doc.as_bytes(), version, None);
+                        }
+                    }
+                }
+                BatchOperation::JsonDelete { space, id, .. } => {
+                    let _ = shm.delete(space, id.as_bytes());
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Access the Row-Level Security (RLS) and Data Masking manager.
@@ -2264,6 +2444,113 @@ impl Database {
         Ok(out)
     }
 
+    /// Creates and registers a new Paillier homomorphic encryption compartment.
+    pub fn create_paillier_compartment(
+        &self,
+        id: &str,
+        passphrase_or_key: &str,
+        bits: usize,
+    ) -> Result<lilia_core::PaillierKeypair> {
+        crate::storage::validate_name("compartment_id", id)?;
+        let salt: [u8; 16] = rand::random();
+        let key_material = lilia_core::KeyMaterial::from_passphrase(passphrase_or_key, &salt);
+        let verify_tag = key_material.compute_verify_tag(&salt);
+
+        let keypair = lilia_core::PaillierKeypair::generate(bits)?;
+
+        let writer = self.lock_writer()?;
+        let mut stmt = writer.prepare(
+            "INSERT INTO _lilia_compartments(id, salt, verify_hash, created_at_ms) \
+             VALUES(?1, ?2, ?3, ?4) \
+             ON CONFLICT(id) DO UPDATE SET \
+               salt = excluded.salt, \
+               verify_hash = excluded.verify_hash, \
+               created_at_ms = excluded.created_at_ms;",
+        )?;
+        stmt.bind_text_static(1, id)?;
+        stmt.bind_blob_static(2, &salt)?;
+        stmt.bind_blob_static(3, &verify_tag)?;
+        stmt.bind_int64(4, crate::storage::now_ms())?;
+        stmt.step()?;
+        drop(stmt);
+
+        self.key_registry.register_key(id, key_material);
+        self.key_registry.register_paillier_keypair(id, &keypair);
+        self.cache.clear();
+        Ok(keypair)
+    }
+
+    /// Registers a Paillier public key for zero-knowledge / untrusted aggregation server mode.
+    pub fn register_paillier_public_key(
+        &self,
+        id: &str,
+        pk: lilia_core::PaillierPublicKey,
+    ) -> Result<()> {
+        crate::storage::validate_name("compartment_id", id)?;
+        self.key_registry
+            .register_paillier_public(id, std::sync::Arc::new(pk));
+        self.cache.clear();
+        Ok(())
+    }
+
+    /// Registers a complete Paillier keypair in memory for compartment `id`.
+    pub fn register_paillier_keypair(&self, id: &str, keypair: &lilia_core::PaillierKeypair) {
+        self.key_registry.register_paillier_keypair(id, keypair);
+        self.cache.clear();
+    }
+
+    /// Exports the Paillier public key for compartment `id` if available.
+    pub fn export_paillier_public_key(&self, id: &str) -> Result<lilia_core::PaillierPublicKey> {
+        self.key_registry
+            .get_paillier_public(id)
+            .map(|pk| (*pk).clone())
+            .ok_or_else(|| {
+                LiliaError::new(
+                    ErrorCode::NotFound,
+                    format!("Paillier public key for compartment '{id}' not found"),
+                    false,
+                )
+            })
+    }
+
+    /// Helper to decrypt a Paillier envelope string using the compartment's private key.
+    pub fn decrypt_paillier_envelope(&self, envelope_str: &str, comp_id: &str) -> Result<f64> {
+        let env = lilia_core::EncryptedEnvelope::parse(envelope_str).ok_or_else(|| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                "invalid Paillier envelope string",
+                false,
+            )
+        })?;
+        let sk = self
+            .key_registry
+            .get_paillier_private(comp_id)
+            .ok_or_else(|| {
+                LiliaError::new(
+                    ErrorCode::Unauthorized,
+                    format!("compartment '{comp_id}' Paillier private key is locked"),
+                    false,
+                )
+            })?;
+        let pk = self
+            .key_registry
+            .get_paillier_public(comp_id)
+            .ok_or_else(|| {
+                LiliaError::new(
+                    ErrorCode::Unauthorized,
+                    format!("compartment '{comp_id}' Paillier public key not found"),
+                    false,
+                )
+            })?;
+        let ct = lilia_core::PaillierCiphertext::from_bytes(&env.ciphertext)?;
+        if ct.scale() == 0 {
+            let val = lilia_core::decrypt_paillier_i64(&sk, &pk, &ct)?;
+            Ok(val as f64)
+        } else {
+            lilia_core::decrypt_paillier_f64(&sk, &pk, &ct)
+        }
+    }
+
     /// Configures the Field-Level Encryption policy for a document collection.
     pub fn set_fle_policy(&self, space: &str, policy: lilia_core::FlePolicy) -> Result<()> {
         crate::storage::validate_name("space", space)?;
@@ -2277,6 +2564,18 @@ impl Database {
         self.catalog
             .spec_for(CollectionKind::Json, space)
             .fle_policy
+    }
+
+    /// Mathematically verifies a Zero-Knowledge Proof bundle in < 1 ms without needing
+    /// private document values.
+    #[cfg(feature = "zk")]
+    pub fn zk_verify(
+        &self,
+        bundle: &lilia_zk::ZkProofBundle,
+        vk: Option<&lilia_zk::VerifyingKey>,
+    ) -> Result<lilia_zk::ZkVerificationReport> {
+        lilia_zk::ZkVerifier::verify(bundle, vk)
+            .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))
     }
 
     pub fn checkpoint_stats(&self) -> CheckpointStats {
@@ -2304,7 +2603,8 @@ impl Database {
         let _ = self.autotune.flush(&self.index_env());
         self.ring_buffer.shutdown_and_drain();
         let resources = Arc::clone(&self.resources);
-        self.lifecycle.close(timeout, move || resources.close(markov_blob))
+        self.lifecycle
+            .close(timeout, move || resources.close(markov_blob))
     }
 
     #[must_use]
@@ -2379,6 +2679,59 @@ impl Database {
         } else {
             Ok(false)
         }
+    }
+
+    /// Returns the active device energy profile used for query profiling.
+    #[must_use]
+    pub fn energy_profile(&self) -> lilia_core::DeviceEnergyProfile {
+        self.energy_profiler
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .profile()
+    }
+
+    /// Sets the active device energy profile used for query profiling.
+    pub fn set_energy_profile(&self, profile: lilia_core::DeviceEnergyProfile) {
+        self.energy_profiler
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_profile(profile);
+    }
+
+    /// Access a clone of the battery-aware energy profiler.
+    #[must_use]
+    pub fn energy_profiler(&self) -> crate::energy::BatteryAwareProfiler {
+        self.energy_profiler
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Profiles and diagnoses a SQL query, returning a pedagogical and predictive diagnostic report.
+    pub fn explain_diagnose(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<lilia_core::QueryEnergyDiagnostic> {
+        let conn = self.read_lock()?;
+        let profiler = self.energy_profiler();
+        profiler.diagnose_sql(&conn, sql, params)
+    }
+
+    /// Profiles the physical execution of a query, returning both the query results and the energy diagnostic report.
+    pub fn profile_sql(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<(
+        lilia_core::SqlQueryResult,
+        lilia_core::QueryEnergyDiagnostic,
+    )> {
+        let conn = self.read_lock()?;
+        let profiler = self.energy_profiler();
+        let diag = profiler.diagnose_sql(&conn, sql, params)?;
+        let result = self.sql_query(sql, params)?;
+        Ok((result, diag))
     }
 
     /// Returns a real-time snapshot of physical flash wear leveling telemetry.
@@ -2523,6 +2876,37 @@ impl Database {
             let _ = crate::cas::purge_orphan_blobs(&writer, &self.cas);
         }
         Ok(())
+    }
+
+    /// Exports the current database state into a crash-resistant dual-header envelope container.
+    ///
+    /// # Errors
+    /// Returns an error if checkpointing or exporting fails.
+    pub fn export_envelope(
+        &self,
+        target_path: impl AsRef<Path>,
+        compression: lilia_core::envelope::CompressionProfile,
+    ) -> Result<()> {
+        let _ = self.checkpoint();
+        let encryption = lilia_core::envelope::EncryptionMetadata::default();
+        crate::envelope::EnvelopeManager::export_database_to_envelope(
+            self.path(),
+            target_path,
+            compression,
+            encryption,
+            1,
+        )
+    }
+
+    /// Imports a database payload from a crash-resistant dual-header envelope container.
+    ///
+    /// # Errors
+    /// Returns an error if opening or unpacking the envelope fails.
+    pub fn import_envelope(
+        source_path: impl AsRef<Path>,
+        target_db_path: impl AsRef<Path>,
+    ) -> Result<lilia_core::envelope::EnvelopeHeader> {
+        crate::envelope::EnvelopeManager::import_database_from_envelope(source_path, target_db_path)
     }
 
     #[must_use]
@@ -2869,6 +3253,7 @@ impl Database {
             self.mem_engine.finish_guards(guards, now);
             self.invalidate_cache_for_operations(operations);
             self.emit_batch_events(operations, &results, None);
+            self.sync_operations_to_shm(operations, &results);
             return Ok(results);
         }
 
@@ -2943,7 +3328,10 @@ impl Database {
             }
         });
 
-        let session = if self.undo_log_capacity > 0 || self.live_query_manager.has_subscribers() {
+        let session = if self.undo_log_capacity > 0
+            || self.live_query_manager.has_subscribers()
+            || self.dataflow_engine.has_active_pipelines()
+        {
             if let Ok(mut sess) = lilia_sqlite_native::NativeSession::create(&connection, "main") {
                 sess.set_table_filter(undo_records_table);
                 let _ = sess.attach_all();
@@ -3088,11 +3476,14 @@ impl Database {
             self.mem_engine.finish_guards(guards, now);
         }
 
+        let had_session = session.is_some();
         if let Some(sess) = session {
             if !sess.is_empty() {
                 if let Ok(changeset) = sess.changeset() {
                     if !changeset.is_empty() {
                         self.live_query_manager
+                            .process_changeset(&changeset, &connection);
+                        self.dataflow_engine
                             .process_changeset(&changeset, &connection);
 
                         if self.undo_log_capacity > 0 {
@@ -3138,6 +3529,28 @@ impl Database {
                         }
                     }
                 }
+            }
+        }
+
+        if self.dataflow_engine.has_active_pipelines() {
+            let ops_to_dispatch: Vec<BatchOperation> = if had_session {
+                operations
+                    .iter()
+                    .zip(&tiers)
+                    .filter_map(|(op, &tier)| {
+                        if tier == StorageTier::Memory {
+                            Some(op.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                operations.to_vec()
+            };
+            if !ops_to_dispatch.is_empty() {
+                self.dataflow_engine
+                    .process_operations(&ops_to_dispatch, &connection);
             }
         }
 
@@ -3193,6 +3606,7 @@ impl Database {
         {
             checkpointer.notify();
         }
+        self.sync_operations_to_shm(operations, &results);
         Ok(results)
     }
 
@@ -3414,11 +3828,8 @@ impl Database {
             None
         };
 
-        let cow_state = lilia_sqlite_native::BranchVfsState::new(
-            name.to_string(),
-            &self.path,
-            parent_bytes,
-        )?;
+        let cow_state =
+            lilia_sqlite_native::BranchVfsState::new(name.to_string(), &self.path, parent_bytes)?;
         lilia_sqlite_native::register_branch_state(cow_state.clone());
 
         let branch_path = PathBuf::from(format!("file:{}?branch_id={}", name, name));
@@ -3477,6 +3888,7 @@ impl Database {
             events: Arc::new(tokio::sync::broadcast::channel(128).0),
             hnsw_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             fts_trie_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+            fts_phonetic_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             live_query_manager: Arc::new(crate::live_query::LiveQueryManager::new()),
             rule_engine: Arc::clone(&self.rule_engine),
             undo_log_capacity: self.undo_log_capacity,
@@ -3493,16 +3905,23 @@ impl Database {
             autotune: Arc::clone(&self.autotune),
             shard_manager: self.shard_manager.as_ref().map(Arc::clone),
             embedders: Arc::clone(&self.embedders),
-            embed_options: self.embed_options.clone(),
+            embed_options: self.embed_options,
             ledger: Arc::clone(&self.ledger),
             security_registry: Arc::clone(&self.security_registry),
             parity_manager: self.parity_manager.as_ref().map(Arc::clone),
             wear_manager: Arc::clone(&self.wear_manager),
             wasm_registry: Arc::clone(&self.wasm_registry),
             jit_cache: Arc::clone(&self.jit_cache),
+            shm_engine: None,
+            occ_manager: Arc::clone(&self.occ_manager),
+            dataflow_engine: Arc::clone(&self.dataflow_engine),
+            energy_profiler: Arc::clone(&self.energy_profiler),
         };
 
-        self.active_branches.lock().unwrap().insert(name.to_string());
+        self.active_branches
+            .lock()
+            .unwrap()
+            .insert(name.to_string());
 
         Ok(Branch {
             name: name.to_string(),
@@ -3557,9 +3976,7 @@ impl Database {
         }
 
         if self.undo_log_capacity > 0 {
-            if let Ok(inverse) =
-                lilia_sqlite_native::NativeSession::invert_changeset(&changeset)
-            {
+            if let Ok(inverse) = lilia_sqlite_native::NativeSession::invert_changeset(&changeset) {
                 let now = crate::storage::now_ms();
                 let summary = format!("merge branch '{branch_name}'");
                 let fwd_compressed = lilia_core::compress_bytes(&changeset);
@@ -3680,6 +4097,44 @@ impl Database {
         crate::rules::RulesManager::new(self)
     }
 
+    /// Starts a unified, multi-model hybrid query (LiliaQL).
+    #[must_use]
+    pub fn query(&self) -> crate::query::LiliaQuery<'_> {
+        crate::query::LiliaQuery::new(self)
+    }
+
+    /// Starts a continuous, declarative reactive dataflow pipeline (Differential Dataflow).
+    #[must_use]
+    pub fn dataflow(&self) -> crate::dataflow::DataflowBuilder<'_> {
+        crate::dataflow::DataflowBuilder::new(self)
+    }
+
+    /// Retrieves an active dataflow view by name.
+    #[must_use]
+    pub fn dataflow_view(&self, name: &str) -> Option<Arc<crate::dataflow::DataflowView>> {
+        self.dataflow_engine.get_view(name)
+    }
+
+    /// Lists the names of all registered reactive dataflow views.
+    #[must_use]
+    pub fn list_dataflow_views(&self) -> Vec<String> {
+        self.dataflow_engine.list_views()
+    }
+
+    /// Drops and unregisters a reactive dataflow view and its associated continuous pipeline.
+    pub fn drop_dataflow_view(&self, name: &str) -> bool {
+        let writer = self.lock_writer().ok();
+        self.dataflow_engine.drop_view(name, writer.as_deref())
+    }
+
+    pub(crate) fn register_dataflow_pipeline(
+        &self,
+        pipeline: Arc<crate::dataflow::DataflowPipeline>,
+    ) -> Result<()> {
+        let writer = self.lock_writer()?;
+        self.dataflow_engine.register_pipeline(pipeline, &writer)
+    }
+
     /// Open a fluent builder for declaring, configuring, or accessing a tier-routed collection.
     #[must_use]
     pub fn collection(&self, name: &str) -> crate::collection::CollectionBuilder<'_> {
@@ -3747,6 +4202,71 @@ impl Database {
         let outcome = f(&mut tx)?;
         tx.commit()?;
         Ok(outcome)
+    }
+
+    /// Open an active lock-free Optimistic Concurrency Control (OCC) transaction.
+    ///
+    /// Does not acquire any SQLite locks upfront. All mutations are staged in RAM,
+    /// validated in microseconds at commit time, and committed via automatic group commit.
+    pub fn occ_transaction(&self) -> Result<crate::occ::OccTransaction<'_>> {
+        Ok(crate::occ::OccTransaction::new(self, &self.occ_manager))
+    }
+
+    /// Execute an atomic multi-model OCC transaction via closure.
+    ///
+    /// Automatically commits on `Ok` and rolls back on `Err` or panic.
+    pub fn with_occ_transaction<F, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(&mut crate::occ::OccTransaction<'_>) -> Result<R>,
+    {
+        let mut tx = self.occ_transaction()?;
+        let outcome = f(&mut tx)?;
+        tx.commit()?;
+        Ok(outcome)
+    }
+
+    /// Execute an OCC transaction with automatic retry on conflict.
+    ///
+    /// If validation encounters a conflict (`ErrorCode::Conflict` with `retryable: true`),
+    /// it automatically retries with exponential backoff and jitter up to `max_retries` times.
+    pub fn with_occ_retry<F, R>(&self, max_retries: usize, mut f: F) -> Result<R>
+    where
+        F: FnMut(&mut crate::occ::OccTransaction<'_>) -> Result<R>,
+    {
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let mut tx = self.occ_transaction()?;
+            match f(&mut tx) {
+                Ok(val) => match tx.commit() {
+                    Ok(()) => return Ok(val),
+                    Err(err)
+                        if err.code == lilia_core::ErrorCode::Conflict
+                            && attempts <= max_retries =>
+                    {
+                        let backoff_us =
+                            (1u64 << attempts.min(6)) * 50 + (rand::random::<u64>() % 100);
+                        std::thread::sleep(std::time::Duration::from_micros(backoff_us));
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                },
+                Err(err)
+                    if err.code == lilia_core::ErrorCode::Conflict && attempts <= max_retries =>
+                {
+                    let backoff_us = (1u64 << attempts.min(6)) * 50 + (rand::random::<u64>() % 100);
+                    std::thread::sleep(std::time::Duration::from_micros(backoff_us));
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    /// Access the point-in-time statistics snapshot of the in-memory OCC engine.
+    #[must_use]
+    pub fn occ_stats(&self) -> crate::occ::OccStatsSnapshot {
+        self.occ_manager.stats.snapshot()
     }
 
     /// Execute an atomic cross-tier batch transaction across Disk and Memory tiers.

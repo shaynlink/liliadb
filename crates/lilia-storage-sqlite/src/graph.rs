@@ -1,8 +1,8 @@
 #![allow(clippy::missing_errors_doc)]
 
+use lilia_sqlite_native::StmtSlot;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
-use lilia_sqlite_native::StmtSlot;
 
 use crate::storage::{normalize_limit, now_ms, validate_name};
 use crate::Database;
@@ -338,6 +338,48 @@ impl Database {
         Ok(deleted)
     }
 
+    pub fn graph_has_edge(
+        &self,
+        graph: &str,
+        source: &str,
+        target: &str,
+        kind: &str,
+    ) -> Result<bool> {
+        validate_name("graph", graph)?;
+        validate_name("source", source)?;
+        validate_name("target", target)?;
+        validate_name("kind", kind)?;
+        match self.catalog.tier_for(CollectionKind::Graph, graph) {
+            StorageTier::Memory => {
+                return Ok(self
+                    .mem_engine
+                    .graph_edges
+                    .scan(Some(graph), None, usize::MAX, now_ms())
+                    .into_iter()
+                    .any(|(_, _, snap)| {
+                        snap.value.source == source
+                            && snap.value.target == target
+                            && snap.value.kind == kind
+                    }));
+            }
+            StorageTier::Buffered => {
+                self.ring_core.flush()?;
+            }
+            StorageTier::Disk => {}
+        }
+        let conn = self.read_lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT 1 FROM _lilia_graph_edges WHERE graph = ?1 AND source = ?2 AND target = ?3 AND kind = ?4 LIMIT 1;",
+        )?;
+        stmt.bind_text_static(1, graph)?;
+        stmt.bind_text_static(2, source)?;
+        stmt.bind_text_static(3, target)?;
+        stmt.bind_text_static(4, kind)?;
+        let exists = stmt.step()?;
+        stmt.reset()?;
+        Ok(exists)
+    }
+
     pub fn graph_list_edges(
         &self,
         graph: &str,
@@ -445,10 +487,10 @@ impl Database {
                 while let Some(cur) = queue.pop_front() {
                     for edge in &edges {
                         let next = match direction {
-                            Direction::Outgoing | Direction::Both if edge.source == cur => {
+                            Direction::Outbound | Direction::Both if edge.source == cur => {
                                 Some(&edge.target)
                             }
-                            Direction::Incoming | Direction::Both if edge.target == cur => {
+                            Direction::Inbound | Direction::Both if edge.target == cur => {
                                 Some(&edge.source)
                             }
                             _ => None,
@@ -472,7 +514,7 @@ impl Database {
             .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
 
         let sql = match direction {
-            Direction::Incoming => {
+            Direction::Inbound => {
                 "WITH RECURSIVE reached(node) AS ( \
                     SELECT value FROM json_each(?1) \
                     UNION \
@@ -482,7 +524,7 @@ impl Database {
                 ) \
                 SELECT DISTINCT node FROM reached ORDER BY node;"
             }
-            Direction::Outgoing => {
+            Direction::Outbound => {
                 "WITH RECURSIVE reached(node) AS ( \
                     SELECT value FROM json_each(?1) \
                     UNION \
@@ -538,10 +580,10 @@ impl Database {
                         continue;
                     }
                     match direction {
-                        Direction::Outgoing if edge.source == node => {
+                        Direction::Outbound if edge.source == node => {
                             neighbors.insert(edge.target);
                         }
-                        Direction::Incoming if edge.target == node => {
+                        Direction::Inbound if edge.target == node => {
                             neighbors.insert(edge.source);
                         }
                         Direction::Both => {
@@ -563,14 +605,14 @@ impl Database {
         }
         let conn = self.read_lock()?;
         let sql = match direction {
-            Direction::Outgoing => {
+            Direction::Outbound => {
                 if kind_filter.is_some() {
                     "SELECT DISTINCT target FROM _lilia_graph_edges WHERE graph = ?1 AND source = ?2 AND kind = ?3 ORDER BY target;"
                 } else {
                     "SELECT DISTINCT target FROM _lilia_graph_edges WHERE graph = ?1 AND source = ?2 ORDER BY target;"
                 }
             }
-            Direction::Incoming => {
+            Direction::Inbound => {
                 if kind_filter.is_some() {
                     "SELECT DISTINCT source FROM _lilia_graph_edges WHERE graph = ?1 AND target = ?2 AND kind = ?3 ORDER BY source;"
                 } else {

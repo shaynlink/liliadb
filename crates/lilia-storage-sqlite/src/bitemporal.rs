@@ -1,12 +1,17 @@
-#![allow(clippy::missing_errors_doc, clippy::cast_possible_wrap, clippy::too_many_lines, clippy::too_many_arguments)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::cast_possible_wrap,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
 
-use std::sync::Arc;
 use lilia_core::{
     BatchOperation, BitemporalEntry, BitemporalInterval, BitemporalPoint, ErrorCode, LiliaError,
     Result, ValueCodec, BITEMPORAL_INFINITY,
 };
 use lilia_sqlite_native::NativeTransaction;
 use serde_json::json;
+use std::sync::Arc;
 
 use crate::json::decode_json_value;
 use crate::storage::{now_ms, parse_version, store_version, validate_name};
@@ -49,14 +54,12 @@ pub(crate) fn apply_bitemporal_put(
 
     // Encode value
     let encoded = if codec.name() == "identity" {
-        serde_json::to_string(value).map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false)
-        })?
+        serde_json::to_string(value)
+            .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?
     } else {
         use base64::Engine;
-        let raw_bytes = serde_json::to_vec(value).map_err(|e| {
-            LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false)
-        })?;
+        let raw_bytes = serde_json::to_vec(value)
+            .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;
         let cipher_bytes = codec.encode(&raw_bytes)?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&cipher_bytes);
         serde_json::to_string(&json!({
@@ -543,7 +546,9 @@ impl<'a> BitemporalStore<'a> {
                 value: val,
                 version: ver,
             });
-            self.db.cache.put_bitemporal(space, id, tt, vt, Arc::clone(&entry));
+            self.db
+                .cache
+                .put_bitemporal(space, id, tt, vt, Arc::clone(&entry));
             Some((*entry).clone())
         } else {
             None

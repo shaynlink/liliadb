@@ -10,7 +10,7 @@ use base64::Engine;
 use crate::args::{
     BitempCommand, BlobCommand, Command, CrdtCommand, CrdtCounterCommand, CrdtJsonCommand,
     CrdtSetCommand, Encoding, FtsCommand, GraphCommand, HybridCommand, IntegrityCommand,
-    JsonCommand, KvCommand, LedgerCommand, VectorCommand,
+    JsonCommand, KvCommand, LedgerCommand, VectorCommand, ZkCommand,
 };
 
 pub(crate) fn resolve_plugin_path(plugin: &Path) -> anyhow::Result<std::path::PathBuf> {
@@ -40,6 +40,47 @@ pub(crate) fn execute(
     path: &Path,
     plugin: Option<&Path>,
 ) -> anyhow::Result<Value> {
+    if let Command::Zk {
+        command:
+            ZkCommand::Setup {
+                template: _,
+                out_pk,
+                out_vk,
+            },
+    } = &command
+    {
+        let circuit = lilia_zk::SoldeAgePredicateCircuit::empty();
+        let (pk, vk) = lilia_zk::generate_circuit_keys(circuit)?;
+        let pk_bytes = lilia_zk::serialize_pk(&pk)?;
+        let vk_bytes = lilia_zk::serialize_vk(&vk)?;
+        fs::write(out_pk, pk_bytes)?;
+        fs::write(out_vk, vk_bytes)?;
+        return Ok(json!({
+            "status": "success",
+            "pk_file": out_pk.display().to_string(),
+            "vk_file": out_vk.display().to_string(),
+            "circuit": "solde_age_v1",
+        }));
+    }
+
+    if let Command::Zk {
+        command: ZkCommand::Verify { proof, vk },
+    } = &command
+    {
+        let bytes = fs::read(proof)?;
+        let bundle: lilia_zk::ZkProofBundle = serde_json::from_slice(&bytes)?;
+
+        let custom_vk = if let Some(vk_path) = vk {
+            let vk_bytes = fs::read(vk_path)?;
+            Some(lilia_zk::deserialize_vk(&vk_bytes)?)
+        } else {
+            None
+        };
+
+        let report = lilia_zk::ZkVerifier::verify(&bundle, custom_vk.as_ref())?;
+        return Ok(serde_json::to_value(report)?);
+    }
+
     let mut options = DatabaseOptions::durable(path);
     let mut sql_plugin = None;
     let _loaded = if let Some(plugin_arg) = plugin {
@@ -81,6 +122,7 @@ pub(crate) fn execute(
         Command::Blob { command } => blob(&database, command)?,
         Command::Integrity { command } => integrity_model(&database, command)?,
         Command::Ledger { command } => ledger_model(&database, command)?,
+        Command::Zk { command } => zk_model(&database, command)?,
         Command::Batch { file } => {
             let operations: Vec<BatchOperation> = serde_json::from_slice(&fs::read(file)?)?;
             serde_json::to_value(database.batch(&operations)?)?
@@ -206,13 +248,9 @@ fn bitemp_model(database: &Database, command: BitempCommand) -> anyhow::Result<V
                 .as_deref()
                 .map(lilia_core::parse_iso_to_ms)
                 .transpose()?;
-            let ver = database.bitemporal().put_with_system_time(
-                &space,
-                &id,
-                parsed_val,
-                interval,
-                st,
-            )?;
+            let ver = database
+                .bitemporal()
+                .put_with_system_time(&space, &id, parsed_val, interval, st)?;
             Ok(json!({ "ok": true, "space": space, "id": id, "version": ver }))
         }
         BitempCommand::Get {
@@ -226,7 +264,11 @@ fn bitemp_model(database: &Database, command: BitempCommand) -> anyhow::Result<V
             let entry = database.bitemporal().get(&space, &id, tt, vt)?;
             Ok(serde_json::to_value(entry)?)
         }
-        BitempCommand::Timeline { space, id, as_of_tt } => {
+        BitempCommand::Timeline {
+            space,
+            id,
+            as_of_tt,
+        } => {
             let tt = lilia_core::BitemporalPoint::at(&as_of_tt)?;
             let timeline = database.bitemporal().timeline(&space, &id, tt)?;
             Ok(serde_json::to_value(timeline)?)
@@ -428,6 +470,86 @@ fn ledger_model(database: &Database, command: LedgerCommand) -> anyhow::Result<V
     }
 }
 
+fn zk_model(database: &Database, command: ZkCommand) -> anyhow::Result<Value> {
+    match command {
+        ZkCommand::Setup {
+            template: _,
+            out_pk,
+            out_vk,
+        } => {
+            let circuit = lilia_zk::SoldeAgePredicateCircuit::empty();
+            let (pk, vk) = lilia_zk::generate_circuit_keys(circuit)?;
+            let pk_bytes = lilia_zk::serialize_pk(&pk)?;
+            let vk_bytes = lilia_zk::serialize_vk(&vk)?;
+            fs::write(&out_pk, pk_bytes)?;
+            fs::write(&out_vk, vk_bytes)?;
+            Ok(json!({
+                "status": "success",
+                "pk_file": out_pk.display().to_string(),
+                "vk_file": out_vk.display().to_string(),
+                "circuit": "solde_age_v1",
+            }))
+        }
+        ZkCommand::Commit { space, id, salt } => {
+            let collection = database.collection(&space).json()?;
+            let commitment = collection.zk_commit(&id, salt.as_deref())?;
+            Ok(json!({
+                "space": space,
+                "id": id,
+                "commitment": commitment,
+            }))
+        }
+        ZkCommand::Prove {
+            space,
+            id,
+            condition,
+            salt,
+            pk,
+        } => {
+            let collection = database.collection(&space).json()?;
+            let mut statement_builder = lilia_zk::ZkStatement::builder();
+            for part in condition.split("AND") {
+                let part = part.trim();
+                if let Some((field, val_str)) = part.split_once(">=") {
+                    let field = field.trim();
+                    let val = val_str.trim().parse::<u64>()?;
+                    statement_builder = statement_builder.field_gte(field, val);
+                } else if let Some((field, val_str)) = part.split_once("<=") {
+                    let field = field.trim();
+                    let val = val_str.trim().parse::<u64>()?;
+                    statement_builder = statement_builder.field_lte(field, val);
+                }
+            }
+            let statement = statement_builder.build();
+
+            let custom_pk = if let Some(pk_path) = pk {
+                let bytes = fs::read(pk_path)?;
+                Some(lilia_zk::deserialize_pk(&bytes)?)
+            } else {
+                None
+            };
+
+            let bundle =
+                collection.zk_prove(&id, &statement, salt.as_deref(), custom_pk.as_ref())?;
+            Ok(serde_json::to_value(bundle)?)
+        }
+        ZkCommand::Verify { proof, vk } => {
+            let bytes = fs::read(&proof)?;
+            let bundle: lilia_zk::ZkProofBundle = serde_json::from_slice(&bytes)?;
+
+            let custom_vk = if let Some(vk_path) = vk {
+                let vk_bytes = fs::read(vk_path)?;
+                Some(lilia_zk::deserialize_vk(&vk_bytes)?)
+            } else {
+                None
+            };
+
+            let report = lilia_zk::ZkVerifier::verify(&bundle, custom_vk.as_ref())?;
+            Ok(serde_json::to_value(report)?)
+        }
+    }
+}
+
 fn graph(database: &Database, command: GraphCommand) -> anyhow::Result<Value> {
     match command {
         GraphCommand::Node {
@@ -522,6 +644,14 @@ fn fts(database: &Database, command: FtsCommand) -> anyhow::Result<Value> {
             limit,
         } => {
             let hits = database.fts_fuzzy_search(&collection, &query, max_distance, limit)?;
+            Ok(serde_json::to_value(hits)?)
+        }
+        FtsCommand::Phonetic {
+            collection,
+            query,
+            limit,
+        } => {
+            let hits = database.fts_phonetic_search(&collection, &query, limit)?;
             Ok(serde_json::to_value(hits)?)
         }
     }
@@ -752,7 +882,7 @@ fn vector(database: &Database, command: VectorCommand) -> anyhow::Result<Value> 
                     &collection,
                     graph,
                     start_node,
-                    lilia_core::Direction::Outgoing,
+                    lilia_core::Direction::Outbound,
                     &vec_bytes,
                     dim,
                     elem_type,
@@ -1947,5 +2077,151 @@ mod tests {
         .unwrap();
         assert_eq!(verify_db_res["is_valid"], true);
         assert_eq!(verify_db_res["commit_count"], 1);
+    }
+
+    #[test]
+    fn test_zk_cli_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("cli_zk.lilia");
+
+        // 1. Insert private user document
+        execute(
+            Command::Json {
+                command: JsonCommand::Put {
+                    space: "users".into(),
+                    id: "usr_bob".into(),
+                    value: r#"{"name": "Bob Martin", "balance": 3200, "age": 35, "secret": "xyz"}"#
+                        .into(),
+                    if_version: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+
+        // 2. Commit document fields via Poseidon
+        let commit_res = execute(
+            Command::Zk {
+                command: ZkCommand::Commit {
+                    space: "users".into(),
+                    id: "usr_bob".into(),
+                    salt: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        let commitment = commit_res["commitment"].as_str().unwrap().to_string();
+        assert!(commitment.starts_with("0x"));
+
+        // 3. Prove "balance >= 1000 AND age >= 18" in Zero-Knowledge
+        let prove_res = execute(
+            Command::Zk {
+                command: ZkCommand::Prove {
+                    space: "users".into(),
+                    id: "usr_bob".into(),
+                    condition: "balance >= 1000 AND age >= 18".into(),
+                    salt: None,
+                    pk: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(prove_res["proof_size_bytes"], 128);
+        assert_eq!(prove_res["commitment_hex"], commitment);
+
+        // 4. Save proof bundle to file
+        let proof_file = dir.path().join("bob_proof.json");
+        fs::write(&proof_file, serde_json::to_vec(&prove_res).unwrap()).unwrap();
+
+        // 5. Verify proof via CLI verifier
+        let verify_res = execute(
+            Command::Zk {
+                command: ZkCommand::Verify {
+                    proof: proof_file.clone(),
+                    vk: None,
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(verify_res["valid"], true);
+        assert_eq!(verify_res["zero_knowledge"], true);
+
+        // 6. Test setup of custom keys and proving/verifying with them
+        let custom_pk = dir.path().join("custom.pk");
+        let custom_vk = dir.path().join("custom.vk");
+        let setup_res = execute(
+            Command::Zk {
+                command: ZkCommand::Setup {
+                    template: "solde_age".into(),
+                    out_pk: custom_pk.clone(),
+                    out_vk: custom_vk.clone(),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(setup_res["status"], "success");
+        assert!(custom_pk.exists());
+        assert!(custom_vk.exists());
+
+        // Prove with custom pk
+        let prove_custom_res = execute(
+            Command::Zk {
+                command: ZkCommand::Prove {
+                    space: "users".into(),
+                    id: "usr_bob".into(),
+                    condition: "balance >= 1000 AND age >= 18".into(),
+                    salt: None,
+                    pk: Some(custom_pk),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        let custom_proof_file = dir.path().join("bob_custom_proof.json");
+        fs::write(
+            &custom_proof_file,
+            serde_json::to_vec(&prove_custom_res).unwrap(),
+        )
+        .unwrap();
+
+        // Verify with custom vk
+        let verify_custom_res = execute(
+            Command::Zk {
+                command: ZkCommand::Verify {
+                    proof: custom_proof_file,
+                    vk: Some(custom_vk),
+                },
+            },
+            &db_path,
+            None,
+        )
+        .unwrap();
+        assert_eq!(verify_custom_res["valid"], true);
+
+        // 7. Verify that false claim fails
+        let invalid_prove = execute(
+            Command::Zk {
+                command: ZkCommand::Prove {
+                    space: "users".into(),
+                    id: "usr_bob".into(),
+                    condition: "balance >= 5000 AND age >= 18".into(),
+                    salt: None,
+                    pk: None,
+                },
+            },
+            &db_path,
+            None,
+        );
+        assert!(invalid_prove.is_err());
     }
 }

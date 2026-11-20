@@ -1,6 +1,4 @@
-use lilia_core::{
-    parse_iso_to_ms, BatchOperation, BitemporalInterval, BitemporalPoint,
-};
+use lilia_core::{parse_iso_to_ms, BatchOperation, BitemporalInterval, BitemporalPoint};
 use lilia_storage_sqlite::{Database, DatabaseOptions};
 use serde_json::json;
 
@@ -15,8 +13,7 @@ fn test_bitemporal_exact_insurance_contract_scenario() {
     // 1. On 2026-11-10 (T1): Insurance policy signed, covering 2027-01-01 to 2027-12-31
     // Initial premium amount: 1000
     let t1_signing = parse_iso_to_ms("2026-11-10T10:00:00Z").unwrap();
-    let coverage_period =
-        BitemporalInterval::inclusive_days("2027-01-01", "2027-12-31").unwrap();
+    let coverage_period = BitemporalInterval::inclusive_days("2027-01-01", "2027-12-31").unwrap();
 
     let res1 = db
         .batch(&[BatchOperation::BitemporalPut {
@@ -67,9 +64,17 @@ fn test_bitemporal_exact_insurance_contract_scenario() {
                            WHERE id = 'pol_881';";
 
     let rows_nov20 = db.sql_query(sql_as_of_nov20, &[]).unwrap();
-    assert_eq!(rows_nov20.rows.len(), 1, "Must find exactly 1 contract record as known on 2026-11-20");
+    assert_eq!(
+        rows_nov20.rows.len(),
+        1,
+        "Must find exactly 1 contract record as known on 2026-11-20"
+    );
     assert_eq!(rows_nov20.rows[0][0], json!("pol_881"));
-    assert_eq!(rows_nov20.rows[0][1], json!(1000), "Amount known on 2026-11-20 must be initial 1000");
+    assert_eq!(
+        rows_nov20.rows[0][1],
+        json!(1000),
+        "Amount known on 2026-11-20 must be initial 1000"
+    );
     assert_eq!(rows_nov20.rows[0][2], json!("signed"));
 
     // 4. Query after the retroactive correction (e.g. as of 2026-12-20):
@@ -83,7 +88,11 @@ fn test_bitemporal_exact_insurance_contract_scenario() {
     let rows_dec20 = db.sql_query(sql_as_of_dec20, &[]).unwrap();
     assert_eq!(rows_dec20.rows.len(), 1);
     assert_eq!(rows_dec20.rows[0][0], json!("pol_881"));
-    assert_eq!(rows_dec20.rows[0][1], json!(1050), "Amount known on 2026-12-20 must be rectified 1050");
+    assert_eq!(
+        rows_dec20.rows[0][1],
+        json!(1050),
+        "Amount known on 2026-12-20 must be rectified 1050"
+    );
     assert_eq!(rows_dec20.rows[0][2], json!("rectified"));
 
     // 5. Test with SELECT * (returns bitemporal intervals)
@@ -93,7 +102,10 @@ fn test_bitemporal_exact_insurance_contract_scenario() {
                     WHERE id = 'pol_881';";
     let star_res = db.sql_query(sql_star, &[]).unwrap();
     assert_eq!(star_res.rows.len(), 1);
-    assert_eq!(star_res.columns, vec!["id", "value", "version", "vt_from", "vt_to", "tt_from", "tt_to"]);
+    assert_eq!(
+        star_res.columns,
+        vec!["id", "value", "version", "vt_from", "vt_to", "tt_from", "tt_to"]
+    );
 
     // 6. Test with global view: FROM lilia_bitemporal AS OF ...
     let sql_global = "SELECT space, id, json_extract(value, '$.amount') AS amount \
@@ -178,7 +190,11 @@ fn test_bitemporal_interval_slicing_and_carveouts() {
         .timeline("policies", "pol_999", BitemporalPoint::from_ms(t2 + 1000))
         .unwrap();
 
-    assert_eq!(timeline_t2.len(), 3, "Timeline must be split into prefix, middle, suffix slices");
+    assert_eq!(
+        timeline_t2.len(),
+        3,
+        "Timeline must be split into prefix, middle, suffix slices"
+    );
     assert_eq!(timeline_t2[0].value["rate"], 1000);
     assert_eq!(timeline_t2[1].value["rate"], 1400);
     assert_eq!(timeline_t2[2].value["rate"], 1000);
@@ -242,7 +258,13 @@ fn test_bitemporal_coalescing_and_range_queries() {
     // Insert second semester with identical rate
     let h2 = BitemporalInterval::between("2027-07-01", "2028-01-01").unwrap();
     db.bitemporal()
-        .put_with_system_time("tariffs", "power", json!({ "kwh": 0.25 }), h2, Some(t1 + 1000))
+        .put_with_system_time(
+            "tariffs",
+            "power",
+            json!({ "kwh": 0.25 }),
+            h2,
+            Some(t1 + 1000),
+        )
         .unwrap();
 
     // Thanks to temporal coalescing, adjacent slices with identical values are merged!
@@ -250,7 +272,11 @@ fn test_bitemporal_coalescing_and_range_queries() {
         .bitemporal()
         .timeline("tariffs", "power", BitemporalPoint::from_ms(t1 + 5000))
         .unwrap();
-    assert_eq!(timeline.len(), 1, "Adjacent identical slices must coalesce into one");
+    assert_eq!(
+        timeline.len(),
+        1,
+        "Adjacent identical slices must coalesce into one"
+    );
     assert_eq!(timeline[0].vt_from, h1.from);
     assert_eq!(timeline[0].vt_to, h2.to);
 
@@ -279,7 +305,13 @@ fn test_bitemporal_valid_time_retraction_and_full_history() {
     let t1 = parse_iso_to_ms("2026-11-01").unwrap();
     let full = BitemporalInterval::between("2027-01-01", "2028-01-01").unwrap();
     db.bitemporal()
-        .put_with_system_time("memberships", "vip_1", json!({ "active": true }), full, Some(t1))
+        .put_with_system_time(
+            "memberships",
+            "vip_1",
+            json!({ "active": true }),
+            full,
+            Some(t1),
+        )
         .unwrap();
 
     // On 2026-12-01 (T2): Cancel membership early for second half of 2027 (retraction)

@@ -10,7 +10,9 @@ mod vector;
 
 pub use entry::{BatchOperation, BitemporalEntry, Durability, JsonEntry, KvEntry, MutationResult};
 pub use events::{DatabaseEvent, HlcMutationOutcome, HlcRecord};
-pub use fts::{FtsFuzzyHit, FtsFuzzyOptions, FtsHit, FtsSuggestion};
+pub use fts::{
+    FtsFuzzyHit, FtsFuzzyOptions, FtsHit, FtsPhoneticHit, FtsSuggestion, PhoneticAlgorithm,
+};
 pub use graph::{
     CentralityType, ComponentType, CypherResult, Direction, GraphEdge, GraphNode, NodeScore,
     PageRankConfig, PathEdge, WeightedPath,

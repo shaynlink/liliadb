@@ -481,7 +481,7 @@ fn test_multimodel_killed_process_atomicity() {
 
     // Graph reachability across confirmed nodes
     let reachability = db
-        .graph_reachability("chaos_graph", &["node_0".into()], Direction::Outgoing)
+        .graph_reachability("chaos_graph", &["node_0".into()], Direction::Outbound)
         .unwrap();
     assert!(reachability.contains(&"gateway".to_string()));
 

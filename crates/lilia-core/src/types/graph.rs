@@ -10,8 +10,8 @@ pub(crate) const fn default_edge_weight() -> f64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
-    Outgoing,
-    Incoming,
+    Outbound,
+    Inbound,
     Both,
 }
 
@@ -114,7 +114,7 @@ const fn default_pagerank_tolerance() -> f64 {
 }
 
 const fn default_pagerank_direction() -> Direction {
-    Direction::Outgoing
+    Direction::Outbound
 }
 
 /// Configuration for weighted / personalized `PageRank` graph computation.
@@ -139,7 +139,7 @@ impl Default for PageRankConfig {
             max_iterations: 50,
             tolerance: 1e-6,
             seeds: None,
-            direction: Direction::Outgoing,
+            direction: Direction::Outbound,
             edge_kind: None,
         }
     }

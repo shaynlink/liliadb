@@ -8,8 +8,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use lilia_core::{
-    AccessTarget, BitemporalEntry, GraphNode, JsonEntry, KvEntry, LiliaError,
-    MarkovConfig, MarkovModel, MarkovStats, Result, ValueCodec,
+    AccessTarget, BitemporalEntry, GraphNode, JsonEntry, KvEntry, LiliaError, MarkovConfig,
+    MarkovModel, MarkovStats, Result, ValueCodec,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use lilia_sqlite_native::NativeConnection;
@@ -152,9 +152,10 @@ impl PrefetchEngine {
         codec: Arc<dyn ValueCodec>,
         restored_markov: Option<MarkovModel>,
     ) -> Result<Arc<Self>> {
-        let markov = Arc::new(RwLock::new(
-            restored_markov.unwrap_or_else(|| MarkovModel::new(options.markov_config.clone())),
-        ));
+        let markov =
+            Arc::new(RwLock::new(restored_markov.unwrap_or_else(|| {
+                MarkovModel::new(options.markov_config.clone())
+            })));
         let running = Arc::new(AtomicBool::new(true));
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -202,7 +203,10 @@ impl PrefetchEngine {
         let session_window = self.options.markov_config.session_window_ms;
 
         // 1. Transition observation
-        let mut last_guard = self.last_access.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last_guard = self
+            .last_access
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((prev_target, prev_time)) = last_guard.take() {
             let elapsed_ms = now.duration_since(prev_time).as_millis() as u64;
             if elapsed_ms <= session_window {
@@ -237,9 +241,16 @@ impl PrefetchEngine {
             for (cand, _) in candidates {
                 let in_cache = match &cand {
                     AccessTarget::Json { space, id } => self.cache.get_json(space, id).is_some(),
-                    AccessTarget::Kv { namespace, key } => self.cache.get_kv(namespace, key).is_some(),
-                    AccessTarget::GraphNode { graph, id } => self.cache.get_graph_node(graph, id).is_some(),
-                    AccessTarget::Bitemporal { space, id } => self.cache.get_bitemporal(space, id, now_epoch_ms, now_epoch_ms).is_some(),
+                    AccessTarget::Kv { namespace, key } => {
+                        self.cache.get_kv(namespace, key).is_some()
+                    }
+                    AccessTarget::GraphNode { graph, id } => {
+                        self.cache.get_graph_node(graph, id).is_some()
+                    }
+                    AccessTarget::Bitemporal { space, id } => self
+                        .cache
+                        .get_bitemporal(space, id, now_epoch_ms, now_epoch_ms)
+                        .is_some(),
                 };
                 if !in_cache {
                     to_prefetch.push(cand);
@@ -260,7 +271,9 @@ impl PrefetchEngine {
     /// Returns telemetry snapshot of the Markov probability model.
     #[must_use]
     pub fn markov_stats(&self) -> MarkovStats {
-        self.markov.read().map_or_else(|_| MarkovStats::default(), |m| m.stats())
+        self.markov
+            .read()
+            .map_or_else(|_| MarkovStats::default(), |m| m.stats())
     }
 
     /// Exports the current Markov model clone (for persistence).
@@ -332,7 +345,8 @@ fn prefetch_single_target(
                 let dict_id = stmt.column_int64(2);
                 let version = parse_version(stmt.column_int64(3))?;
                 let dict_reg = lilia_core::DictionaryRegistry::default();
-                let doc = decode_stored_doc(&stmt, 0, format, dict_id, space, codec, &dict_reg, None)?;
+                let doc =
+                    decode_stored_doc(&stmt, 0, format, dict_id, space, codec, &dict_reg, None)?;
                 let entry = Arc::new(JsonEntry::new(space.clone(), id.clone(), doc, version));
                 cache.put_json(space, id, entry);
             }
@@ -378,8 +392,9 @@ fn prefetch_single_target(
             if stmt.step()? {
                 let kind = stmt.column_text(0).to_string();
                 let meta_str = stmt.column_text(1);
-                let metadata = serde_json::from_str(meta_str)
-                    .map_err(|e| LiliaError::new(lilia_core::ErrorCode::Storage, e.to_string(), false))?;
+                let metadata = serde_json::from_str(meta_str).map_err(|e| {
+                    LiliaError::new(lilia_core::ErrorCode::Storage, e.to_string(), false)
+                })?;
                 let doc_space = if stmt.column_is_null(2) {
                     None
                 } else {

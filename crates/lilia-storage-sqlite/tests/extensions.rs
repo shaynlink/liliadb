@@ -221,15 +221,15 @@ fn test_graph_and_reachability() {
     assert_eq!(node.kind, "project");
     assert_eq!(node.metadata["lang"], "rust");
 
-    // Test Outgoing reachability from "app" (what does app depend on?)
+    // Test Outbound reachability from "app" (what does app depend on?)
     let deps = db
-        .graph_reachability("repo_graph", &["app".into()], Direction::Outgoing)
+        .graph_reachability("repo_graph", &["app".into()], Direction::Outbound)
         .unwrap();
     assert_eq!(deps, vec!["app", "lib_core", "lib_ui", "lib_utils"]);
 
-    // Test Incoming reachability (impact of changing "lib_utils": who depends on it?)
+    // Test Inbound reachability (impact of changing "lib_utils": who depends on it?)
     let impact = db
-        .graph_reachability("repo_graph", &["lib_utils".into()], Direction::Incoming)
+        .graph_reachability("repo_graph", &["lib_utils".into()], Direction::Inbound)
         .unwrap();
     assert_eq!(
         impact,
@@ -238,7 +238,7 @@ fn test_graph_and_reachability() {
 
     // Impact of changing "lib_ui" only
     let ui_impact = db
-        .graph_reachability("repo_graph", &["lib_ui".into()], Direction::Incoming)
+        .graph_reachability("repo_graph", &["lib_ui".into()], Direction::Inbound)
         .unwrap();
     assert_eq!(ui_impact, vec!["app", "lib_ui"]);
 }
@@ -672,13 +672,13 @@ fn test_hybrid_json_index_and_graph_vector() {
     )
     .unwrap();
 
-    // Traverse from user_a (outgoing) -> user_a and user_b are reachable (user_c is disconnected)
+    // Traverse from user_a (outbound) -> user_a and user_b are reachable (user_c is disconnected)
     let graph_hits = db
         .vector_search_in_graph_neighbors(
             "users",
             "network",
             "user_a",
-            Direction::Outgoing,
+            Direction::Outbound,
             &q_vec,
             2,
             lilia_core::VectorElementType::Float32,

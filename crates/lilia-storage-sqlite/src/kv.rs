@@ -1,8 +1,8 @@
 #![allow(clippy::missing_errors_doc)]
 
+use lilia_sqlite_native::StmtSlot;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use lilia_sqlite_native::StmtSlot;
 
 use crate::storage::{normalize_limit, now_ms, parse_version, validate_name};
 use crate::Database;

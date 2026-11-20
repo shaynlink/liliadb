@@ -1160,7 +1160,7 @@ async fn test_ipc_extended_multimodel_dispatch() {
                 graph: "g1".into(),
                 start: "a".into(),
                 target: "b".into(),
-                direction: Direction::Outgoing,
+                direction: Direction::Outbound,
                 kind_filter: None,
             },
             None
@@ -1192,7 +1192,7 @@ async fn test_ipc_extended_multimodel_dispatch() {
             Operation::GraphCentrality {
                 graph: "g1".into(),
                 centrality: CentralityType::Degree,
-                direction: Direction::Outgoing,
+                direction: Direction::Outbound,
                 kind_filter: None,
                 normalized: false,
             },
@@ -1295,7 +1295,7 @@ async fn test_ipc_extended_multimodel_dispatch() {
                 collection: "emb".into(),
                 graph: "g1".into(),
                 start_node: "a".into(),
-                direction: Direction::Outgoing,
+                direction: Direction::Outbound,
                 query_vector: v0,
                 dim: 2,
                 element_type: VectorElementType::Float32,

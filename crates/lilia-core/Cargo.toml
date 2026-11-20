@@ -7,8 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["simd", "jit"]
+default = ["simd", "jit", "zk", "cjk"]
 simd = ["dep:simd-json"]
+zk = ["dep:lilia-zk"]
+cjk = ["dep:jieba-rs"]
 jit = [
     "dep:cranelift-codegen",
     "dep:cranelift-frontend",
@@ -24,7 +26,12 @@ base64.workspace = true
 blake3.workspace = true
 h3o.workspace = true
 hex.workspace = true
+jieba-rs = { version = "0.11", optional = true }
+lilia-zk = { path = "../lilia-zk", optional = true }
 miniz_oxide.workspace = true
+num-bigint.workspace = true
+num-integer.workspace = true
+num-traits.workspace = true
 pbkdf2.workspace = true
 rand.workspace = true
 serde.workspace = true

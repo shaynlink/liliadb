@@ -132,15 +132,13 @@ pub fn grid_distance(origin: u64, destination: u64) -> Result<i64> {
             false,
         )
     })?;
-    o.grid_distance(d)
-        .map(i64::from)
-        .map_err(|e| {
-            LiliaError::new(
-                ErrorCode::InvalidInput,
-                format!("failed to compute grid distance: {e}"),
-                false,
-            )
-        })
+    o.grid_distance(d).map(i64::from).map_err(|e| {
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("failed to compute grid distance: {e}"),
+            false,
+        )
+    })
 }
 
 /// Retrieves the parent cell at a coarser resolution (`parent_res < current_res`).
@@ -159,19 +157,16 @@ pub fn cell_to_parent(cell: u64, parent_res: u8) -> Result<u64> {
             false,
         )
     })?;
-    cell_idx
-        .parent(target_res)
-        .map(u64::from)
-        .ok_or_else(|| {
-            LiliaError::new(
-                ErrorCode::InvalidInput,
-                format!(
-                    "target resolution {parent_res} must be <= cell resolution {:?}",
-                    cell_idx.resolution()
-                ),
-                false,
-            )
-        })
+    cell_idx.parent(target_res).map(u64::from).ok_or_else(|| {
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!(
+                "target resolution {parent_res} must be <= cell resolution {:?}",
+                cell_idx.resolution()
+            ),
+            false,
+        )
+    })
 }
 
 /// Retrieves all child cells at a finer resolution (`child_res > current_res`).
@@ -223,7 +218,9 @@ pub fn child_range(cell: u64, child_res: u8) -> Result<(u64, u64)> {
     if child_res < parent_res_val {
         return Err(LiliaError::new(
             ErrorCode::InvalidInput,
-            format!("child resolution ({child_res}) must be >= parent resolution ({parent_res_val})"),
+            format!(
+                "child resolution ({child_res}) must be >= parent resolution ({parent_res_val})"
+            ),
             false,
         ));
     }
@@ -376,8 +373,14 @@ mod tests {
         let actual_min = *children.iter().min().unwrap();
         let actual_max = *children.iter().max().unwrap();
 
-        assert_eq!(min_child, actual_min, "min_child bitwise must match actual min");
-        assert_eq!(max_child, actual_max, "max_child bitwise must match actual max");
+        assert_eq!(
+            min_child, actual_min,
+            "min_child bitwise must match actual min"
+        );
+        assert_eq!(
+            max_child, actual_max,
+            "max_child bitwise must match actual max"
+        );
 
         for child in children {
             assert!(
@@ -406,7 +409,8 @@ mod tests {
 
     #[test]
     fn test_spatio_temporal_point() {
-        let pt = SpatioTemporalPoint::new("courier_42", 48.8584, 2.2945, 1_700_000_000_000, 9).unwrap();
+        let pt =
+            SpatioTemporalPoint::new("courier_42", 48.8584, 2.2945, 1_700_000_000_000, 9).unwrap();
         assert_eq!(pt.entity_id, "courier_42");
         assert!(is_valid(pt.h3_index));
         assert_eq!(time_bucket(pt.timestamp, 60_000), 1_699_999_980_000);

@@ -17,6 +17,7 @@ ed25519-dalek.workspace = true
 hex.workspace = true
 lilia-core = { path = "../../crates/lilia-core" }
 lilia-storage-sqlite = { path = "../../crates/lilia-storage-sqlite" }
+lilia-zk = { path = "../../crates/lilia-zk" }
 lilia-plugin-api = { path = "../../crates/lilia-plugin-api" }
 lilia-protocol = { path = "../../crates/lilia-protocol" }
 serde.workspace = true

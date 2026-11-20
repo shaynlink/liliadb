@@ -287,7 +287,13 @@ impl CacheManager {
     // --- Bitemporal operations ---
 
     #[must_use]
-    pub fn get_bitemporal(&self, space: &str, id: &str, tt: i64, vt: i64) -> Option<Arc<BitemporalEntry>> {
+    pub fn get_bitemporal(
+        &self,
+        space: &str,
+        id: &str,
+        tt: i64,
+        vt: i64,
+    ) -> Option<Arc<BitemporalEntry>> {
         let key = (space.to_string(), id.to_string(), tt, vt);
         if let Some(entry) = self.l1_bitemporal.get(&key) {
             self.l1_hits.fetch_add(1, Ordering::Relaxed);
@@ -303,7 +309,14 @@ impl CacheManager {
         None
     }
 
-    pub fn put_bitemporal(&self, space: &str, id: &str, tt: i64, vt: i64, entry: Arc<BitemporalEntry>) {
+    pub fn put_bitemporal(
+        &self,
+        space: &str,
+        id: &str,
+        tt: i64,
+        vt: i64,
+        entry: Arc<BitemporalEntry>,
+    ) {
         let key = (space.to_string(), id.to_string(), tt, vt);
         self.l1_bitemporal.put(key, entry);
     }

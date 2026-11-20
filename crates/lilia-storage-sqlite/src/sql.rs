@@ -347,6 +347,27 @@ pub(crate) fn register_sql_functions(
         }
         let text = args[0].as_text();
         if let Some(env) = lilia_core::EncryptedEnvelope::parse(text) {
+            if env.algorithm == lilia_core::FieldCipherAlgorithm::HomomorphicPaillier {
+                if let (Some(sk), Some(pk)) = (
+                    key_reg_fle_dec.get_paillier_private(&env.key_id),
+                    key_reg_fle_dec.get_paillier_public(&env.key_id),
+                ) {
+                    if let Ok(ct) = lilia_core::PaillierCiphertext::from_bytes(&env.ciphertext) {
+                        if ct.scale() == 0 {
+                            if let Ok(i) = lilia_core::decrypt_paillier_i64(&sk, &pk, &ct) {
+                                ctx.set_result_int64(i);
+                                return Ok(());
+                            }
+                        } else if let Ok(f) = lilia_core::decrypt_paillier_f64(&sk, &pk, &ct) {
+                            ctx.set_result_double(f);
+                            return Ok(());
+                        }
+                    }
+                }
+                ctx.set_result_text(text);
+                return Ok(());
+            }
+
             if let Some(key) = key_reg_fle_dec.get_key(&env.key_id) {
                 let plain = match env.algorithm {
                     lilia_core::FieldCipherAlgorithm::RandomizedGcm => {
@@ -355,6 +376,7 @@ pub(crate) fn register_sql_functions(
                     lilia_core::FieldCipherAlgorithm::DeterministicSiv => {
                         lilia_core::decrypt_siv(&env.ciphertext, key.siv_key(), None)
                     }
+                    lilia_core::FieldCipherAlgorithm::HomomorphicPaillier => unreachable!(),
                 };
                 if let Ok(plain_bytes) = plain {
                     if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&plain_bytes) {
@@ -385,6 +407,246 @@ pub(crate) fn register_sql_functions(
         }
         Ok(())
     })?;
+
+    let key_reg_p_enc = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_paillier_encrypt", -1, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let comp_id = args[1].as_text();
+        let Some(pk) = key_reg_p_enc.get_paillier_public(comp_id) else {
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!("compartment '{comp_id}' Paillier public key not found"),
+                false,
+            ));
+        };
+        let scale = if args.len() >= 3 && !args[2].is_null() {
+            args[2].as_int64() as u8
+        } else {
+            0
+        };
+
+        let ct = if scale > 0 {
+            let val = args[0].as_double();
+            lilia_core::encrypt_paillier_f64(&pk, val, scale)
+        } else {
+            let val = args[0].as_int64();
+            lilia_core::encrypt_paillier_i64(&pk, val)
+        };
+        let env_str = lilia_core::EncryptedEnvelope::new(
+            lilia_core::FieldCipherAlgorithm::HomomorphicPaillier,
+            comp_id,
+            ct.to_bytes(),
+        )
+        .encode();
+        ctx.set_result_text(&env_str);
+        Ok(())
+    })?;
+
+    let key_reg_p_dec = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_paillier_decrypt", -1, move |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let text = args[0].as_text();
+        let comp_id = if args.len() >= 2 && !args[1].is_null() {
+            Some(args[1].as_text())
+        } else {
+            None
+        };
+
+        let Some(env) = lilia_core::EncryptedEnvelope::parse(text) else {
+            ctx.set_result_text(text);
+            return Ok(());
+        };
+        let target_comp = comp_id.unwrap_or(&env.key_id);
+
+        let Some(sk) = key_reg_p_dec.get_paillier_private(target_comp) else {
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!("compartment '{target_comp}' Paillier private key is locked"),
+                false,
+            ));
+        };
+        let Some(pk) = key_reg_p_dec.get_paillier_public(target_comp) else {
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!("compartment '{target_comp}' Paillier public key not found"),
+                false,
+            ));
+        };
+
+        let ct = lilia_core::PaillierCiphertext::from_bytes(&env.ciphertext)?;
+        if ct.scale() == 0 {
+            let val = lilia_core::decrypt_paillier_i64(&sk, &pk, &ct)?;
+            ctx.set_result_int64(val);
+        } else {
+            let val = lilia_core::decrypt_paillier_f64(&sk, &pk, &ct)?;
+            ctx.set_result_double(val);
+        }
+        Ok(())
+    })?;
+
+    let key_reg_p_add = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_paillier_add", 2, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let t1 = args[0].as_text();
+        let t2 = args[1].as_text();
+        let (Some(env1), Some(env2)) = (
+            lilia_core::EncryptedEnvelope::parse(t1),
+            lilia_core::EncryptedEnvelope::parse(t2),
+        ) else {
+            ctx.set_result_null();
+            return Ok(());
+        };
+        let Some(pk) = key_reg_p_add.get_paillier_public(&env1.key_id) else {
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!(
+                    "compartment '{}' Paillier public key not found",
+                    env1.key_id
+                ),
+                false,
+            ));
+        };
+        let ct1 = lilia_core::PaillierCiphertext::from_bytes(&env1.ciphertext)?;
+        let ct2 = lilia_core::PaillierCiphertext::from_bytes(&env2.ciphertext)?;
+        let res_ct = lilia_core::paillier_ops::add(&pk, &ct1, &ct2)?;
+        let env_str = lilia_core::EncryptedEnvelope::new(
+            lilia_core::FieldCipherAlgorithm::HomomorphicPaillier,
+            &env1.key_id,
+            res_ct.to_bytes(),
+        )
+        .encode();
+        ctx.set_result_text(&env_str);
+        Ok(())
+    })?;
+
+    let key_reg_p_sub = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_paillier_sub", 2, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let t1 = args[0].as_text();
+        let t2 = args[1].as_text();
+        let (Some(env1), Some(env2)) = (
+            lilia_core::EncryptedEnvelope::parse(t1),
+            lilia_core::EncryptedEnvelope::parse(t2),
+        ) else {
+            ctx.set_result_null();
+            return Ok(());
+        };
+        let Some(pk) = key_reg_p_sub.get_paillier_public(&env1.key_id) else {
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!(
+                    "compartment '{}' Paillier public key not found",
+                    env1.key_id
+                ),
+                false,
+            ));
+        };
+        let ct1 = lilia_core::PaillierCiphertext::from_bytes(&env1.ciphertext)?;
+        let ct2 = lilia_core::PaillierCiphertext::from_bytes(&env2.ciphertext)?;
+        let res_ct = lilia_core::paillier_ops::sub(&pk, &ct1, &ct2)?;
+        let env_str = lilia_core::EncryptedEnvelope::new(
+            lilia_core::FieldCipherAlgorithm::HomomorphicPaillier,
+            &env1.key_id,
+            res_ct.to_bytes(),
+        )
+        .encode();
+        ctx.set_result_text(&env_str);
+        Ok(())
+    })?;
+
+    let key_reg_p_mul = Arc::clone(key_registry);
+    conn.register_scalar_function("lilia_paillier_mul", 2, move |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let t = args[0].as_text();
+        let scalar = args[1].as_int64();
+        let Some(env) = lilia_core::EncryptedEnvelope::parse(t) else {
+            ctx.set_result_null();
+            return Ok(());
+        };
+        let Some(pk) = key_reg_p_mul.get_paillier_public(&env.key_id) else {
+            return Err(LiliaError::new(
+                ErrorCode::Unauthorized,
+                format!("compartment '{}' Paillier public key not found", env.key_id),
+                false,
+            ));
+        };
+        let ct = lilia_core::PaillierCiphertext::from_bytes(&env.ciphertext)?;
+        let res_ct = lilia_core::paillier_ops::mul_scalar(&pk, &ct, scalar)?;
+        let env_str = lilia_core::EncryptedEnvelope::new(
+            lilia_core::FieldCipherAlgorithm::HomomorphicPaillier,
+            &env.key_id,
+            res_ct.to_bytes(),
+        )
+        .encode();
+        ctx.set_result_text(&env_str);
+        Ok(())
+    })?;
+
+    let key_reg_p_sum = Arc::clone(key_registry);
+    conn.register_aggregate_function(
+        "lilia_paillier_sum",
+        1,
+        move |ctx, args| {
+            if args.is_empty() || args[0].is_null() {
+                return Ok(());
+            }
+            let text = args[0].as_text();
+            if !text.starts_with("ENC:paillier:") {
+                return Ok(());
+            }
+            let Some(env) = lilia_core::EncryptedEnvelope::parse(text) else {
+                return Ok(());
+            };
+            let Some(acc) = ctx
+                .get_aggregate_context::<Option<(lilia_core::HomomorphicSumAccumulator, String)>>()
+            else {
+                return Ok(());
+            };
+            if acc.is_none() {
+                if let Some(pk) = key_reg_p_sum.get_paillier_public(&env.key_id) {
+                    *acc = Some((
+                        lilia_core::HomomorphicSumAccumulator::new(pk),
+                        env.key_id.clone(),
+                    ));
+                }
+            }
+            if let Some((ref mut h_acc, _)) = acc {
+                let _ = h_acc.update_envelope(&env);
+            }
+            Ok(())
+        },
+        move |ctx| {
+            let Some(state) = ctx
+                .take_aggregate_context::<Option<(lilia_core::HomomorphicSumAccumulator, String)>>(
+                )
+            else {
+                ctx.set_result_null();
+                return Ok(());
+            };
+            if let Some((h_acc, key_id)) = state {
+                let env_str = h_acc.to_envelope(&key_id);
+                ctx.set_result_text(&env_str);
+            } else {
+                ctx.set_result_null();
+            }
+            Ok(())
+        },
+    )?;
 
     let dict_reg_extract = Arc::clone(dict_registry);
     conn.register_scalar_function("lilia_extract", 2, move |ctx, args| {
@@ -930,7 +1192,11 @@ pub(crate) fn register_sql_functions(
                 ctx.set_result_int64(ms);
                 Ok(())
             }
-            Err(e) => Err(LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false)),
+            Err(e) => Err(LiliaError::new(
+                ErrorCode::InvalidInput,
+                e.to_string(),
+                false,
+            )),
         }
     })?;
 
@@ -1109,6 +1375,186 @@ pub(crate) fn register_sql_functions(
         register_direct_wasm_function(conn, wasm_registry, &udf.name)?;
     }
 
+    #[cfg(feature = "zk")]
+    {
+        // zk_verify: validates a zk-SNARK proof bundle in SQL (< 1 ms)
+        conn.register_scalar_function("zk_verify", -1, |ctx, args| {
+            if args.is_empty() || args[0].is_null() {
+                ctx.set_result_null();
+                return Ok(());
+            }
+            let bundle: lilia_zk::ZkProofBundle = if args.len() == 1 {
+                let json_text = args[0].as_text();
+                match serde_json::from_str(json_text) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        ctx.set_result_error(&format!("Invalid ZkProofBundle JSON: {e}"));
+                        return Ok(());
+                    }
+                }
+            } else if args.len() >= 2 {
+                let proof_hex = args[0].as_text().to_string();
+                let pub_inputs_json = args[1].as_text();
+                let inputs: Vec<String> = match serde_json::from_str(pub_inputs_json) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        ctx.set_result_error(&format!("Invalid public inputs JSON: {e}"));
+                        return Ok(());
+                    }
+                };
+                let commitment = inputs.first().cloned().unwrap_or_default();
+                lilia_zk::ZkProofBundle {
+                    proof_hex,
+                    public_inputs: inputs,
+                    commitment_hex: commitment,
+                    circuit_tag: "solde_age_v1".to_string(),
+                    verified_claims: vec![],
+                    proof_size_bytes: 128,
+                }
+            } else {
+                ctx.set_result_error(
+                    "zk_verify requires either a bundle JSON or (proof_hex, public_inputs_json)",
+                );
+                return Ok(());
+            };
+
+            let vk = if args.len() >= 3 && !args[2].is_null() {
+                match lilia_zk::hex_to_vk(args[2].as_text()) {
+                    Ok(vk) => Some(vk),
+                    Err(e) => {
+                        ctx.set_result_error(&format!("Invalid VerifyingKey hex: {e}"));
+                        return Ok(());
+                    }
+                }
+            } else {
+                None
+            };
+
+            match lilia_zk::ZkVerifier::verify(&bundle, vk.as_ref()) {
+                Ok(report) => {
+                    ctx.set_result_int64(if report.valid { 1 } else { 0 });
+                }
+                Err(e) => {
+                    ctx.set_result_error(&format!("zk_verify error: {e}"));
+                }
+            }
+            Ok(())
+        })?;
+
+        // zk_commit: computes Poseidon commitment anchor over (doc_id, balance, age, salt)
+        conn.register_scalar_function("zk_commit", -1, |ctx, args| {
+            if args.len() < 3 {
+                ctx.set_result_error("zk_commit requires (doc_id, balance, age [, salt])");
+                return Ok(());
+            }
+            let doc_id = args[0].as_text();
+            let balance = args[1].as_int64() as u64;
+            let age = args[2].as_int64() as u64;
+
+            let doc_id_fr = lilia_zk::str_to_fr(doc_id);
+            let balance_fr = lilia_zk::u64_to_fr(balance);
+            let age_fr = lilia_zk::u64_to_fr(age);
+
+            let salt_fr = if args.len() >= 4 && !args[3].is_null() {
+                let s = args[3].as_text();
+                lilia_zk::hex_to_fr(s).unwrap_or_else(|_| lilia_zk::str_to_fr(s))
+            } else {
+                lilia_zk::str_to_fr(doc_id)
+            };
+
+            let commitment = lilia_zk::poseidon_hash_4(doc_id_fr, balance_fr, age_fr, salt_fr);
+            ctx.set_result_text(&lilia_zk::fr_to_hex(&commitment));
+            Ok(())
+        })?;
+    }
+
+    // Phonetic scalar functions: soundex, double_metaphone, phonetic_match
+    conn.register_scalar_function("soundex", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let s = args[0].as_text();
+        ctx.set_result_text(&lilia_core::soundex(s));
+        Ok(())
+    })?;
+
+    conn.register_scalar_function("lilia_soundex", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let s = args[0].as_text();
+        ctx.set_result_text(&lilia_core::soundex(s));
+        Ok(())
+    })?;
+
+    conn.register_scalar_function("double_metaphone", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let s = args[0].as_text();
+        let res = lilia_core::double_metaphone(s);
+        let json = if let Some(ref alt) = res.alternate {
+            serde_json::to_string(&[&res.primary, alt]).unwrap_or_default()
+        } else {
+            serde_json::to_string(&[&res.primary]).unwrap_or_default()
+        };
+        ctx.set_result_text(&json);
+        Ok(())
+    })?;
+
+    conn.register_scalar_function("double_metaphone_primary", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let s = args[0].as_text();
+        let res = lilia_core::double_metaphone(s);
+        ctx.set_result_text(&res.primary);
+        Ok(())
+    })?;
+
+    conn.register_scalar_function("double_metaphone_alt", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let s = args[0].as_text();
+        let res = lilia_core::double_metaphone(s);
+        if let Some(ref alt) = res.alternate {
+            ctx.set_result_text(alt);
+        } else {
+            ctx.set_result_null();
+        }
+        Ok(())
+    })?;
+
+    conn.register_scalar_function("phonetic_match", 2, |ctx, args| {
+        if args.len() < 2 || args[0].is_null() || args[1].is_null() {
+            ctx.set_result_int64(0);
+            return Ok(());
+        }
+        let s1 = args[0].as_text();
+        let s2 = args[1].as_text();
+        let matches = lilia_core::is_phonetic_match(s1, s2);
+        ctx.set_result_int64(i64::from(matches));
+        Ok(())
+    })?;
+
+    // CJK Segmentation function: cjk_segment
+    conn.register_scalar_function("cjk_segment", 1, |ctx, args| {
+        if args.is_empty() || args[0].is_null() {
+            ctx.set_result_null();
+            return Ok(());
+        }
+        let s = args[0].as_text();
+        let segmented = lilia_core::prepare_cjk_for_indexing(s);
+        ctx.set_result_text(&segmented);
+        Ok(())
+    })?;
+
     Ok(())
 }
 
@@ -1169,7 +1615,7 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-fn read_column_as_json(stmt: &NativeStatement, col: i32) -> serde_json::Value {
+pub(crate) fn read_column_as_json(stmt: &NativeStatement, col: i32) -> serde_json::Value {
     match stmt.column_type(col) {
         ffi::SQLITE_INTEGER => serde_json::Value::Number(stmt.column_int64(col).into()),
         ffi::SQLITE_FLOAT => serde_json::Number::from_f64(stmt.column_double(col))
@@ -1180,7 +1626,7 @@ fn read_column_as_json(stmt: &NativeStatement, col: i32) -> serde_json::Value {
     }
 }
 
-fn bind_json_params(
+pub(crate) fn bind_json_params(
     stmt: &mut NativeStatement,
     params: &[serde_json::Value],
     string_cache: &mut Vec<String>,
@@ -1400,7 +1846,10 @@ fn find_bitemporal_clause(sql: &str) -> Option<BitemporalClauseMatch> {
                     let (val2_str, eaten2) = extract_temporal_value(after_and)?;
                     let ms1 = lilia_core::parse_iso_to_ms(&val1_str).ok()?;
                     let mut ms2 = lilia_core::parse_iso_to_ms(&val2_str).ok()?;
-                    if !val2_str.contains('T') && !val2_str.contains(' ') && ms2 < i64::MAX - 86_400_000 {
+                    if !val2_str.contains('T')
+                        && !val2_str.contains(' ')
+                        && ms2 < i64::MAX - 86_400_000
+                    {
                         ms2 += 86_400_000;
                     }
                     vt_clause = Some(ValidTimeClause::Between(ms1, ms2));
@@ -1612,7 +2061,7 @@ impl crate::Database {
             let replaced_sql = format!(
                 "{}{}{}",
                 &sql[..bitemp_match.start],
-                &bitemp_match.table_name,
+                bitemp_match.table_name,
                 &sql[bitemp_match.end..]
             );
             let trimmed = replaced_sql.trim();
@@ -1810,6 +2259,28 @@ impl crate::Database {
             return Ok(res);
         }
 
+        if crate::energy::is_explain_diagnose_query(trimmed) {
+            let diag = self.explain_diagnose(trimmed, params)?;
+            return Ok(SqlQueryResult {
+                columns: vec![
+                    "query".to_string(),
+                    "execution_time_us".to_string(),
+                    "estimated_energy_uj".to_string(),
+                    "diagnosis".to_string(),
+                    "recommendation".to_string(),
+                ],
+                rows: vec![vec![
+                    serde_json::Value::String(diag.query),
+                    serde_json::Value::Number(serde_json::Number::from(diag.execution_time_us)),
+                    serde_json::json!(diag.estimated_energy_uj),
+                    serde_json::Value::String(diag.diagnosis.as_str().to_string()),
+                    diag.recommendation
+                        .map_or(serde_json::Value::Null, serde_json::Value::String),
+                ]],
+                rows_affected: 0,
+            });
+        }
+
         let lower = trimmed.to_ascii_lowercase();
         if lower.starts_with("create materialized view ") {
             let after = trimmed["create materialized view ".len()..].trim();
@@ -1897,7 +2368,10 @@ impl crate::Database {
         } else {
             drop(conn);
             let mut writer = self.lock_writer()?;
-            let session = if self.has_live_subscribers() || self.undo_log_capacity > 0 {
+            let session = if self.has_live_subscribers()
+                || self.undo_log_capacity > 0
+                || self.dataflow_engine.has_active_pipelines()
+            {
                 if let Ok(mut sess) = lilia_sqlite_native::NativeSession::create(&writer, "main") {
                     sess.set_table_filter(crate::engine::undo_records_table);
                     let _ = sess.attach_all();
@@ -1968,6 +2442,7 @@ impl crate::Database {
                         if !changeset.is_empty() {
                             self.live_query_manager
                                 .process_changeset(&changeset, &writer);
+                            self.dataflow_engine.process_changeset(&changeset, &writer);
                         }
                     }
                 }
@@ -2530,7 +3005,8 @@ impl<'a> SqlStore<'a> {
         carray: &C,
         params: &[serde_json::Value],
     ) -> Result<SqlQueryResult> {
-        self.db.sql_query_with_carray_and_params(sql, carray, params)
+        self.db
+            .sql_query_with_carray_and_params(sql, carray, params)
     }
 
     /// Execute a mutating SQL statement and return the number of rows affected.

@@ -221,6 +221,14 @@ pub struct FtsFuzzySearchRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FtsPhoneticRequest {
+    pub collection: String,
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HttpBatchOperation {
     KvSet {
@@ -1348,9 +1356,9 @@ async fn sql_handler(
 
 fn parse_direction(dir: Option<&str>) -> Direction {
     match dir {
-        Some("incoming") => Direction::Incoming,
+        Some("incoming" | "inbound") => Direction::Inbound,
         Some("both") => Direction::Both,
-        _ => Direction::Outgoing,
+        _ => Direction::Outbound,
     }
 }
 
@@ -1528,6 +1536,28 @@ async fn fts_fuzzy_search_handler(
     let max_distance = payload.max_distance.unwrap_or(1);
     let hits = tokio::task::spawn_blocking(move || {
         db.fts_fuzzy_search(&payload.collection, &payload.query, max_distance, limit)
+    })
+    .await
+    .map_err(|_| {
+        map_error(LiliaError::new(
+            ErrorCode::Storage,
+            "worker task failed",
+            false,
+        ))
+    })?
+    .map_err(map_error)?;
+
+    Ok(Json(json!({ "ok": true, "hits": hits })))
+}
+
+async fn fts_phonetic_handler(
+    State(state): State<HttpState>,
+    Json(payload): Json<FtsPhoneticRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let db = state.database.clone();
+    let limit = payload.limit.unwrap_or(10);
+    let hits = tokio::task::spawn_blocking(move || {
+        db.fts_phonetic_search(&payload.collection, &payload.query, limit)
     })
     .await
     .map_err(|_| {
@@ -1854,6 +1884,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/v1/fts/search", post(fts_search_handler))
         .route("/v1/fts/suggest", post(fts_suggest_handler))
         .route("/v1/fts/fuzzy-search", post(fts_fuzzy_search_handler))
+        .route("/v1/fts/phonetic", post(fts_phonetic_handler))
         // Vector & Hybrid
         .route("/v1/vector/set", post(vector_set_handler))
         .route("/v1/vector/get", post(vector_get_handler))

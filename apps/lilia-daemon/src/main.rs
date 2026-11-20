@@ -65,6 +65,12 @@ struct Arguments {
     /// Maximum CPU fuel units per WebAssembly plugin invocation (default: 10,000,000).
     #[arg(long = "plugin-fuel-limit", default_value = "10000000")]
     plugin_fuel_limit: u64,
+    /// Enable sub-50ns zero-copy shared memory multi-process engine.
+    #[arg(long = "shm")]
+    shm: bool,
+    /// Custom path for shared memory segment (defaults to <database>.shm).
+    #[arg(long = "shm-path")]
+    shm_path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -104,6 +110,18 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref key) = encryption_key {
         info!("enabled AES-256-GCM at-rest encryption codec");
         options = options.with_codec(Arc::new(lilia_core::Aes256GcmCodec::from_passphrase(key)));
+    }
+    if arguments.shm || arguments.shm_path.is_some() {
+        let shm_backend = if let Some(ref path) = arguments.shm_path {
+            lilia_shm::ShmBackend::FileBacked(path.clone())
+        } else {
+            lilia_shm::ShmBackend::Auto(arguments.database.clone())
+        };
+        info!(path = %shm_backend.resolve_path().display(), "enabled sub-50ns zero-copy shared memory sub-engine");
+        options = options.with_shared_memory(lilia_shm::ShmOptions {
+            backend: shm_backend,
+            ..Default::default()
+        });
     }
     let database = Arc::new(Database::open(options)?);
     let shutdown = Arc::new(Notify::new());
