@@ -2,6 +2,7 @@
 
 use lilia_core::BinaryDoc;
 
+use crate::fts::FtsWrite;
 use crate::graph::GraphWrite;
 use serde_json::Value;
 
@@ -38,6 +39,7 @@ pub enum Write {
         if_version: Option<u64>,
     },
     Graph(GraphWrite),
+    Fts(FtsWrite),
 }
 
 /// Writes applied atomically, all of them or none, in order: a later write of a record sees the

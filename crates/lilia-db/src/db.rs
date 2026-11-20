@@ -17,6 +17,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::batch::{Outcome, Write};
 use crate::catalog::{Catalog, CompiledMask, CompiledPolicy, Index, Schema};
 use crate::error::{corruption, invalid, Error, Result};
+use crate::fts::Vocabularies;
 use crate::guard::Access;
 use crate::keys::{self, validate_name};
 use crate::ledger::{Attempt, CommitProof, Ledger, RecordProof};
@@ -75,6 +76,8 @@ pub struct Database {
     ledger: Option<Ledger>,
     /// Serializes index builds and drops, which run outside the catalog lock.
     admin: Mutex<()>,
+    /// Full-text vocabularies loaded so far.
+    vocabularies: Vocabularies,
 }
 
 impl Database {
@@ -114,6 +117,7 @@ impl Database {
             catalog: RwLock::new(catalog),
             ledger,
             admin: Mutex::new(()),
+            vocabularies: Vocabularies::default(),
         };
         db.finish_maintenance()?;
         if db.ledger.is_some() && options.verify_ledger != LedgerVerifyMode::None {
@@ -171,6 +175,10 @@ impl Database {
         Session::new(self, Access::System)
     }
 
+    pub(crate) fn vocabularies(&self) -> &Vocabularies {
+        &self.vocabularies
+    }
+
     pub(crate) fn engine(&self) -> &Db {
         &self.engine
     }
@@ -183,13 +191,15 @@ impl Database {
     fn run(&self, plan: impl Fn(&Catalog) -> Result<Plan>) -> Result<Vec<Outcome>> {
         loop {
             let catalog = self.catalog.read();
-            let plan = plan(&catalog)?;
+            let mut plan = plan(&catalog)?;
+            let vocabulary = std::mem::take(&mut plan.vocabulary);
             let attempt = match &self.ledger {
                 Some(ledger) => ledger.commit(&self.engine, plan)?,
                 None => self.commit_plain(&plan)?,
             };
             drop(catalog);
-            if let Attempt::Committed(outcomes) = attempt {
+            if let Attempt::Committed { first, outcomes } = attempt {
+                self.vocabularies.apply(&vocabulary, first);
                 return Ok(outcomes);
             }
         }
@@ -197,7 +207,10 @@ impl Database {
 
     fn commit_plain(&self, plan: &Plan) -> Result<Attempt> {
         match self.engine.write(plan.batch()) {
-            Ok(first) => Ok(Attempt::Committed(plan.outcomes(first))),
+            Ok(first) => Ok(Attempt::Committed {
+                first,
+                outcomes: plan.outcomes(first),
+            }),
             Err(lilia_engine::Error::Conflict {
                 key,
                 expected,
@@ -611,6 +624,18 @@ impl Database {
         validate_name("graph", graph)?;
         let key = crate::graph::edge_key(keys::EDGE_OUT, graph, source, kind, target);
         Ledger::prove_record(&self.engine, &key)
+    }
+
+    /// Proof that the current version of document `doc_id` of full-text collection
+    /// `collection` was written by a ledger commit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`].
+    pub fn prove_fts_doc(&self, collection: &str, doc_id: &str) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("collection", collection)?;
+        Ledger::prove_record(&self.engine, &crate::fts::doc_key(collection, doc_id))
     }
 
     /// Verifies the ledger; see [`Ledger::verify`].

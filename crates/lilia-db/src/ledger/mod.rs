@@ -40,7 +40,8 @@ use crate::write::{Model, Plan};
 /// Result of one commit attempt of a plan.
 #[derive(Debug, Clone)]
 pub enum Attempt {
-    Committed(Vec<Outcome>),
+    /// Committed; its writes start at sequence `first`.
+    Committed { first: u64, outcomes: Vec<Outcome> },
     /// An internal expectation failed: plan the batch again.
     Retry,
 }
@@ -152,6 +153,10 @@ fn record_identity(key: &[u8]) -> Option<(Model, String, String)> {
             space,
             crate::graph::edge_identity(record)?,
         )),
+        keys::FTS_DOC | keys::FTS_DICTIONARY => {
+            let (model, id) = crate::fts::identity(tag, record)?;
+            Some((model, space, id))
+        }
         _ => None,
     }
 }
@@ -311,7 +316,10 @@ impl Ledger {
                         if !plan.deltas.is_empty() {
                             Self::append(&mut frontier, &mut batch, plan, base, timestamp_ms);
                         }
-                        results.push(Some(Ok(Attempt::Committed(plan.outcomes(base)))));
+                        results.push(Some(Ok(Attempt::Committed {
+                            first: base,
+                            outcomes: plan.outcomes(base),
+                        })));
                         accepted.push(i);
                     }
                 }

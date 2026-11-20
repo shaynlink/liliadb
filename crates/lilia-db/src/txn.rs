@@ -24,6 +24,7 @@ use crate::batch::{Outcome, Write};
 use crate::context::{sealed, Context, Reader};
 use crate::db::Database;
 use crate::error::{Error, Result};
+use crate::fts::Fts;
 use crate::graph::Graph;
 use crate::guard::{Access, Guard};
 use crate::keys::validate_name;
@@ -353,6 +354,13 @@ impl<'db> Transaction<'db> {
     #[must_use]
     pub fn graph(&self, name: &str) -> Graph<'_, Self> {
         Graph::new(self, name)
+    }
+
+    /// Full-text collection `name`; its writes are buffered until [`Transaction::commit`] and
+    /// its searches see them.
+    #[must_use]
+    pub fn fts(&self, name: &str) -> Fts<'_, Self> {
+        Fts::new(self, name)
     }
 
     /// Commits the transaction's writes if every record it read is unchanged; returns one

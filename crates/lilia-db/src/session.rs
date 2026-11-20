@@ -7,6 +7,7 @@ use crate::batch::{Batch, Outcome, Write};
 use crate::context::{sealed, Context, Reader};
 use crate::db::Database;
 use crate::error::{corruption, Error, Result};
+use crate::fts::Fts;
 use crate::graph::Graph;
 use crate::guard::{Access, Guard};
 use crate::keys::validate_name;
@@ -210,6 +211,12 @@ impl<'db> Session<'db> {
     #[must_use]
     pub fn graph(&self, name: &str) -> Graph<'_, Self> {
         Graph::new(self, name)
+    }
+
+    /// Full-text collection `name`; its writes commit at once.
+    #[must_use]
+    pub fn fts(&self, name: &str) -> Fts<'_, Self> {
+        Fts::new(self, name)
     }
 
     /// Starts an optimistic transaction over a snapshot of the database as of now.

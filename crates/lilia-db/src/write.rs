@@ -27,6 +27,8 @@ pub enum Model {
     Json,
     GraphNode,
     GraphEdge,
+    Fts,
+    FtsDictionary,
 }
 
 impl Model {
@@ -36,6 +38,8 @@ impl Model {
             Self::Json => "json",
             Self::GraphNode => "graph_node",
             Self::GraphEdge => "graph_edge",
+            Self::Fts => "fts",
+            Self::FtsDictionary => "fts_dictionary",
         }
     }
 }
@@ -69,6 +73,9 @@ pub struct Plan {
     /// record.
     pub results: Vec<(Option<usize>, bool)>,
     pub deltas: Vec<Delta>,
+    /// Term count changes of full-text writes, applied to the loaded vocabularies once the
+    /// plan commits.
+    pub vocabulary: crate::fts::Deltas,
 }
 
 impl Plan {
@@ -252,6 +259,15 @@ impl<'a> Planner<'a> {
             .collect())
     }
 
+    /// Records term count changes of a full-text write of `collection`.
+    pub(crate) fn vocabulary(&mut self, collection: &str, deltas: Vec<(String, i64)>) {
+        self.plan.vocabulary.extend(
+            deltas
+                .into_iter()
+                .map(|(term, delta)| (collection.to_owned(), term, delta)),
+        );
+    }
+
     pub(crate) fn op(&mut self, key: Bytes, value: Option<Bytes>) -> usize {
         self.plan.ops.push((key, value));
         self.plan.ops.len() - 1
@@ -315,6 +331,7 @@ impl<'a> Planner<'a> {
                 if_version,
             } => self.json_delete(space, id, *if_version),
             Write::Graph(write) => self.graph(write),
+            Write::Fts(write) => self.fts(write),
         }
     }
 
@@ -557,6 +574,7 @@ pub mod overlay {
                 Ok((vec![(record_key, None)], live))
             }
             Write::Graph(write) => crate::graph::overlay(write, view),
+            Write::Fts(write) => crate::fts::overlay(write, view),
         }
     }
 }
