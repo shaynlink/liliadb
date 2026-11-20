@@ -17,9 +17,11 @@
 
 mod batch;
 mod catalog;
+mod context;
 mod db;
 mod error;
 pub mod find;
+pub mod graph;
 pub mod guard;
 mod keys;
 pub mod ledger;
@@ -30,15 +32,17 @@ mod txn;
 mod write;
 
 pub use batch::{Batch, Outcome, Write};
+pub use context::Context;
 pub use db::{Database, Options};
 pub use error::{Error, Result};
+pub use graph::{Graph, GraphWrite};
 pub use guard::Access;
 pub use ledger::mmr::MmrProof;
 pub use ledger::{CommitProof, RecordProof};
 pub use lilia_core::{
-    BinaryDoc, IndexOptions, JsonEntry, JsonIndexInfo, KvEntry, LedgerCommit,
-    LedgerVerificationReport, LedgerVerifyMode, MaskFunction, MaskingRule, NamedPolicy, Policy,
-    PolicyAction, SecurityContext,
+    BinaryDoc, Direction, GraphEdge, GraphNode, IndexOptions, JsonEntry, JsonIndexInfo, KvEntry,
+    LedgerCommit, LedgerVerificationReport, LedgerVerifyMode, MaskFunction, MaskingRule,
+    NamedPolicy, Policy, PolicyAction, SecurityContext,
 };
 pub use read::Scan;
 pub use session::Session;

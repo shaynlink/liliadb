@@ -61,7 +61,7 @@ fn write_policies_check_inserts_updates_and_deletes() {
     assert!(acme.json_delete("accounts", "a3").unwrap());
     assert_eq!(db.system().json_get("accounts", "g1").unwrap().unwrap().extract_str("tenant"), Some("globex"));
 
-    let mut tx = acme.transaction();
+    let tx = acme.transaction();
     tx.json_put("accounts", "a5", &json!({"tenant": "acme"})).unwrap();
     tx.json_put("accounts", "g2", &json!({"tenant": "globex"})).unwrap();
     assert!(matches!(tx.commit(), Err(Error::Denied(_))));

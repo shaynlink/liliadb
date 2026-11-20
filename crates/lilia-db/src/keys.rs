@@ -10,6 +10,9 @@
 //! | `0x02` | space `\0` id | JSON document record |
 //! | `0x03` | space `\0` index id (8 bytes) escaped value, id | empty: one secondary index entry |
 //! | `0x04` | `n` position, `c` commit, `v` locator, `h` | ledger ([`crate::ledger`]) |
+//! | `0x05` | graph `\0` node id | graph node ([`crate::graph`]) |
+//! | `0x06` | graph `\0` source `\0` kind `\0` target | edge weight |
+//! | `0x07` | graph `\0` target `\0` kind `\0` source | edge weight (inbound mirror) |
 //!
 //! Collection names never contain control characters ([`validate_name`]), so the `\0` after a
 //! name separates collections and keeps them in name order.
@@ -22,6 +25,13 @@ pub const KV: u8 = 0x01;
 pub const DOC: u8 = 0x02;
 pub const INDEX: u8 = 0x03;
 pub const LEDGER: u8 = 0x04;
+pub const GRAPH_NODE: u8 = 0x05;
+pub const EDGE_OUT: u8 = 0x06;
+pub const EDGE_IN: u8 = 0x07;
+
+/// Tags of the keyspaces whose records the ledger attests. Derived keyspaces (secondary
+/// index entries, inbound edge mirrors) are not records of their own.
+pub const RECORD_TAGS: [u8; 4] = [KV, DOC, GRAPH_NODE, EDGE_OUT];
 
 pub const FORMAT: &[u8] = b"\x00format";
 pub const NEXT_INDEX: &[u8] = b"\x00next-index";

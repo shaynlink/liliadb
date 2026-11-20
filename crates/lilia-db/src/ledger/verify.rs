@@ -145,7 +145,7 @@ impl Ledger {
         latest: &mut Attested,
         verified: &mut u64,
     ) -> Result<Option<String>> {
-        for tag in [keys::KV, keys::DOC] {
+        for tag in keys::RECORD_TAGS {
             for entry in engine.range_at(
                 snapshot,
                 Bound::Included(&[tag][..]),

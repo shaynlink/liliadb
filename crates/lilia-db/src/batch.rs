@@ -1,6 +1,8 @@
 //! Atomic groups of writes over every model.
 
 use lilia_core::BinaryDoc;
+
+use crate::graph::GraphWrite;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
@@ -35,6 +37,7 @@ pub enum Write {
         id: String,
         if_version: Option<u64>,
     },
+    Graph(GraphWrite),
 }
 
 /// Writes applied atomically, all of them or none, in order: a later write of a record sees the

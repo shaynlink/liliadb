@@ -142,6 +142,16 @@ fn record_identity(key: &[u8]) -> Option<(Model, String, String)> {
     match tag {
         keys::KV => Some((Model::Kv, space, hex::encode(record))),
         keys::DOC => Some((Model::Json, space, String::from_utf8(record.to_vec()).ok()?)),
+        keys::GRAPH_NODE => Some((
+            Model::GraphNode,
+            space,
+            String::from_utf8(record.to_vec()).ok()?,
+        )),
+        keys::EDGE_OUT => Some((
+            Model::GraphEdge,
+            space,
+            crate::graph::edge_identity(record)?,
+        )),
         _ => None,
     }
 }

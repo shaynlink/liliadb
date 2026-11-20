@@ -25,6 +25,8 @@ use crate::record::{decode_doc, decode_kv, encode_doc, encode_kv};
 pub enum Model {
     Kv,
     Json,
+    GraphNode,
+    GraphEdge,
 }
 
 impl Model {
@@ -32,6 +34,8 @@ impl Model {
         match self {
             Self::Kv => "kv",
             Self::Json => "json",
+            Self::GraphNode => "graph_node",
+            Self::GraphEdge => "graph_edge",
         }
     }
 }
@@ -161,7 +165,7 @@ impl<'a> Planner<'a> {
 
     /// The record at `key` as the batch has left it so far, read from the engine (with an
     /// expectation on its version) the first time.
-    fn current(&mut self, key: &Bytes) -> Result<Option<Bytes>> {
+    pub(crate) fn current(&mut self, key: &Bytes) -> Result<Option<Bytes>> {
         if let Some(local) = self.local.get(key) {
             return Ok(local.raw.clone());
         }
@@ -213,13 +217,48 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
-    fn op(&mut self, key: Bytes, value: Option<Bytes>) -> usize {
+    /// Records the outcome of one write of the batch: its record operation, and whether it
+    /// deleted a live record.
+    pub(crate) fn result(&mut self, op: Option<usize>, deleted: bool) {
+        self.plan.results.push((op, deleted));
+    }
+
+    /// Live records with keys in `[start, end)` as the batch has left them so far. Read without
+    /// expectations: only for writes whose result does not depend on concurrent changes to the
+    /// range (a node deletion removes the edges it sees; an edge added concurrently is as if
+    /// added after it).
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    pub(crate) fn live_range(&mut self, start: &[u8], end: &[u8]) -> Result<Vec<(Bytes, Bytes)>> {
+        let mut found: std::collections::BTreeMap<Bytes, Option<Bytes>> =
+            std::collections::BTreeMap::new();
+        for entry in self.engine.range(
+            std::ops::Bound::Included(start),
+            std::ops::Bound::Excluded(end),
+        )? {
+            let entry = entry?;
+            found.insert(entry.key, Some(entry.value));
+        }
+        for (key, local) in &self.local {
+            if key.as_ref() >= start && key.as_ref() < end {
+                found.insert(key.clone(), local.raw.clone());
+            }
+        }
+        Ok(found
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .collect())
+    }
+
+    pub(crate) fn op(&mut self, key: Bytes, value: Option<Bytes>) -> usize {
         self.plan.ops.push((key, value));
         self.plan.ops.len() - 1
     }
 
     /// Records the write of the record at `key` and returns its operation index.
-    fn write_record(
+    pub(crate) fn write_record(
         &mut self,
         key: &Bytes,
         value: Option<Bytes>,
@@ -275,6 +314,7 @@ impl<'a> Planner<'a> {
                 id,
                 if_version,
             } => self.json_delete(space, id, *if_version),
+            Write::Graph(write) => self.graph(write),
         }
     }
 
@@ -458,5 +498,65 @@ impl<'a> Planner<'a> {
             entry.strict = true;
         }
         Ok(())
+    }
+}
+
+/// How a transaction's buffered writes change what it reads.
+pub mod overlay {
+    use bytes::Bytes;
+
+    use crate::batch::Write;
+    use crate::error::Result;
+    use crate::keys::{self, validate_name};
+    use crate::record::{decode_kv, encode_doc, encode_kv, now_ms};
+    use crate::txn::View;
+
+    /// Records written by one write, and an update of the overlay.
+    pub type Changes = Vec<(Bytes, Option<Bytes>)>;
+
+    /// The records `write` changes in `view`, and whether it deletes a live record.
+    ///
+    /// # Errors
+    ///
+    /// Invalid names; engine errors of the reads a write needs.
+    pub fn changes(write: &Write, view: &View<'_>) -> Result<(Changes, bool)> {
+        match write {
+            Write::KvPut {
+                namespace,
+                key,
+                value,
+                expires_at_ms,
+                ..
+            } => {
+                validate_name("namespace", namespace)?;
+                Ok((
+                    vec![(
+                        keys::kv(namespace, key),
+                        Some(encode_kv(value, *expires_at_ms)),
+                    )],
+                    false,
+                ))
+            }
+            Write::KvDelete { namespace, key, .. } => {
+                validate_name("namespace", namespace)?;
+                let record_key = keys::kv(namespace, key);
+                let live = match view.peek(&record_key)? {
+                    Some(item) => !decode_kv(&item.value)?.expired(now_ms()),
+                    None => false,
+                };
+                Ok((vec![(record_key, None)], live))
+            }
+            Write::JsonPut { space, id, doc, .. } => {
+                validate_name("space", space)?;
+                Ok((vec![(keys::doc(space, id), Some(encode_doc(doc)))], false))
+            }
+            Write::JsonDelete { space, id, .. } => {
+                validate_name("space", space)?;
+                let record_key = keys::doc(space, id);
+                let live = view.peek(&record_key)?.is_some();
+                Ok((vec![(record_key, None)], live))
+            }
+            Write::Graph(write) => crate::graph::overlay(write, view),
+        }
     }
 }

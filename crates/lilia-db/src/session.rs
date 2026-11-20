@@ -4,8 +4,10 @@ use lilia_core::{JsonEntry, KvEntry};
 use serde_json::{Map, Value};
 
 use crate::batch::{Batch, Outcome, Write};
+use crate::context::{sealed, Context, Reader};
 use crate::db::Database;
 use crate::error::{corruption, Error, Result};
+use crate::graph::Graph;
 use crate::guard::{Access, Guard};
 use crate::keys::validate_name;
 use crate::read::{self, Latest, Scan};
@@ -204,9 +206,39 @@ impl<'db> Session<'db> {
             .deleted)
     }
 
+    /// Graph `name`; its writes commit at once.
+    #[must_use]
+    pub fn graph(&self, name: &str) -> Graph<'_, Self> {
+        Graph::new(self, name)
+    }
+
     /// Starts an optimistic transaction over a snapshot of the database as of now.
     #[must_use]
     pub fn transaction(&self) -> Transaction<'db> {
         Transaction::new(self.db, self.access.clone())
+    }
+}
+
+impl Context for Session<'_> {}
+
+impl sealed::Inner for Session<'_> {
+    fn database(&self) -> &Database {
+        self.db
+    }
+
+    fn access(&self) -> &Access {
+        &self.access
+    }
+
+    fn reader(&self, pinned: bool) -> Reader<'_> {
+        if pinned {
+            Reader::Latest(Latest::pinned(self.db.engine()))
+        } else {
+            Reader::Latest(Latest::now(self.db.engine()))
+        }
+    }
+
+    fn submit(&self, writes: Vec<Write>) -> Result<Vec<Outcome>> {
+        self.db.execute(&self.access, &writes, None)
     }
 }

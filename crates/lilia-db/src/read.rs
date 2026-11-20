@@ -206,6 +206,22 @@ pub fn kv_get(
     Ok(kv_entry(namespace, key, &item, now_ms)?.and_then(|entry| guard.kv(entry)))
 }
 
+/// The records of the collection whose keys start with `base` that `scan` selects (before its
+/// limit), in key order.
+///
+/// # Errors
+///
+/// Engine errors opening the range.
+pub fn scan_range<'s>(source: &'s impl Source, base: &[u8], scan: &Scan) -> Result<Items<'s>> {
+    let (start, inclusive, end) = scan.bounds(base);
+    let start = if inclusive {
+        Bound::Included(start.as_slice())
+    } else {
+        Bound::Excluded(start.as_slice())
+    };
+    source.range(start, Bound::Excluded(&end))
+}
+
 pub fn kv_scan(
     source: &impl Source,
     guard: &Guard,
@@ -214,17 +230,11 @@ pub fn kv_scan(
     now_ms: i64,
 ) -> Result<Vec<KvEntry>> {
     let base = keys::collection(keys::KV, namespace);
-    let (start, inclusive, end) = scan.bounds(&base);
-    let start = if inclusive {
-        Bound::Included(start.as_slice())
-    } else {
-        Bound::Excluded(start.as_slice())
-    };
     let mut out = Vec::new();
     if scan.full(0) {
         return Ok(out);
     }
-    for item in source.range(start, Bound::Excluded(&end))? {
+    for item in scan_range(source, &base, scan)? {
         let item = item?;
         source.observe(&item);
         let key = keys::suffix(&item.key, &base);

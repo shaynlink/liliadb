@@ -582,6 +582,37 @@ impl Database {
         Ledger::prove_record(&self.engine, &keys::doc(space, id))
     }
 
+    /// Proof that the current version of node `id` of graph `graph` was written by a ledger
+    /// commit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`].
+    pub fn prove_node(&self, graph: &str, id: &str) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("graph", graph)?;
+        Ledger::prove_record(&self.engine, &crate::graph::node_key(graph, id))
+    }
+
+    /// Proof that the current version of the edge `source -kind-> target` of graph `graph` was
+    /// written by a ledger commit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`].
+    pub fn prove_edge(
+        &self,
+        graph: &str,
+        source: &str,
+        target: &str,
+        kind: &str,
+    ) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("graph", graph)?;
+        let key = crate::graph::edge_key(keys::EDGE_OUT, graph, source, kind, target);
+        Ledger::prove_record(&self.engine, &key)
+    }
+
     /// Verifies the ledger; see [`Ledger::verify`].
     ///
     /// # Errors

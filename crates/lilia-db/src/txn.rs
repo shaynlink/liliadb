@@ -10,7 +10,7 @@
 //! a find. A record inserted by another writer into a range the transaction scanned (a phantom)
 //! is not detected.
 
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::iter::Peekable;
 use std::ops::Bound;
@@ -21,12 +21,15 @@ use lilia_engine::{Db, Snapshot};
 use serde_json::{Map, Value};
 
 use crate::batch::{Outcome, Write};
+use crate::context::{sealed, Context, Reader};
 use crate::db::Database;
 use crate::error::{Error, Result};
+use crate::graph::Graph;
 use crate::guard::{Access, Guard};
-use crate::keys::{self, validate_name};
+use crate::keys::validate_name;
 use crate::read::{self, Item, Items, Scan, Source};
-use crate::record::{encode_doc, encode_kv, now_ms};
+use crate::record::now_ms;
+use crate::write::overlay;
 
 /// A transaction; see the [module documentation](self). Dropping it without committing
 /// discards its writes.
@@ -36,17 +39,26 @@ pub struct Transaction<'db> {
     access: Access,
     snapshot: Snapshot,
     reads: RefCell<HashMap<Bytes, Option<u64>>>,
-    writes: Vec<Write>,
+    writes: RefCell<Vec<Write>>,
     /// Records as the transaction's writes leave them; `None` for a delete.
-    overlay: BTreeMap<Bytes, Option<Bytes>>,
+    overlay: RefCell<BTreeMap<Bytes, Option<Bytes>>>,
 }
 
 /// The transaction's view: its snapshot under its own writes.
-struct View<'t> {
+pub struct View<'t> {
     engine: &'t Db,
     snapshot: &'t Snapshot,
     reads: &'t RefCell<HashMap<Bytes, Option<u64>>>,
-    overlay: &'t BTreeMap<Bytes, Option<Bytes>>,
+    overlay: Ref<'t, BTreeMap<Bytes, Option<Bytes>>>,
+}
+
+impl std::fmt::Debug for View<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("View")
+            .field("sequence", &self.snapshot.sequence())
+            .field("pending", &self.overlay.len())
+            .finish_non_exhaustive()
+    }
 }
 
 fn pending(key: &Bytes, value: &Bytes) -> Item {
@@ -55,6 +67,23 @@ fn pending(key: &Bytes, value: &Bytes) -> Item {
         value: value.clone(),
         version: 0,
         pending: true,
+    }
+}
+
+impl View<'_> {
+    /// The record at `key` as the transaction sees it, without recording a read: for writes
+    /// that only report what they replace.
+    pub(crate) fn peek(&self, key: &Bytes) -> Result<Option<Item>> {
+        if let Some(own) = self.overlay.get(key) {
+            return Ok(own.as_ref().map(|value| pending(key, value)));
+        }
+        let found = self.engine.get_at(self.snapshot, key)?;
+        Ok(found.map(|v| Item {
+            key: key.clone(),
+            value: v.value,
+            version: v.version,
+            pending: false,
+        }))
     }
 }
 
@@ -165,8 +194,8 @@ impl<'db> Transaction<'db> {
             access,
             snapshot,
             reads: RefCell::new(HashMap::new()),
-            writes: Vec::new(),
-            overlay: BTreeMap::new(),
+            writes: RefCell::new(Vec::new()),
+            overlay: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -175,7 +204,7 @@ impl<'db> Transaction<'db> {
             engine: self.db.engine(),
             snapshot: &self.snapshot,
             reads: &self.reads,
-            overlay: &self.overlay,
+            overlay: self.overlay.borrow(),
         }
     }
 
@@ -251,48 +280,27 @@ impl<'db> Transaction<'db> {
         read::doc_find(&self.view(), &guard, schema.as_deref(), space, query, scan)
     }
 
-    /// Buffers `write`; it is planned, checked and applied by [`Transaction::commit`].
+    /// Buffers `write`; it is planned, checked and applied by [`Transaction::commit`]. The
+    /// outcome says what the write does within the transaction (no version yet).
     ///
     /// # Errors
     ///
-    /// Invalid names.
-    pub fn write(&mut self, write: Write) -> Result<()> {
-        let (key, record) = match &write {
-            Write::KvPut {
-                namespace,
-                key,
-                value,
-                expires_at_ms,
-                ..
-            } => {
-                validate_name("namespace", namespace)?;
-                (
-                    keys::kv(namespace, key),
-                    Some(encode_kv(value, *expires_at_ms)),
-                )
-            }
-            Write::KvDelete { namespace, key, .. } => {
-                validate_name("namespace", namespace)?;
-                (keys::kv(namespace, key), None)
-            }
-            Write::JsonPut { space, id, doc, .. } => {
-                validate_name("space", space)?;
-                (keys::doc(space, id), Some(encode_doc(doc)))
-            }
-            Write::JsonDelete { space, id, .. } => {
-                validate_name("space", space)?;
-                (keys::doc(space, id), None)
-            }
-        };
-        self.overlay.insert(key, record);
-        self.writes.push(write);
-        Ok(())
+    /// Invalid names; engine errors of the reads a write needs (a node deletion reads the
+    /// node's edges).
+    pub fn write(&self, write: Write) -> Result<Outcome> {
+        let (changes, deleted) = overlay::changes(&write, &self.view())?;
+        self.overlay.borrow_mut().extend(changes);
+        self.writes.borrow_mut().push(write);
+        Ok(Outcome {
+            version: None,
+            deleted,
+        })
     }
 
     /// # Errors
     ///
     /// Invalid namespace.
-    pub fn kv_put(&mut self, namespace: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn kv_put(&self, namespace: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.write(Write::KvPut {
             namespace: namespace.to_owned(),
             key: key.to_vec(),
@@ -300,23 +308,25 @@ impl<'db> Transaction<'db> {
             expires_at_ms: None,
             if_version: None,
         })
+        .map(drop)
     }
 
     /// # Errors
     ///
     /// Invalid namespace.
-    pub fn kv_delete(&mut self, namespace: &str, key: &[u8]) -> Result<()> {
+    pub fn kv_delete(&self, namespace: &str, key: &[u8]) -> Result<()> {
         self.write(Write::KvDelete {
             namespace: namespace.to_owned(),
             key: key.to_vec(),
             if_version: None,
         })
+        .map(drop)
     }
 
     /// # Errors
     ///
     /// Invalid space; [`Error::Document`] for a value that cannot be stored.
-    pub fn json_put(&mut self, space: &str, id: &str, value: &Value) -> Result<()> {
+    pub fn json_put(&self, space: &str, id: &str, value: &Value) -> Result<()> {
         let doc = BinaryDoc::from_json_value(value).map_err(|e| Error::Document(e.to_string()))?;
         self.write(Write::JsonPut {
             space: space.to_owned(),
@@ -324,17 +334,25 @@ impl<'db> Transaction<'db> {
             doc,
             if_version: None,
         })
+        .map(drop)
     }
 
     /// # Errors
     ///
     /// Invalid space.
-    pub fn json_delete(&mut self, space: &str, id: &str) -> Result<()> {
+    pub fn json_delete(&self, space: &str, id: &str) -> Result<()> {
         self.write(Write::JsonDelete {
             space: space.to_owned(),
             id: id.to_owned(),
             if_version: None,
         })
+        .map(drop)
+    }
+
+    /// Graph `name`; its writes are buffered until [`Transaction::commit`] and its reads see them.
+    #[must_use]
+    pub fn graph(&self, name: &str) -> Graph<'_, Self> {
+        Graph::new(self, name)
     }
 
     /// Commits the transaction's writes if every record it read is unchanged; returns one
@@ -346,6 +364,27 @@ impl<'db> Transaction<'db> {
     /// [`Error::Denied`] for a write a policy rejects; engine errors. Nothing is written on error.
     pub fn commit(self) -> Result<Vec<Outcome>> {
         let reads = self.reads.into_inner();
-        self.db.execute(&self.access, &self.writes, Some(&reads))
+        self.db
+            .execute(&self.access, &self.writes.into_inner(), Some(&reads))
+    }
+}
+
+impl Context for Transaction<'_> {}
+
+impl sealed::Inner for Transaction<'_> {
+    fn database(&self) -> &Database {
+        self.db
+    }
+
+    fn access(&self) -> &Access {
+        &self.access
+    }
+
+    fn reader(&self, _pinned: bool) -> Reader<'_> {
+        Reader::View(self.view())
+    }
+
+    fn submit(&self, writes: Vec<Write>) -> Result<Vec<Outcome>> {
+        writes.into_iter().map(|write| self.write(write)).collect()
     }
 }

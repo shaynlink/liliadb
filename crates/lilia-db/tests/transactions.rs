@@ -28,7 +28,7 @@ fn transactions_read_a_snapshot_under_their_own_writes() {
     }
     s.kv_put("ns", b"b", b"committed").unwrap();
 
-    let mut tx = s.transaction();
+    let tx = s.transaction();
     let reader = s.transaction();
     s.json_put("tasks", "t4", &json!({"state": "todo"})).unwrap();
     s.kv_put("ns", b"c", b"later").unwrap();
@@ -67,27 +67,27 @@ fn a_changed_read_fails_the_commit_and_writes_nothing() {
     let s = db.system();
     s.kv_put("acct", b"x", b"100").unwrap();
 
-    let mut tx = s.transaction();
+    let tx = s.transaction();
     assert_eq!(tx.kv_get("acct", b"x").unwrap().unwrap().value, b"100");
     tx.kv_put("acct", b"y", b"moved").unwrap();
     s.kv_put("acct", b"x", b"50").unwrap();
     assert!(matches!(tx.commit(), Err(Error::Conflict { .. })));
     assert!(s.kv_get("acct", b"y").unwrap().is_none());
 
-    let mut absent = s.transaction();
+    let absent = s.transaction();
     assert!(absent.json_get("users", "u1").unwrap().is_none());
     absent.kv_put("log", b"saw-no-u1", b"1").unwrap();
     s.json_put("users", "u1", &json!({})).unwrap();
     assert!(matches!(absent.commit(), Err(Error::Conflict { expected: None, .. })), "an insert of a record read as absent conflicts");
 
-    let mut scanned = s.transaction();
+    let scanned = s.transaction();
     assert_eq!(scanned.kv_scan("acct", &Scan::all()).unwrap().len(), 1);
     scanned.kv_put("summary", b"n", b"1").unwrap();
     s.kv_put("acct", b"x", b"10").unwrap();
     assert!(matches!(scanned.commit(), Err(Error::Conflict { .. })), "a change to a scanned record conflicts");
 
     let blind = {
-        let mut tx = s.transaction();
+        let tx = s.transaction();
         tx.kv_put("acct", b"x", b"blind").unwrap();
         tx
     };
@@ -111,7 +111,7 @@ fn concurrent_increments_are_serializable() {
                 let mut conflicts = 0;
                 for _ in 0..per_thread {
                     loop {
-                        let mut tx = s.transaction();
+                        let tx = s.transaction();
                         let current = tx.json_get("counters", "c").unwrap().and_then(|e| e.extract_i64("n")).unwrap_or(0);
                         tx.json_put("counters", "c", &json!({"n": current + 1, "by": t})).unwrap();
                         match tx.commit() {
