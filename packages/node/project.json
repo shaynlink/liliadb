@@ -8,7 +8,6 @@
     "build": { "executor": "nx:run-script", "options": { "script": "build" } },
     "test": { "executor": "nx:run-script", "options": { "script": "test" } },
     "lint": { "executor": "nx:run-script", "options": { "script": "lint" } },
-    "bench": { "executor": "nx:run-script", "options": { "script": "bench" } },
     "package": { "executor": "nx:run-script", "options": { "script": "package" } }
   },
   "tags": ["scope:bindings", "type:library", "lang:typescript"]
