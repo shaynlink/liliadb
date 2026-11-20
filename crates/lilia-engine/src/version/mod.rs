@@ -6,7 +6,7 @@ pub mod edit;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use lilia_io::{OpenMode, SyncLevel, Vfs};
 
@@ -16,6 +16,7 @@ use crate::files::{self, TableStore};
 use crate::journal::{self, JournalWriter};
 use crate::key;
 use crate::memtable::Found;
+use crate::table::Table;
 use crate::options::LEVELS;
 
 /// A sorted run of a version. Its file is deleted once it is obsolete and no version or iterator
@@ -30,6 +31,8 @@ pub struct FileMeta {
     pub compacting: AtomicBool,
     obsolete: AtomicBool,
     store: Arc<TableStore>,
+    /// Opened on first use and kept for the run's lifetime.
+    table: OnceLock<Arc<Table>>,
 }
 
 impl FileMeta {
@@ -42,7 +45,17 @@ impl FileMeta {
             compacting: AtomicBool::new(false),
             obsolete: AtomicBool::new(false),
             store: Arc::clone(store),
+            table: OnceLock::new(),
         }
+    }
+
+    /// The open table of this run.
+    pub fn table(&self) -> Result<&Arc<Table>> {
+        if let Some(table) = self.table.get() {
+            return Ok(table);
+        }
+        let opened = self.store.open(self.number, self.size)?;
+        Ok(self.table.get_or_init(|| opened))
     }
 
     pub fn smallest_user(&self) -> &[u8] {
@@ -81,11 +94,8 @@ pub struct Version {
 
 impl Version {
     /// The newest version of `user` visible at the sequence of `lookup`.
-    pub fn get(&self, store: &TableStore, user: &[u8], lookup: &[u8]) -> Result<Option<Found>> {
-        let probe = |file: &FileMeta| -> Result<Option<Found>> {
-            let Some((found, value)) = store.get(file.number, file.size)?.get(lookup, user)? else { return Ok(None) };
-            Ok(Some(Found { kind: key::kind(&found)?, sequence: key::sequence(&found), value }))
-        };
+    pub fn get(&self, user: &[u8], lookup: &[u8]) -> Result<Option<Found>> {
+        let probe = |file: &FileMeta| file.table()?.get(lookup, user);
         for file in self.levels[0].iter().filter(|f| f.overlaps(user, user)) {
             if let Some(found) = probe(file)? {
                 return Ok(Some(found));

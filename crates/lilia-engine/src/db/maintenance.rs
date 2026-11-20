@@ -151,7 +151,7 @@ fn run(inner: &Inner, compaction: &Compaction, version: &Version) -> Result<()> 
     }
     let mut children: Vec<Box<dyn InternalIterator>> = Vec::new();
     for file in compaction.all_inputs() {
-        children.push(Box::new(inner.store.get(file.number, file.size)?.iter()));
+        children.push(Box::new(file.table()?.iter()));
     }
     let mut merged = MergingIterator::new(children);
     merged.seek_to_first()?;

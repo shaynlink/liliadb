@@ -25,12 +25,8 @@ impl Inner {
     }
 
     /// Newest version of `key` among committed writes; `None` if absent or deleted.
-    fn latest_version(&self, current: &SuperVersion, key: &[u8]) -> Result<Option<u64>> {
-        let found = match std::iter::once(&current.mem).chain(&current.imm).find_map(|m| m.get(key, MAX_SEQUENCE)) {
-            Some(found) => Some(found),
-            None => current.version.get(&self.store, key, &crate::key::lookup(key, MAX_SEQUENCE))?,
-        };
-        Ok(found.filter(|f| f.kind == Kind::Put).map(|f| f.sequence))
+    fn latest_version(current: &SuperVersion, key: &[u8]) -> Result<Option<u64>> {
+        Ok(current.lookup(key, MAX_SEQUENCE)?.filter(|f| f.kind == Kind::Put).map(|f| f.sequence))
     }
 
     /// Run by the commit leader: validates, journals and applies a group of batches.
@@ -48,7 +44,7 @@ impl Inner {
         let mut accepted: Vec<(&Arc<Writer>, u64)> = Vec::new();
         let mut records: Vec<Vec<u8>> = Vec::new();
         for writer in group {
-            match self.admit(&current, &writer.batch, &written, next) {
+            match Self::admit(&current, &writer.batch, &written, next) {
                 Err(error) => writer.finish(Err(error)),
                 Ok(()) if writer.batch.is_empty() => writer.finish(Ok(next - 1)),
                 Ok(()) => {
@@ -97,14 +93,14 @@ impl Inner {
     }
 
     /// Checks one batch of a group: sequence space and expectations.
-    fn admit(&self, current: &SuperVersion, batch: &WriteBatch, written: &HashMap<Bytes, Option<u64>>, next: u64) -> Result<()> {
+    fn admit(current: &SuperVersion, batch: &WriteBatch, written: &HashMap<Bytes, Option<u64>>, next: u64) -> Result<()> {
         if next + batch.len() as u64 > MAX_SEQUENCE {
             return Err(Error::InvalidArgument("sequence numbers exhausted".into()));
         }
         for expectation in &batch.expectations {
             let actual = match written.get(&expectation.key) {
                 Some(&version) => version,
-                None => self.latest_version(current, &expectation.key)?,
+                None => Self::latest_version(current, &expectation.key)?,
             };
             if actual != expectation.version {
                 return Err(Error::Conflict { key: expectation.key.to_vec(), expected: expectation.version, actual });
@@ -171,7 +167,7 @@ impl Inner {
         let mut imm = Vec::with_capacity(current.imm.len() + 1);
         imm.push(Arc::clone(&current.mem));
         imm.extend(current.imm.iter().cloned());
-        *current = Arc::new(SuperVersion { mem: Arc::new(Memtable::new(number)), imm, version: Arc::clone(&current.version) });
+        *current = Arc::new(SuperVersion { mem: Arc::new(Memtable::new(number, self.options.memtable_bytes)), imm, version: Arc::clone(&current.version) });
         drop(current);
         self.signal_work();
         Ok(())

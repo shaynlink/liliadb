@@ -8,7 +8,6 @@ use bytes::Bytes;
 
 use super::{Inner, SuperVersion};
 use crate::error::Result;
-use crate::files::TableStore;
 use crate::iter::{InternalIterator, MergingIterator};
 use crate::key::{self, Kind};
 use crate::memtable::Found;
@@ -37,12 +36,7 @@ fn visible(found: Option<Found>) -> Option<Versioned> {
 impl Inner {
     pub fn get_at(&self, user: &[u8], sequence: u64) -> Result<Option<Versioned>> {
         let current = self.super_version();
-        for memtable in std::iter::once(&current.mem).chain(&current.imm) {
-            if let Some(found) = memtable.get(user, sequence) {
-                return Ok(visible(Some(found)));
-            }
-        }
-        Ok(visible(current.version.get(&self.store, user, &key::lookup(user, sequence))?))
+        Ok(visible(current.lookup(user, sequence)?))
     }
 }
 
@@ -86,7 +80,6 @@ impl Drop for Snapshot {
 /// Runs of one deeper level, read one after the other: only the run holding the cursor is open.
 struct LevelIter {
     files: Vec<Arc<FileMeta>>,
-    store: Arc<TableStore>,
     at: usize,
     current: Option<TableIter>,
 }
@@ -97,7 +90,7 @@ impl LevelIter {
     fn open(&mut self, mut at: usize, mut target: Option<&[u8]>) -> Result<()> {
         self.current = None;
         while let Some(file) = self.files.get(at) {
-            let mut iter = self.store.get(file.number, file.size)?.iter();
+            let mut iter = file.table()?.iter();
             match target.take() {
                 Some(t) => iter.seek(t)?,
                 None => iter.seek_to_first()?,
@@ -143,6 +136,10 @@ impl InternalIterator for LevelIter {
     fn value(&self) -> &[u8] {
         self.current.as_ref().map_or(&[], InternalIterator::value)
     }
+
+    fn value_bytes(&self) -> Bytes {
+        self.current.as_ref().map_or_else(Bytes::new, InternalIterator::value_bytes)
+    }
 }
 
 /// Entries of a key range as of one sequence number, in key order. Holds the memtables and runs
@@ -171,11 +168,11 @@ impl RangeIter {
             children.push(Box::new(memtable.iter()));
         }
         for file in &source.version.levels[0] {
-            children.push(Box::new(inner.store.get(file.number, file.size)?.iter()));
+            children.push(Box::new(file.table()?.iter()));
         }
         for level in &source.version.levels[1..] {
             if !level.is_empty() {
-                children.push(Box::new(LevelIter { files: level.clone(), store: Arc::clone(&inner.store), at: 0, current: None }));
+                children.push(Box::new(LevelIter { files: level.clone(), at: 0, current: None }));
             }
         }
         let mut merged = MergingIterator::new(children);
@@ -215,7 +212,7 @@ impl RangeIter {
             self.resolved = Some(user.to_vec());
             let entry = (key::kind(internal)? == Kind::Put).then(|| Entry {
                 key: Bytes::copy_from_slice(user),
-                value: Bytes::copy_from_slice(self.merged.value()),
+                value: self.merged.value_bytes(),
                 version: key::sequence(internal),
             });
             self.merged.next()?;

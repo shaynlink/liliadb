@@ -37,6 +37,13 @@ impl<'a> Reader<'a> {
     }
 
     pub fn varint(&mut self) -> Result<u64> {
+        // Lengths below 128 are the common case: one byte, no loop.
+        if let Some((&byte, rest)) = self.data.split_first() {
+            if byte < 0x80 {
+                self.data = rest;
+                return Ok(u64::from(byte));
+            }
+        }
         let mut value = 0u64;
         for shift in (0..64).step_by(7) {
             let (&byte, rest) = self.data.split_first().ok_or_else(|| corruption(format!("{}: truncated varint", self.what)))?;

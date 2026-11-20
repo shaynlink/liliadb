@@ -38,6 +38,20 @@ pub(crate) struct SuperVersion {
     pub version: Arc<Version>,
 }
 
+impl SuperVersion {
+    /// The newest version of `user` visible at `sequence`: memtables first, then sorted runs.
+    /// The search key is built once and shared by every level.
+    pub fn lookup(&self, user: &[u8], sequence: u64) -> Result<Option<crate::memtable::Found>> {
+        let target = crate::key::InternalKey(Bytes::from(crate::key::lookup(user, sequence)));
+        for memtable in std::iter::once(&self.mem).chain(&self.imm) {
+            if let Some(found) = memtable.get(user, &target) {
+                return Ok(Some(found));
+            }
+        }
+        self.version.get(user, &target.0)
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct WorkState {
     pub shutdown: bool,
@@ -50,7 +64,6 @@ pub(crate) struct Inner {
     pub dir: PathBuf,
     pub vfs: Arc<dyn Vfs>,
     pub options: Options,
-    pub store: Arc<TableStore>,
     pub current: RwLock<Arc<SuperVersion>>,
     pub versions: Mutex<VersionSet>,
     pub journal: Mutex<JournalWriter>,
@@ -200,7 +213,7 @@ impl Db {
         }
 
         let super_version = SuperVersion {
-            mem: Arc::new(Memtable::new(journal_number)),
+            mem: Arc::new(Memtable::new(journal_number, options.memtable_bytes)),
             imm: Vec::new(),
             version: Arc::clone(&versions.current),
         };
@@ -208,7 +221,6 @@ impl Db {
             dir,
             vfs,
             options,
-            store,
             current: RwLock::new(Arc::new(super_version)),
             versions: Mutex::new(versions),
             journal: Mutex::new(JournalWriter::new(journal_file)),
@@ -399,7 +411,7 @@ impl Drop for Db {
 /// sequence number. Replay stops at the first damaged record: everything after it in time was
 /// never acknowledged as durable.
 fn replay(vfs: &Arc<dyn Vfs>, dir: &Path, options: &Options, store: &Arc<TableStore>, versions: &mut VersionSet, journals: &[u64]) -> Result<u64> {
-    let memtable = Arc::new(Memtable::new(0));
+    let memtable = Arc::new(Memtable::new(0, options.memtable_bytes));
     let mut last_sequence = versions.last_sequence;
     for &number in journals {
         let file = vfs.open(&files::journal(dir, number), OpenMode::Read)?;

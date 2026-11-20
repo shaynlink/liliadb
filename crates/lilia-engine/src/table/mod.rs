@@ -14,12 +14,13 @@ use std::sync::Arc;
 use bytes::Bytes;
 use lilia_io::{File, SyncLevel};
 
-use self::block::{Block, BlockBuilder, BlockIter};
+use self::block::{Block, BlockBuilder, BlockIter, Cursor, INDEX_RESTART_INTERVAL};
 use self::cache::BlockCache;
 use crate::coding::{masked_crc, put_varint, Reader};
 use crate::error::{corruption, Result};
 use crate::iter::InternalIterator;
 use crate::key;
+use crate::memtable::Found;
 
 const MAGIC: u64 = 0x4C49_4C49_4153_5354; // "LILIASST"
 const FOOTER: usize = 48;
@@ -65,7 +66,7 @@ impl TableBuilder {
             block_bytes,
             bits_per_key,
             data: BlockBuilder::default(),
-            index: BlockBuilder::default(),
+            index: BlockBuilder::new(INDEX_RESTART_INTERVAL),
             pending: None,
             hashes: Vec::new(),
             last_user: Vec::new(),
@@ -216,19 +217,22 @@ impl Table {
 
     /// The first entry at or after `target` if it belongs to `user`: the newest version visible
     /// at the target's sequence number.
-    pub fn get(&self, target: &[u8], user: &[u8]) -> Result<Option<(Vec<u8>, Bytes)>> {
+    pub fn get(&self, target: &[u8], user: &[u8]) -> Result<Option<Found>> {
         if !filter::may_contain(&self.filter, filter::hash(user)) {
             return Ok(None);
         }
-        let mut index = self.index.iter();
-        index.seek(target)?;
-        if !index.valid() {
+        // One cursor for the index, then for the data block: one key buffer per lookup.
+        let mut cursor = Cursor::default();
+        cursor.seek(&self.index, target)?;
+        if !cursor.valid() {
             return Ok(None);
         }
-        let block = self.data_block(index.value())?;
-        let mut iter = block.iter();
-        iter.seek(target)?;
-        Ok((iter.valid() && key::user(iter.key()) == user).then(|| (iter.key().to_vec(), iter.value_bytes())))
+        let block = self.data_block(cursor.value(&self.index))?;
+        cursor.seek(&block, target)?;
+        if !cursor.valid() || key::user(cursor.key()) != user {
+            return Ok(None);
+        }
+        Ok(Some(Found { kind: key::kind(cursor.key())?, sequence: key::sequence(cursor.key()), value: block.slice(cursor.value_range()) }))
     }
 
     pub fn iter(self: &Arc<Self>) -> TableIter {
@@ -297,6 +301,10 @@ impl InternalIterator for TableIter {
     fn value(&self) -> &[u8] {
         self.data.as_ref().map_or(&[], InternalIterator::value)
     }
+
+    fn value_bytes(&self) -> Bytes {
+        self.data.as_ref().map_or_else(Bytes::new, InternalIterator::value_bytes)
+    }
 }
 
 #[cfg(test)]
@@ -326,10 +334,10 @@ mod tests {
 
         for i in (0..n).step_by(7) {
             let user = format!("user{i:06}");
-            let (_, newest) = table.get(&lookup(user.as_bytes(), 20), user.as_bytes()).unwrap().unwrap();
-            assert_eq!(newest, format!("new{i}"));
-            let (_, older) = table.get(&lookup(user.as_bytes(), 7), user.as_bytes()).unwrap().unwrap();
-            assert_eq!(older, format!("old{i}"));
+            let newest = table.get(&lookup(user.as_bytes(), 20), user.as_bytes()).unwrap().unwrap();
+            assert_eq!((newest.value, newest.sequence), (Bytes::from(format!("new{i}")), 10));
+            let older = table.get(&lookup(user.as_bytes(), 7), user.as_bytes()).unwrap().unwrap();
+            assert_eq!(older.value, format!("old{i}"));
             assert!(table.get(&lookup(user.as_bytes(), 4), user.as_bytes()).unwrap().is_none());
         }
         assert!(table.get(&lookup(b"user999999", 20), b"user999999").unwrap().is_none());

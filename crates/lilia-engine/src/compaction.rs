@@ -212,7 +212,7 @@ mod tests {
         let store = Arc::new(crate::files::TableStore::new(Arc::new(vfs.clone()), dir.to_path_buf(), Arc::new(crate::table::cache::BlockCache::new(0))));
         let mut kept = Vec::new();
         for file in outputs {
-            let table = store.get(file.number, file.size).unwrap();
+            let table = store.open(file.number, file.size).unwrap();
             let mut it = table.iter();
             it.seek_to_first().unwrap();
             while it.valid() {

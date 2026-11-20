@@ -1,52 +1,87 @@
-//! Cache of decoded blocks, bounded in bytes, sharded to keep lock contention low.
+//! Cache of decoded blocks, bounded in bytes.
+//!
+//! CLOCK replacement: a hit only sets the block's reference bit under a shared lock, so
+//! concurrent readers of a shard never wait on each other. Eviction (under the shard's exclusive
+//! lock, on insert) walks the insertion ring: referenced blocks get a second chance, the others
+//! go. Blocks that are read once, as by a scan, are evicted before blocks that are read again.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap, VecDeque};
+use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 use super::block::Block;
 
-const SHARDS: usize = 16;
+const SHARDS: usize = 64;
 
 /// `(table number, block offset)`.
 type CacheKey = (u64, u64);
 
+/// Multiply-fold hash for the two integers of a key: fast, and good enough for a hash table.
+#[derive(Debug, Default)]
+struct KeyHasher(u64);
+
+impl Hasher for KeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.write_u64(u64::from(byte));
+        }
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+#[derive(Debug)]
+struct Slot {
+    block: Arc<Block>,
+    referenced: AtomicBool,
+}
+
 #[derive(Debug, Default)]
 struct Shard {
-    entries: HashMap<CacheKey, (Arc<Block>, u64)>,
-    /// Least recently used first: tick → key.
-    order: BTreeMap<u64, CacheKey>,
-    tick: u64,
+    map: HashMap<CacheKey, Slot, BuildHasherDefault<KeyHasher>>,
+    /// Keys in insertion order; may hold keys already removed by `evict_table`.
+    ring: VecDeque<CacheKey>,
     bytes: usize,
 }
 
-/// Least-recently-used block cache shared by every table of a database.
+/// Block cache shared by every table of a database.
 #[derive(Debug)]
 pub struct BlockCache {
-    shards: Vec<Mutex<Shard>>,
+    shards: Vec<RwLock<Shard>>,
     shard_capacity: usize,
 }
 
 impl BlockCache {
     pub fn new(capacity_bytes: usize) -> Self {
-        Self { shards: (0..SHARDS).map(|_| Mutex::new(Shard::default())).collect(), shard_capacity: capacity_bytes / SHARDS }
+        Self { shards: (0..SHARDS).map(|_| RwLock::new(Shard::default())).collect(), shard_capacity: capacity_bytes / SHARDS }
     }
 
-    fn shard(&self, key: CacheKey) -> &Mutex<Shard> {
-        let mix = (key.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (key.1 >> 12)).rotate_left(29);
-        &self.shards[usize::try_from(mix % SHARDS as u64).unwrap_or_default()]
+    /// Spreads the blocks of every table over all shards: both halves of the key go through a
+    /// full avalanche, so neighbouring blocks of one table land in unrelated shards.
+    fn shard(&self, key: CacheKey) -> &RwLock<Shard> {
+        let mut z = key.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ key.1;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        &self.shards[usize::try_from(z % SHARDS as u64).unwrap_or_default()]
     }
 
     pub fn get(&self, table: u64, offset: u64) -> Option<Arc<Block>> {
-        let key = (table, offset);
-        let mut shard = self.shard(key).lock();
-        shard.tick += 1;
-        let tick = shard.tick;
-        let (block, old) = shard.entries.get_mut(&key).map(|(b, t)| (Arc::clone(b), std::mem::replace(t, tick)))?;
-        shard.order.remove(&old);
-        shard.order.insert(tick, key);
-        Some(block)
+        let shard = self.shard((table, offset)).read();
+        let slot = shard.map.get(&(table, offset))?;
+        if !slot.referenced.load(Ordering::Relaxed) {
+            slot.referenced.store(true, Ordering::Relaxed);
+        }
+        Some(Arc::clone(&slot.block))
     }
 
     pub fn insert(&self, table: u64, offset: u64, block: Arc<Block>) {
@@ -54,20 +89,24 @@ impl BlockCache {
             return;
         }
         let key = (table, offset);
-        let mut shard = self.shard(key).lock();
-        shard.tick += 1;
-        let tick = shard.tick;
+        let mut shard = self.shard(key).write();
         let size = block.size();
-        if let Some((_, old)) = shard.entries.insert(key, (block, tick)) {
-            shard.order.remove(&old);
+        if let Some(old) = shard.map.insert(key, Slot { block, referenced: AtomicBool::new(false) }) {
+            shard.bytes = shard.bytes - old.block.size() + size;
         } else {
             shard.bytes += size;
+            shard.ring.push_back(key);
         }
-        shard.order.insert(tick, key);
         while shard.bytes > self.shard_capacity {
-            let Some((_, victim)) = shard.order.pop_first() else { break };
-            if let Some((evicted, _)) = shard.entries.remove(&victim) {
-                shard.bytes -= evicted.size();
+            let Some(candidate) = shard.ring.pop_front() else { break };
+            let second_chance = match shard.map.get(&candidate) {
+                Some(slot) => slot.referenced.swap(false, Ordering::Relaxed),
+                None => continue,
+            };
+            if second_chance {
+                shard.ring.push_back(candidate);
+            } else if let Some(evicted) = shard.map.remove(&candidate) {
+                shard.bytes -= evicted.block.size();
             }
         }
     }
@@ -75,15 +114,17 @@ impl BlockCache {
     /// Drops every cached block of `table` (its file is being deleted).
     pub fn evict_table(&self, table: u64) {
         for shard in &self.shards {
-            let mut shard = shard.lock();
-            let victims: Vec<(CacheKey, u64)> =
-                shard.entries.iter().filter(|(k, _)| k.0 == table).map(|(k, (_, t))| (*k, *t)).collect();
-            for (key, tick) in victims {
-                if let Some((block, _)) = shard.entries.remove(&key) {
-                    shard.bytes -= block.size();
+            let mut shard = shard.write();
+            let mut freed = 0;
+            shard.map.retain(|key, slot| {
+                let keep = key.0 != table;
+                if !keep {
+                    freed += slot.block.size();
                 }
-                shard.order.remove(&tick);
-            }
+                keep
+            });
+            shard.bytes -= freed;
+            shard.ring.retain(|key| key.0 != table);
         }
     }
 }
@@ -96,20 +137,36 @@ mod tests {
     use crate::key::{encode, Kind};
     use crate::table::block::BlockBuilder;
 
+    fn block() -> Arc<Block> {
+        let mut builder = BlockBuilder::default();
+        builder.add(&encode(b"k", 1, Kind::Put), &[7u8; 50]);
+        Arc::new(Block::new(Bytes::from(builder.finish())).unwrap())
+    }
+
     #[test]
-    fn evicts_least_recently_used_blocks_beyond_capacity() {
-        let cache = BlockCache::new(SHARDS * 100);
-        let block = || {
-            let mut builder = BlockBuilder::default();
-            builder.add(&encode(b"k", 1, Kind::Put), &[7u8; 50]);
-            Arc::new(Block::new(Bytes::from(builder.finish())).unwrap())
-        };
-        // Same shard: same table, offsets that differ only below bit 12.
-        cache.insert(1, 0, block());
-        cache.insert(1, 1, block());
-        assert!(cache.get(1, 0).is_none(), "the oldest block was evicted");
-        assert!(cache.get(1, 1).is_some());
+    fn unreferenced_blocks_are_evicted_first_and_tables_can_be_dropped() {
+        // One shard's capacity holds two blocks; pick three offsets of table 1 in one shard.
+        let size = block().size();
+        let cache = BlockCache::new(SHARDS * (2 * size + 1));
+        let first = std::ptr::from_ref(cache.shard((1, 0)));
+        let offsets: Vec<u64> = (0..).filter(|&o| std::ptr::eq(cache.shard((1, o)), first)).take(3).collect();
+        let (a, b, c) = (offsets[0], offsets[1], offsets[2]);
+        cache.insert(1, a, block());
+        cache.insert(1, b, block());
+        assert!(cache.get(1, a).is_some(), "block a is now referenced");
+        cache.insert(1, c, block());
+        assert!(cache.get(1, a).is_some(), "a referenced block gets a second chance");
+        assert!(cache.get(1, b).is_none(), "the unreferenced block was evicted");
+        assert!(cache.get(1, c).is_some());
         cache.evict_table(1);
-        assert!(cache.get(1, 1).is_none());
+        assert!(cache.get(1, a).is_none() && cache.get(1, c).is_none());
+    }
+
+    #[test]
+    fn blocks_of_one_table_spread_over_all_shards() {
+        let cache = BlockCache::new(1 << 20);
+        let used: std::collections::HashSet<*const RwLock<Shard>> =
+            (0..4_096u64).map(|i| std::ptr::from_ref(cache.shard((7, i * 16_384)))).collect();
+        assert_eq!(used.len(), SHARDS);
     }
 }

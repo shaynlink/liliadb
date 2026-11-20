@@ -2,6 +2,8 @@
 
 use std::cmp::Ordering;
 
+use bytes::Bytes;
+
 use crate::error::Result;
 use crate::key;
 
@@ -15,6 +17,12 @@ pub trait InternalIterator: Send {
     /// Current key; only meaningful while [`InternalIterator::valid`].
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
+
+    /// The value as owned bytes; iterators over shared buffers return a slice of them instead
+    /// of a copy.
+    fn value_bytes(&self) -> Bytes {
+        Bytes::copy_from_slice(self.value())
+    }
 }
 
 /// Merge of iterators, in internal-key order. When two children hold the same internal key (it
@@ -81,6 +89,10 @@ impl InternalIterator for MergingIterator {
 
     fn value(&self) -> &[u8] {
         self.current.map_or(&[], |c| self.children[c].value())
+    }
+
+    fn value_bytes(&self) -> Bytes {
+        self.current.map_or_else(Bytes::new, |c| self.children[c].value_bytes())
     }
 }
 
