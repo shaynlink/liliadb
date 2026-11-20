@@ -1,0 +1,30 @@
+[package]
+name = "lilia-zk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embedded Zero-Knowledge Proof (zk-SNARK) micro-prover and verifier for LiliaDB"
+
+[dependencies]
+ark-ff.workspace = true
+ark-ec.workspace = true
+ark-bn254.workspace = true
+ark-groth16.workspace = true
+ark-relations.workspace = true
+ark-r1cs-std.workspace = true
+ark-crypto-primitives.workspace = true
+ark-serialize.workspace = true
+ark-std.workspace = true
+blake3.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[lints]
+workspace = true
