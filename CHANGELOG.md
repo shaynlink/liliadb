@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spread over 64 shards, runs that keep their own open table, binary-search index blocks, a
   blocked Bloom filter per memtable, batched memtable iteration and zero-copy scan values
   (point reads ×2.5 single-threaded, ×2.9 with 10 threads).
+- **`lilia-db`**: the data models over `lilia-engine`, without SQLite (bindings not yet switched).
+  Key-value records with expiry; JSON documents with secondary indexes over paths or expressions,
+  partial indexes, online index builds and equality `find` served by the indexes; atomic batches
+  over every model with per-record version conditions; paged scans; optimistic transactions over
+  a snapshot, validated at commit; row-level security and masking applied by one guard on every
+  read and write of a `Session`, with no thread-global context; an optional ledger kept as a
+  Merkle Mountain Range in the same engine batch as the data (O(log n) append and proof, record and
+  commit proofs, fast and strict verification). Validated by 22,000 simulated power cuts that
+  check records, ledger and indexes together.
+- **`lilia-engine`**: `WriteBatch::at_sequence` (commit only at a given sequence number),
+  `Db::last_sequence`, and the group commit queue exported as `GroupCommit` for layers that
+  serialize their own commits.
 
 ### Changed
 - `docs/benchmarks.md` is generated from measurements; the README no longer carries hand-written
