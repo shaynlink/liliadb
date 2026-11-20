@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **v0.2 storage RFC** (`docs/v0.2-storage-paradigm.md`): audit of the write path and the
   native log-structured engine plan.
 
+- **`lilia-io`**: platform layer of the v0.2 engine. A `Vfs` trait with the native file system
+  (`F_FULLFSYNC` / `F_BARRIERFSYNC` on Apple, `fdatasync` on Linux, `FlushFileBuffers` on Windows,
+  `F_PREALLOCATE` / `fallocate`) and an in-memory file system that models power loss (synced data
+  and directory entries survive, unsynced tails may be torn) with fault injection;
+  `HardwareProfile` (page size, cache line, performance and efficiency cores, memory) and
+  background QoS for maintenance threads.
+- **`lilia-engine`**: native log-structured storage engine (not yet wired behind the `LiliaDB`
+  models). Group commit (one journal write and one sync per group of concurrent commits),
+  lock-free MVCC memtable, atomic batches with version expectations, snapshots, range iterators,
+  checksummed sorted runs with Bloom filters and a sharded block cache, an atomic manifest, and
+  leveled compaction on background threads. Recovery replays journals up to the first damaged
+  record. Validated by an oracle test, a concurrent maintenance stress test, and 100,000
+  simulated power cuts with torn writes and injected I/O errors.
+
 ### Changed
 - `docs/benchmarks.md` is generated from measurements; the README no longer carries hand-written
   benchmark numbers.

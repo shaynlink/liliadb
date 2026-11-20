@@ -10,6 +10,8 @@ pub enum SyncPrimitive {
     FullFsync,
     /// `fsync`/`fdatasync`: durable on Linux, stops at the drive cache on Apple platforms.
     Fsync,
+    /// `fcntl(F_BARRIERFSYNC)`: ordered writes, not power-safe (Apple platforms).
+    Barrier,
     /// `FlushFileBuffers` (Windows).
     FlushFileBuffers,
     /// No sync on commit: not a durable configuration.
@@ -22,6 +24,7 @@ impl SyncPrimitive {
         match self {
             Self::FullFsync => "F_FULLFSYNC",
             Self::Fsync => "fsync",
+            Self::Barrier => "F_BARRIERFSYNC",
             Self::FlushFileBuffers => "FlushFileBuffers",
             Self::None => "none",
         }
@@ -33,7 +36,7 @@ impl SyncPrimitive {
         match self {
             Self::FullFsync | Self::FlushFileBuffers => true,
             Self::Fsync => os != "macos" && os != "ios",
-            Self::None => false,
+            Self::Barrier | Self::None => false,
         }
     }
 }

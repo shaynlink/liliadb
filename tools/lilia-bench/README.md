@@ -43,6 +43,8 @@ run without results, never silently skipped.
 | `lilia` | LiliaDB, `Durability::Durable`, ledger on (defaults) | as LiliaDB configures SQLite |
 | `lilia-noledger` | LiliaDB, ledger off | same |
 | `lilia-aes` | LiliaDB, AES-256-GCM value codec | same |
+| `lilia-engine` | v0.2 native engine (`crates/lilia-engine`), `Durability::Durable` | `F_FULLFSYNC` on Apple (`File::sync_data`) |
+| `lilia-engine-balanced` | same, `Durability::Balanced` | `F_BARRIERFSYNC` on Apple |
 | `sqlite` | SQLite WAL, `synchronous=FULL` (via `rusqlite`) | `fsync` |
 | `sqlite-fullfsync` | same, plus `fullfsync` and `checkpoint_fullfsync` | `F_FULLFSYNC` on Apple |
 | `redb` | redb, `Durability::Immediate` | `File::sync_data` |

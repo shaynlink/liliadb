@@ -1538,6 +1538,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e30dff68753c0933cb30eb445d75d6b3cdcc0f7f0121b9c5aaabbe4a8315617d"
 
 [[package]]
+name = "crc32c"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f132a176423ee852e8f0a35d43088d1850966b50745be818a88b76f64b1c6cb"
+dependencies = [
+ "rustc_version",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3593,6 +3602,7 @@ dependencies = [
  "heed",
  "libc",
  "lilia-core",
+ "lilia-engine",
  "lilia-storage-sqlite",
  "redb",
  "rocksdb",
@@ -3640,6 +3650,26 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "zstd 0.13.5",
+]
+
+[[package]]
+name = "lilia-engine"
+version = "0.1.0-alpha.9"
+dependencies = [
+ "bytes",
+ "crc32c",
+ "crossbeam-skiplist",
+ "lilia-io",
+ "parking_lot",
+ "thiserror",
+]
+
+[[package]]
+name = "lilia-io"
+version = "0.1.0-alpha.9"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

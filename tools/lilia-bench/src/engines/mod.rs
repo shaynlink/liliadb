@@ -13,6 +13,8 @@ use crate::record::SyncPrimitive;
 mod fjall;
 #[cfg(feature = "lilia")]
 pub mod lilia;
+#[cfg(feature = "lilia")]
+mod lilia_engine;
 #[cfg(feature = "kvs")]
 mod lmdb;
 #[cfg(feature = "kvs")]
@@ -53,6 +55,8 @@ pub fn available() -> Vec<&'static str> {
     let groups: &[&[&'static str]] = &[
         #[cfg(feature = "lilia")]
         &lilia::IDS,
+        #[cfg(feature = "lilia")]
+        &lilia_engine::IDS,
         #[cfg(feature = "sqlite")]
         &sqlite::IDS,
         #[cfg(feature = "kvs")]
@@ -68,6 +72,10 @@ pub fn open(id: &str, dir: &Path) -> Result<Box<dyn Engine>> {
     #[cfg(feature = "lilia")]
     if lilia::IDS.contains(&id) {
         return Ok(Box::new(lilia::Lilia::open(id, dir)?));
+    }
+    #[cfg(feature = "lilia")]
+    if lilia_engine::IDS.contains(&id) {
+        return Ok(Box::new(lilia_engine::LiliaEngine::open(id, dir)?));
     }
     #[cfg(feature = "sqlite")]
     if sqlite::IDS.contains(&id) {
