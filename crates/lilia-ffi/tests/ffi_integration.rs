@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use lilia_ffi::{FfiDirection, FfiResourceProfile, LiliaDatabase};
 
 #[test]
@@ -293,4 +295,49 @@ async fn test_ffi_async_api_and_constrained_profile() {
     // Async Quick Check & Close
     assert!(db.quick_check().await.unwrap());
     assert!(db.close(5000).await.is_ok());
+}
+
+#[test]
+fn test_ffi_c_abi_shm_reader() {
+    use lilia_ffi::*;
+    use std::ffi::CString;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let shm_path = temp_dir.path().join("c_abi_test.shm");
+
+    let engine =
+        lilia_shm::ShmEngine::create(lilia_shm::ShmOptions::file_backed(&shm_path)).unwrap();
+    engine
+        .put_kv("widget", b"status", b"ONLINE", 1, None)
+        .unwrap();
+
+    let path_c = CString::new(shm_path.to_str().unwrap()).unwrap();
+    unsafe {
+        let reader = lilia_c_shm_reader_open(path_c.as_ptr());
+        assert!(!reader.is_null());
+
+        let space_c = CString::new("widget").unwrap();
+        let key = b"status";
+        let mut val_ptr: *const u8 = std::ptr::null();
+        let mut val_len: usize = 0;
+        let mut version: u64 = 0;
+
+        let res = lilia_c_shm_reader_get(
+            reader,
+            space_c.as_ptr(),
+            key.as_ptr(),
+            key.len(),
+            &mut val_ptr,
+            &mut val_len,
+            &mut version,
+        );
+        assert_eq!(res, 0);
+        assert!(!val_ptr.is_null());
+        assert_eq!(val_len, 6);
+        assert_eq!(version, 1);
+        let slice = std::slice::from_raw_parts(val_ptr, val_len);
+        assert_eq!(slice, b"ONLINE");
+
+        lilia_c_shm_reader_close(reader);
+    }
 }

@@ -29,11 +29,11 @@ impl<'a> GraphTraversal<'a> {
     }
 
     pub fn out<'b>(self, kind: impl Into<Option<&'b str>>) -> Result<Self> {
-        self.step(Direction::Outgoing, kind.into())
+        self.step(Direction::Outbound, kind.into())
     }
 
     pub fn in_<'b>(self, kind: impl Into<Option<&'b str>>) -> Result<Self> {
-        self.step(Direction::Incoming, kind.into())
+        self.step(Direction::Inbound, kind.into())
     }
 
     pub fn both<'b>(self, kind: impl Into<Option<&'b str>>) -> Result<Self> {

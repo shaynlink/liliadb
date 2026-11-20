@@ -95,6 +95,49 @@ impl NativeContext {
             );
         }
     }
+
+    /// Returns a mutable reference to persistent aggregate context of type `T`.
+    #[inline]
+    #[must_use]
+    #[allow(clippy::mut_from_ref)]
+    pub fn get_aggregate_context<T: Default>(&self) -> Option<&mut T> {
+        let ptr = unsafe {
+            ffi::sqlite3_aggregate_context(self.0, std::mem::size_of::<*mut T>() as std::ffi::c_int)
+        };
+        if ptr.is_null() {
+            None
+        } else {
+            let typed_ptr = ptr.cast::<*mut T>();
+            unsafe {
+                if (*typed_ptr).is_null() {
+                    let boxed = Box::new(T::default());
+                    *typed_ptr = Box::into_raw(boxed);
+                }
+                Some(&mut **typed_ptr)
+            }
+        }
+    }
+
+    /// Drops the aggregate context of type `T` and returns its owned value during finalization.
+    #[inline]
+    #[must_use]
+    pub fn take_aggregate_context<T>(&self) -> Option<T> {
+        let ptr = unsafe { ffi::sqlite3_aggregate_context(self.0, 0) };
+        if ptr.is_null() {
+            None
+        } else {
+            let typed_ptr = ptr.cast::<*mut T>();
+            unsafe {
+                if (*typed_ptr).is_null() {
+                    None
+                } else {
+                    let raw = *typed_ptr;
+                    *typed_ptr = std::ptr::null_mut();
+                    Some(*Box::from_raw(raw))
+                }
+            }
+        }
+    }
 }
 
 /// Safe wrapper around `sqlite3_value` argument passed to scalar functions.

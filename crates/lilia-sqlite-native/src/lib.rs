@@ -11,7 +11,7 @@ pub mod transaction;
 pub mod vtab;
 
 pub use backup::NativeBackup;
-pub use connection::{InterruptHandle, NativeConnection};
+pub use connection::{ConnectionPagerStats, ExplainPlanRow, InterruptHandle, NativeConnection};
 pub use cow_vfs::{
     ensure_cow_vfs_registered, get_branch_state, register_branch_state, unregister_branch_state,
     BranchVfsState, COW_VFS_NAME,
@@ -20,7 +20,7 @@ pub use function::{NativeContext, NativeValue};
 pub use logging::ensure_sqlite_initialized;
 pub use session::{ChangeOp, ChangesetIterator, ConflictAction, NativeSession, RowChange};
 pub use slots::{StatementSlots, StmtSlot};
-pub use statement::{NativeStatement, StmtStatus};
+pub use statement::{NativeStatement, StmtEnergyCounters, StmtStatus};
 pub use transaction::NativeTransaction;
 pub use vtab::{
     ConstraintOp, IndexConstraint, IndexPlan, VTabValue, VirtualCursor, VirtualTableFactory,
@@ -552,5 +552,32 @@ mod tests {
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let reads = reader_handle.join().unwrap();
         assert!(reads >= 50);
+    }
+
+    #[test]
+    fn test_pager_stats_and_explain_query_plan() {
+        let uri = "file:lilia_energy_stats_test?mode=memory&cache=shared";
+        let conn = NativeConnection::open(std::path::Path::new(uri), "OFF", 0, 5000).unwrap();
+        conn.exec("CREATE TABLE logs(id INTEGER PRIMARY KEY, level TEXT, msg TEXT);")
+            .unwrap();
+
+        // Check explain_query_plan
+        let plan = conn
+            .explain_query_plan("SELECT * FROM logs WHERE level = 'ERROR';")
+            .unwrap();
+        assert!(!plan.is_empty());
+        assert!(plan.iter().any(|r| r.detail.contains("SCAN logs")));
+
+        // Check pager_stats and energy_counters
+        let stats_before = conn.pager_stats(false);
+        let mut stmt = conn
+            .prepare("SELECT * FROM logs WHERE level = 'ERROR';")
+            .unwrap();
+        while stmt.step().unwrap() {}
+        let counters = stmt.energy_counters(false);
+        assert!(counters.vm_steps > 0);
+
+        let stats_after = conn.pager_stats(false);
+        assert!(stats_after.cache_hit >= stats_before.cache_hit);
     }
 }

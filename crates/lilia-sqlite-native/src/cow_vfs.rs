@@ -47,19 +47,34 @@ impl std::fmt::Debug for BranchVfsState {
 
 impl BranchVfsState {
     /// Create a new branch state pointing to a parent database file or in-memory buffer.
-    pub fn new(branch_id: String, parent_path: impl AsRef<Path>, parent_bytes: Option<Vec<u8>>) -> Result<Arc<Self>> {
+    pub fn new(
+        branch_id: String,
+        parent_path: impl AsRef<Path>,
+        parent_bytes: Option<Vec<u8>>,
+    ) -> Result<Arc<Self>> {
         let parent_path = parent_path.as_ref().to_path_buf();
-        let (parent_file, initial_size, detected_page_size) = if let Some(ref bytes) = parent_bytes {
+        let (parent_file, initial_size, detected_page_size) = if let Some(ref bytes) = parent_bytes
+        {
             let pgsz = if bytes.len() >= 18 {
                 let sz = u16::from_be_bytes([bytes[16], bytes[17]]) as usize;
-                if sz == 1 { 65536 } else if sz >= 512 { sz } else { 4096 }
+                if sz == 1 {
+                    65536
+                } else if sz >= 512 {
+                    sz
+                } else {
+                    4096
+                }
             } else {
                 4096
             };
             (None, bytes.len() as u64, pgsz)
         } else if parent_path.exists() {
             let file = File::open(&parent_path).map_err(|e| {
-                LiliaError::new(ErrorCode::Io, format!("failed to open parent db for branch: {e}"), false)
+                LiliaError::new(
+                    ErrorCode::Io,
+                    format!("failed to open parent db for branch: {e}"),
+                    false,
+                )
             })?;
             let len = file.metadata().map(|m| m.len()).unwrap_or(0);
             let mut header = [0u8; 18];
@@ -75,7 +90,13 @@ impl BranchVfsState {
             }
             let pgsz = {
                 let sz = u16::from_be_bytes([header[16], header[17]]) as usize;
-                if sz == 1 { 65536 } else if sz >= 512 { sz } else { 4096 }
+                if sz == 1 {
+                    65536
+                } else if sz >= 512 {
+                    sz
+                } else {
+                    4096
+                }
             };
             (Some(file), len, pgsz)
         } else {
@@ -139,7 +160,11 @@ impl BranchVfsState {
                         if e.kind() == std::io::ErrorKind::UnexpectedEof {
                             target.fill(0);
                         } else {
-                            return Err(LiliaError::new(ErrorCode::Io, format!("branch pread error: {e}"), false));
+                            return Err(LiliaError::new(
+                                ErrorCode::Io,
+                                format!("branch pread error: {e}"),
+                                false,
+                            ));
                         }
                     }
                 }
@@ -445,14 +470,21 @@ unsafe extern "C" fn cow_xUnlock(_p_file: *mut ffi::sqlite3_file, _lock: c_int) 
     ffi::SQLITE_OK
 }
 
-unsafe extern "C" fn cow_xCheckReservedLock(_p_file: *mut ffi::sqlite3_file, p_res_out: *mut c_int) -> c_int {
+unsafe extern "C" fn cow_xCheckReservedLock(
+    _p_file: *mut ffi::sqlite3_file,
+    p_res_out: *mut c_int,
+) -> c_int {
     if !p_res_out.is_null() {
         *p_res_out = 0;
     }
     ffi::SQLITE_OK
 }
 
-unsafe extern "C" fn cow_xFileControl(_p_file: *mut ffi::sqlite3_file, _op: c_int, _p_arg: *mut c_void) -> c_int {
+unsafe extern "C" fn cow_xFileControl(
+    _p_file: *mut ffi::sqlite3_file,
+    _op: c_int,
+    _p_arg: *mut c_void,
+) -> c_int {
     ffi::SQLITE_NOTFOUND
 }
 
@@ -540,7 +572,11 @@ unsafe extern "C" fn cow_xOpen(
     ffi::SQLITE_OK
 }
 
-unsafe extern "C" fn cow_xDelete(_p_vfs: *mut ffi::sqlite3_vfs, _z_name: *const c_char, _sync_dir: c_int) -> c_int {
+unsafe extern "C" fn cow_xDelete(
+    _p_vfs: *mut ffi::sqlite3_vfs,
+    _z_name: *const c_char,
+    _sync_dir: c_int,
+) -> c_int {
     ffi::SQLITE_OK
 }
 
@@ -562,7 +598,10 @@ unsafe extern "C" fn cow_xAccess(
     let name_str = CStr::from_ptr(z_name).to_string_lossy();
 
     if flags == ffi::SQLITE_ACCESS_EXISTS {
-        if name_str.ends_with("-journal") || name_str.ends_with("-wal") || name_str.ends_with("-shm") {
+        if name_str.ends_with("-journal")
+            || name_str.ends_with("-wal")
+            || name_str.ends_with("-shm")
+        {
             let stripped = name_str
                 .strip_suffix("-journal")
                 .or_else(|| name_str.strip_suffix("-wal"))
@@ -604,7 +643,11 @@ unsafe extern "C" fn cow_xFullPathname(
     ffi::SQLITE_OK
 }
 
-unsafe extern "C" fn cow_xRandomness(_p_vfs: *mut ffi::sqlite3_vfs, n_byte: c_int, z_out: *mut c_char) -> c_int {
+unsafe extern "C" fn cow_xRandomness(
+    _p_vfs: *mut ffi::sqlite3_vfs,
+    n_byte: c_int,
+    z_out: *mut c_char,
+) -> c_int {
     let dflt = ffi::sqlite3_vfs_find(ptr::null());
     if !dflt.is_null() {
         if let Some(func) = (*dflt).xRandomness {
@@ -629,7 +672,10 @@ unsafe extern "C" fn cow_xCurrentTime(_p_vfs: *mut ffi::sqlite3_vfs, p_time: *mu
     ffi::SQLITE_OK
 }
 
-unsafe extern "C" fn cow_xCurrentTimeInt64(_p_vfs: *mut ffi::sqlite3_vfs, p_time: *mut i64) -> c_int {
+unsafe extern "C" fn cow_xCurrentTimeInt64(
+    _p_vfs: *mut ffi::sqlite3_vfs,
+    p_time: *mut i64,
+) -> c_int {
     let dflt = ffi::sqlite3_vfs_find(ptr::null());
     if !dflt.is_null() {
         if let Some(func) = (*dflt).xCurrentTimeInt64 {
@@ -679,6 +725,10 @@ pub fn ensure_cow_vfs_registered() {
         crate::logging::ensure_sqlite_initialized();
         COW_VFS.zName = COW_VFS_NAME_C.as_ptr();
         let rc = ffi::sqlite3_vfs_register(ptr::addr_of_mut!(COW_VFS), 0);
-        assert_eq!(rc, ffi::SQLITE_OK, "failed to register lilia-cow VFS in SQLite");
+        assert_eq!(
+            rc,
+            ffi::SQLITE_OK,
+            "failed to register lilia-cow VFS in SQLite"
+        );
     });
 }

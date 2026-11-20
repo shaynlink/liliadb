@@ -235,10 +235,10 @@ impl<'a> Parser<'a> {
 
         let direction = if incoming {
             self.expect(&Token::Dash)?;
-            Direction::Incoming
+            Direction::Inbound
         } else if self.peek() == Some(&Token::ArrowRight) {
             self.next();
-            Direction::Outgoing
+            Direction::Outbound
         } else {
             self.expect(&Token::Dash)?;
             Direction::Both

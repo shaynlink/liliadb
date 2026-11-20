@@ -82,9 +82,9 @@ pub fn parse_hlc(raw: &str) -> Result<Hlc> {
 
 pub fn parse_direction(direction: Option<&str>) -> Direction {
     match direction {
-        Some("incoming") => Direction::Incoming,
+        Some("incoming" | "inbound") => Direction::Inbound,
         Some("both") => Direction::Both,
-        _ => Direction::Outgoing,
+        _ => Direction::Outbound,
     }
 }
 

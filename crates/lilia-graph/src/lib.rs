@@ -157,7 +157,7 @@ impl<'a> GraphStore<'a> {
             });
         }
         let direct_set: BTreeSet<String> = changed_nodes.iter().cloned().collect();
-        let reached = self.reachability(changed_nodes, Direction::Incoming)?;
+        let reached = self.reachability(changed_nodes, Direction::Inbound)?;
         let mut dependants = Vec::new();
         for node in reached {
             if !direct_set.contains(&node) {
@@ -440,11 +440,11 @@ mod tests {
 
         // Neighbors test
         assert_eq!(
-            graph.neighbors("auth", Direction::Outgoing).unwrap(),
+            graph.neighbors("auth", Direction::Outbound).unwrap(),
             vec!["core"]
         );
         assert_eq!(
-            graph.neighbors("auth", Direction::Incoming).unwrap(),
+            graph.neighbors("auth", Direction::Inbound).unwrap(),
             vec!["api"]
         );
         let mut both = graph.neighbors("auth", Direction::Both).unwrap();
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(both, vec!["api", "core"]);
         assert_eq!(
             graph
-                .neighbors_with_kind("auth", Direction::Outgoing, Some("other"))
+                .neighbors_with_kind("auth", Direction::Outbound, Some("other"))
                 .unwrap(),
             Vec::<String>::new()
         );
@@ -499,7 +499,7 @@ mod tests {
 
         // Dijkstra: optimal path A -> C -> D with total_weight 2.0 (instead of A -> B -> D with 6.0)
         let path = graph
-            .shortest_path("A", "D", Direction::Outgoing, Some("road"))
+            .shortest_path("A", "D", Direction::Outbound, Some("road"))
             .unwrap()
             .unwrap();
         assert_eq!(path.nodes, vec!["A", "C", "D"]);
@@ -511,7 +511,7 @@ mod tests {
 
         // A* Spatial: should find the same optimal path
         let astar_path = graph
-            .astar_spatial("A", "D", Direction::Outgoing, Some("road"))
+            .astar_spatial("A", "D", Direction::Outbound, Some("road"))
             .unwrap()
             .unwrap();
         assert_eq!(astar_path.nodes, vec!["A", "C", "D"]);
@@ -519,7 +519,7 @@ mod tests {
 
         // All shortest paths from A
         let all_paths = graph
-            .all_shortest_paths("A", Direction::Outgoing, None)
+            .all_shortest_paths("A", Direction::Outbound, None)
             .unwrap();
         assert_eq!(all_paths.len(), 3);
         assert!((all_paths["B"].total_weight - 5.0).abs() < 1e-6);
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(betweenness[0].node, "H");
         assert!(betweenness[0].score > betweenness[1].score);
 
-        let degree_out = graph.degree_centrality(Direction::Outgoing, None).unwrap();
+        let degree_out = graph.degree_centrality(Direction::Outbound, None).unwrap();
         assert_eq!(degree_out[0].node, "H");
         assert_eq!(degree_out[0].score, 1.0); // 4 outgoing / 4 = 1.0
 
@@ -592,7 +592,7 @@ mod tests {
         graph.add_edge("3", "1", "NEXT").unwrap();
         graph.add_edge("4", "5", "NEXT").unwrap();
 
-        assert!(graph.has_cycle(Direction::Outgoing, None).unwrap());
+        assert!(graph.has_cycle(Direction::Outbound, None).unwrap());
 
         let cycles = graph.find_cycles(10, None).unwrap();
         assert_ne!(cycles, [] as [std::vec::Vec<std::string::String>; 0]);

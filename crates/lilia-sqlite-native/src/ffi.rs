@@ -29,6 +29,18 @@ pub const SQLITE_STMTSTATUS_SORT: c_int = 2;
 pub const SQLITE_STMTSTATUS_AUTOINDEX: c_int = 3;
 pub const SQLITE_STMTSTATUS_VM_STEP: c_int = 4;
 pub const SQLITE_STMTSTATUS_RUN: c_int = 6;
+pub const SQLITE_STMTSTATUS_MEMUSED: c_int = 8;
+
+// sqlite3_db_status() options
+pub const SQLITE_DBSTATUS_LOOKASIDE_USED: c_int = 0;
+pub const SQLITE_DBSTATUS_CACHE_USED: c_int = 1;
+pub const SQLITE_DBSTATUS_LOOKASIDE_HIT: c_int = 4;
+pub const SQLITE_DBSTATUS_LOOKASIDE_MISS_SIZE: c_int = 5;
+pub const SQLITE_DBSTATUS_LOOKASIDE_MISS_FULL: c_int = 6;
+pub const SQLITE_DBSTATUS_CACHE_HIT: c_int = 7;
+pub const SQLITE_DBSTATUS_CACHE_MISS: c_int = 8;
+pub const SQLITE_DBSTATUS_CACHE_WRITE: c_int = 9;
+pub const SQLITE_DBSTATUS_CACHE_SPILL: c_int = 12;
 
 // Result codes
 pub const SQLITE_OK: c_int = 0;
@@ -355,6 +367,13 @@ extern "C" {
     pub fn sqlite3_last_insert_rowid(db: *mut sqlite3) -> i64;
     pub fn sqlite3_interrupt(db: *mut sqlite3);
     pub fn sqlite3_db_cacheflush(db: *mut sqlite3) -> c_int;
+    pub fn sqlite3_db_status64(
+        db: *mut sqlite3,
+        op: c_int,
+        pCur: *mut i64,
+        pHiwtr: *mut i64,
+        resetFlg: c_int,
+    ) -> c_int;
 
     pub fn sqlite3_db_config(db: *mut sqlite3, op: c_int, ...) -> c_int;
 
@@ -394,6 +413,7 @@ extern "C" {
 
     // Values for scalar functions
     pub fn sqlite3_user_data(pCtx: *mut sqlite3_context) -> *mut c_void;
+    pub fn sqlite3_aggregate_context(pCtx: *mut sqlite3_context, nByte: c_int) -> *mut c_void;
     pub fn sqlite3_get_auxdata(pCtx: *mut sqlite3_context, n: c_int) -> *mut c_void;
     pub fn sqlite3_set_auxdata(
         pCtx: *mut sqlite3_context,
@@ -572,11 +592,14 @@ pub struct sqlite3_io_methods {
     pub xFileControl: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int, *mut c_void) -> c_int>,
     pub xSectorSize: Option<unsafe extern "C" fn(*mut sqlite3_file) -> c_int>,
     pub xDeviceCharacteristics: Option<unsafe extern "C" fn(*mut sqlite3_file) -> c_int>,
-    pub xShmMap: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int, c_int, c_int, *mut *mut c_void) -> c_int>,
+    pub xShmMap: Option<
+        unsafe extern "C" fn(*mut sqlite3_file, c_int, c_int, c_int, *mut *mut c_void) -> c_int,
+    >,
     pub xShmLock: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int, c_int, c_int) -> c_int>,
     pub xShmBarrier: Option<unsafe extern "C" fn(*mut sqlite3_file)>,
     pub xShmUnmap: Option<unsafe extern "C" fn(*mut sqlite3_file, c_int) -> c_int>,
-    pub xFetch: Option<unsafe extern "C" fn(*mut sqlite3_file, i64, c_int, *mut *mut c_void) -> c_int>,
+    pub xFetch:
+        Option<unsafe extern "C" fn(*mut sqlite3_file, i64, c_int, *mut *mut c_void) -> c_int>,
     pub xUnfetch: Option<unsafe extern "C" fn(*mut sqlite3_file, i64, *mut c_void) -> c_int>,
 }
 
@@ -588,22 +611,41 @@ pub struct sqlite3_vfs {
     pub pNext: *mut sqlite3_vfs,
     pub zName: *const c_char,
     pub pAppData: *mut c_void,
-    pub xOpen: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, *mut sqlite3_file, c_int, *mut c_int) -> c_int>,
+    pub xOpen: Option<
+        unsafe extern "C" fn(
+            *mut sqlite3_vfs,
+            *const c_char,
+            *mut sqlite3_file,
+            c_int,
+            *mut c_int,
+        ) -> c_int,
+    >,
     pub xDelete: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, c_int) -> c_int>,
-    pub xAccess: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, c_int, *mut c_int) -> c_int>,
-    pub xFullPathname: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, c_int, *mut c_char) -> c_int>,
+    pub xAccess:
+        Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, c_int, *mut c_int) -> c_int>,
+    pub xFullPathname:
+        Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, c_int, *mut c_char) -> c_int>,
     pub xDlOpen: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char) -> *mut c_void>,
     pub xDlError: Option<unsafe extern "C" fn(*mut sqlite3_vfs, c_int, *mut c_char)>,
-    pub xDlSym: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *mut c_void, *const c_char) -> Option<unsafe extern "C" fn()>>,
+    pub xDlSym: Option<
+        unsafe extern "C" fn(
+            *mut sqlite3_vfs,
+            *mut c_void,
+            *const c_char,
+        ) -> Option<unsafe extern "C" fn()>,
+    >,
     pub xDlClose: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *mut c_void)>,
     pub xRandomness: Option<unsafe extern "C" fn(*mut sqlite3_vfs, c_int, *mut c_char) -> c_int>,
     pub xSleep: Option<unsafe extern "C" fn(*mut sqlite3_vfs, c_int) -> c_int>,
     pub xCurrentTime: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *mut f64) -> c_int>,
     pub xGetLastError: Option<unsafe extern "C" fn(*mut sqlite3_vfs, c_int, *mut c_char) -> c_int>,
     pub xCurrentTimeInt64: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *mut i64) -> c_int>,
-    pub xSetSystemCall: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, *mut c_void) -> c_int>,
-    pub xGetSystemCall: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char) -> *mut c_void>,
-    pub xNextSystemCall: Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char) -> *const c_char>,
+    pub xSetSystemCall:
+        Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char, *mut c_void) -> c_int>,
+    pub xGetSystemCall:
+        Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char) -> *mut c_void>,
+    pub xNextSystemCall:
+        Option<unsafe extern "C" fn(*mut sqlite3_vfs, *const c_char) -> *const c_char>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]

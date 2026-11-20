@@ -816,6 +816,35 @@ pub unsafe extern "C" fn lilia_c_fts_fuzzy_search(
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_fts_phonetic_search(
+    handle: *mut LiliaHandle,
+    collection: *const c_char,
+    query: *const c_char,
+    limit: u32,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if handle.is_null() || collection.is_null() || query.is_null() || out_json.is_null() {
+        return -1;
+    }
+    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
+        return -1;
+    };
+    let Some(query) = str_from_ptr(query).map(str::to_owned) else {
+        return -1;
+    };
+    let h = &*handle;
+
+    match h.db.fts_phonetic_search_sync(col, query, limit) {
+        Ok(hits) => {
+            let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
+            *out_json = to_c_string(json);
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
 // ==========================================
 // SQL ANALYTICS ENGINE
 // ==========================================
@@ -1257,4 +1286,121 @@ pub unsafe extern "C" fn lilia_c_wasm_list(
     };
     *out_json = to_c_string(json_str);
     0
+}
+
+// ── Shared Memory (SHM) C ABI ──────────────────────────────────────────────
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_shm_reader_open(path: *const c_char) -> *mut lilia_shm::ShmReader {
+    let Some(path_str) = str_from_ptr(path) else {
+        return std::ptr::null_mut();
+    };
+    match lilia_shm::ShmReader::open(lilia_shm::ShmBackend::FileBacked(std::path::PathBuf::from(
+        path_str,
+    ))) {
+        Ok(reader) => Box::into_raw(Box::new(reader)),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_shm_reader_close(reader: *mut lilia_shm::ShmReader) {
+    if !reader.is_null() {
+        drop(Box::from_raw(reader));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_shm_reader_get(
+    reader: *mut lilia_shm::ShmReader,
+    space: *const c_char,
+    key_ptr: *const u8,
+    key_len: usize,
+    out_val_ptr: *mut *const u8,
+    out_val_len: *mut usize,
+    out_version: *mut u64,
+) -> c_int {
+    if reader.is_null()
+        || space.is_null()
+        || key_ptr.is_null()
+        || out_val_ptr.is_null()
+        || out_val_len.is_null()
+    {
+        return -1;
+    }
+    let Some(space_str) = str_from_ptr(space) else {
+        return -1;
+    };
+    let key = std::slice::from_raw_parts(key_ptr, key_len);
+    let r = &*reader;
+    if let Some(entry) = r.get(space_str, key) {
+        *out_val_ptr = entry.value.as_ptr();
+        *out_val_len = entry.value.len();
+        if !out_version.is_null() {
+            *out_version = entry.version;
+        }
+        0
+    } else {
+        1
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_shm_reader_json_get(
+    reader: *mut lilia_shm::ShmReader,
+    space: *const c_char,
+    id: *const c_char,
+    out_val_ptr: *mut *const u8,
+    out_val_len: *mut usize,
+    out_version: *mut u64,
+) -> c_int {
+    if reader.is_null()
+        || space.is_null()
+        || id.is_null()
+        || out_val_ptr.is_null()
+        || out_val_len.is_null()
+    {
+        return -1;
+    }
+    let Some(space_str) = str_from_ptr(space) else {
+        return -1;
+    };
+    let Some(id_str) = str_from_ptr(id) else {
+        return -1;
+    };
+    let r = &*reader;
+    if let Some(entry) = r.json_get(space_str, id_str) {
+        *out_val_ptr = entry.value_bytes.as_ptr();
+        *out_val_len = entry.value_bytes.len();
+        if !out_version.is_null() {
+            *out_version = entry.version;
+        }
+        0
+    } else {
+        1
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lilia_c_shm_reader_read_page(
+    reader: *mut lilia_shm::ShmReader,
+    page_id: u32,
+    out_data_ptr: *mut *const u8,
+    out_data_len: *mut usize,
+    out_version: *mut u64,
+) -> c_int {
+    if reader.is_null() || out_data_ptr.is_null() || out_data_len.is_null() {
+        return -1;
+    }
+    let r = &*reader;
+    if let Some(page) = r.read_page(page_id) {
+        *out_data_ptr = page.data.as_ptr();
+        *out_data_len = page.data.len();
+        if !out_version.is_null() {
+            *out_version = page.version;
+        }
+        0
+    } else {
+        1
+    }
 }

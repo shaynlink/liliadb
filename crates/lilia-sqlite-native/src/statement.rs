@@ -22,6 +22,8 @@ pub enum StmtStatus {
     VmStep,
     /// Number of times the statement has run.
     Run,
+    /// Memory used by prepared statement.
+    MemUsed,
 }
 
 impl StmtStatus {
@@ -32,8 +34,19 @@ impl StmtStatus {
             Self::AutoIndex => ffi::SQLITE_STMTSTATUS_AUTOINDEX,
             Self::VmStep => ffi::SQLITE_STMTSTATUS_VM_STEP,
             Self::Run => ffi::SQLITE_STMTSTATUS_RUN,
+            Self::MemUsed => ffi::SQLITE_STMTSTATUS_MEMUSED,
         }
     }
+}
+
+/// Hardware and VM counters collected from statement execution for energy profiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StmtEnergyCounters {
+    pub vm_steps: u64,
+    pub fullscan_steps: u64,
+    pub sort_operations: u64,
+    pub auto_index_inserts: u64,
+    pub mem_used_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -444,6 +457,18 @@ impl NativeStatement {
         let value =
             unsafe { ffi::sqlite3_stmt_status(self.raw, counter.code(), c_int::from(reset)) };
         u64::try_from(value).unwrap_or(0)
+    }
+
+    /// Reads all key energy-related VM and execution counters for this statement.
+    #[must_use]
+    pub fn energy_counters(&self, reset: bool) -> StmtEnergyCounters {
+        StmtEnergyCounters {
+            vm_steps: self.status(StmtStatus::VmStep, reset),
+            fullscan_steps: self.status(StmtStatus::FullscanStep, reset),
+            sort_operations: self.status(StmtStatus::Sort, reset),
+            auto_index_inserts: self.status(StmtStatus::AutoIndex, reset),
+            mem_used_bytes: self.status(StmtStatus::MemUsed, reset),
+        }
     }
 }
 

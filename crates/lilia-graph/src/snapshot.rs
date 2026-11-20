@@ -141,8 +141,8 @@ impl GraphView {
     #[must_use]
     pub fn edges_dir(&self, idx: usize, dir: Direction) -> Vec<ViewEdge> {
         match dir {
-            Direction::Outgoing => self.out_edges(idx).to_vec(),
-            Direction::Incoming => self.in_edges(idx).to_vec(),
+            Direction::Outbound => self.out_edges(idx).to_vec(),
+            Direction::Inbound => self.in_edges(idx).to_vec(),
             Direction::Both => {
                 let mut all = self.out_edges(idx).to_vec();
                 all.extend_from_slice(self.in_edges(idx));

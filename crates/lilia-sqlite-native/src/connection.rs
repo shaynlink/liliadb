@@ -12,6 +12,28 @@ use crate::slots::{StatementSlots, StmtSlot};
 use crate::statement::NativeStatement;
 use crate::transaction::NativeTransaction;
 
+/// Pager cache, memory bus, and lookaside memory statistics for a connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConnectionPagerStats {
+    pub cache_hit: i64,
+    pub cache_miss: i64,
+    pub cache_write: i64,
+    pub cache_spill: i64,
+    pub lookaside_hit: i64,
+    pub lookaside_miss_size: i64,
+    pub lookaside_miss_full: i64,
+    pub lookaside_used: i64,
+}
+
+/// A single step row produced by `EXPLAIN QUERY PLAN`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplainPlanRow {
+    pub id: i32,
+    pub parent: i32,
+    pub notused: i32,
+    pub detail: String,
+}
+
 pub struct NativeConnection {
     raw: *mut ffi::sqlite3,
     slots: StatementSlots,
@@ -74,7 +96,14 @@ impl NativeConnection {
         busy_timeout_ms: i32,
         cache_size_kib: i32,
     ) -> Result<Self> {
-        Self::open_with_vfs(path, None, synchronous, mmap_size, busy_timeout_ms, cache_size_kib)
+        Self::open_with_vfs(
+            path,
+            None,
+            synchronous,
+            mmap_size,
+            busy_timeout_ms,
+            cache_size_kib,
+        )
     }
 
     /// Open a new SQLite connection with an optional custom VFS name.
@@ -481,6 +510,59 @@ impl NativeConnection {
         }
     }
 
+    /// Query database connection status counters via `sqlite3_db_status64`.
+    #[must_use]
+    pub fn db_status(&self, op: c_int, reset: bool) -> (i64, i64) {
+        let mut cur = 0i64;
+        let mut hi = 0i64;
+        let _rc = unsafe {
+            ffi::sqlite3_db_status64(self.raw, op, &mut cur, &mut hi, c_int::from(reset))
+        };
+        (cur, hi)
+    }
+
+    /// Reads cache, lookaside, and pager statistics for this connection.
+    #[must_use]
+    pub fn pager_stats(&self, reset: bool) -> ConnectionPagerStats {
+        let (cache_hit, _) = self.db_status(ffi::SQLITE_DBSTATUS_CACHE_HIT, reset);
+        let (cache_miss, _) = self.db_status(ffi::SQLITE_DBSTATUS_CACHE_MISS, reset);
+        let (cache_write, _) = self.db_status(ffi::SQLITE_DBSTATUS_CACHE_WRITE, reset);
+        let (cache_spill, _) = self.db_status(ffi::SQLITE_DBSTATUS_CACHE_SPILL, reset);
+        let (_, lookaside_hit) = self.db_status(ffi::SQLITE_DBSTATUS_LOOKASIDE_HIT, reset);
+        let (_, lookaside_miss_size) =
+            self.db_status(ffi::SQLITE_DBSTATUS_LOOKASIDE_MISS_SIZE, reset);
+        let (_, lookaside_miss_full) =
+            self.db_status(ffi::SQLITE_DBSTATUS_LOOKASIDE_MISS_FULL, reset);
+        let (lookaside_used, _) = self.db_status(ffi::SQLITE_DBSTATUS_LOOKASIDE_USED, reset);
+
+        ConnectionPagerStats {
+            cache_hit,
+            cache_miss,
+            cache_write,
+            cache_spill,
+            lookaside_hit,
+            lookaside_miss_size,
+            lookaside_miss_full,
+            lookaside_used,
+        }
+    }
+
+    /// Runs `EXPLAIN QUERY PLAN <sql>` and parses the output rows into structured plan steps.
+    pub fn explain_query_plan(&self, sql: &str) -> Result<Vec<ExplainPlanRow>> {
+        let explain_sql = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut stmt = self.prepare(&explain_sql)?;
+        let mut rows = Vec::new();
+        while stmt.step()? {
+            rows.push(ExplainPlanRow {
+                id: i32::try_from(stmt.column_int64(0)).unwrap_or(0),
+                parent: i32::try_from(stmt.column_int64(1)).unwrap_or(0),
+                notused: i32::try_from(stmt.column_int64(2)).unwrap_or(0),
+                detail: stmt.column_text(3).to_string(),
+            });
+        }
+        Ok(rows)
+    }
+
     pub fn register_scalar_function<F>(&self, name: &str, n_arg: i32, f: F) -> Result<()>
     where
         F: Fn(&NativeContext, &[NativeValue]) -> Result<()> + Send + Sync + 'static,
@@ -542,6 +624,100 @@ impl NativeConnection {
             return Err(LiliaError::new(
                 ErrorCode::Storage,
                 format!("failed to register scalar function {name}: rc={rc}"),
+                false,
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn register_aggregate_function<Step, Final>(
+        &self,
+        name: &str,
+        n_arg: i32,
+        step: Step,
+        final_fn: Final,
+    ) -> Result<()>
+    where
+        Step: Fn(&NativeContext, &[NativeValue]) -> Result<()> + Send + Sync + 'static,
+        Final: Fn(&NativeContext) -> Result<()> + Send + Sync + 'static,
+    {
+        struct AggregateCallbacks<S, F> {
+            step: S,
+            final_fn: F,
+        }
+
+        let c_name = CString::new(name).map_err(|e| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("null byte in function name: {e}"),
+                false,
+            )
+        })?;
+
+        let boxed = Box::new(AggregateCallbacks { step, final_fn });
+        let app_ptr = Box::into_raw(boxed);
+
+        unsafe extern "C" fn x_step<S, F>(
+            ctx: *mut ffi::sqlite3_context,
+            argc: c_int,
+            argv: *mut *mut ffi::sqlite3_value,
+        ) where
+            S: Fn(&NativeContext, &[NativeValue]) -> Result<()> + Send + Sync + 'static,
+            F: Fn(&NativeContext) -> Result<()> + Send + Sync + 'static,
+        {
+            let user_data = ffi::sqlite3_user_data(ctx);
+            let callbacks = &*(user_data.cast::<AggregateCallbacks<S, F>>());
+            let n = argc as usize;
+            let mut values = Vec::with_capacity(n);
+            for i in 0..n {
+                let val_ptr = *argv.add(i);
+                values.push(NativeValue::from_raw(val_ptr));
+            }
+            let native_ctx = NativeContext::from_raw(ctx);
+            if let Err(e) = (callbacks.step)(&native_ctx, &values) {
+                native_ctx.set_result_error(&e.to_string());
+            }
+        }
+
+        unsafe extern "C" fn x_final<S, F>(ctx: *mut ffi::sqlite3_context)
+        where
+            S: Fn(&NativeContext, &[NativeValue]) -> Result<()> + Send + Sync + 'static,
+            F: Fn(&NativeContext) -> Result<()> + Send + Sync + 'static,
+        {
+            let user_data = ffi::sqlite3_user_data(ctx);
+            let callbacks = &*(user_data.cast::<AggregateCallbacks<S, F>>());
+            let native_ctx = NativeContext::from_raw(ctx);
+            if let Err(e) = (callbacks.final_fn)(&native_ctx) {
+                native_ctx.set_result_error(&e.to_string());
+            }
+        }
+
+        unsafe extern "C" fn x_destroy<T>(p: *mut std::ffi::c_void) {
+            if !p.is_null() {
+                drop(Box::from_raw(p.cast::<T>()));
+            }
+        }
+
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                self.raw,
+                c_name.as_ptr(),
+                n_arg as c_int,
+                ffi::SQLITE_UTF8 as c_int | ffi::SQLITE_DETERMINISTIC,
+                app_ptr.cast::<std::ffi::c_void>(),
+                None,
+                Some(x_step::<Step, Final>),
+                Some(x_final::<Step, Final>),
+                Some(x_destroy::<AggregateCallbacks<Step, Final>>),
+            )
+        };
+
+        if rc != ffi::SQLITE_OK {
+            unsafe { drop(Box::from_raw(app_ptr)) };
+            return Err(LiliaError::new(
+                ErrorCode::Storage,
+                format!("failed to register aggregate function {name}: rc={rc}"),
                 false,
             ));
         }

@@ -21,6 +21,7 @@ cli = ["uniffi/cli"]
 
 [dependencies]
 lilia-core = { path = "../lilia-core" }
+lilia-shm = { path = "../lilia-shm" }
 lilia-storage-sqlite = { path = "../lilia-storage-sqlite" }
 uniffi = { version = "0.28.3", features = ["tokio"] }
 tokio = { workspace = true }

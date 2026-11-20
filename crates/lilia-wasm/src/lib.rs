@@ -70,6 +70,17 @@ pub struct WasmFtsHit {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmFtsPhoneticHit {
+    pub collection: String,
+    pub doc_id: String,
+    pub snippet: String,
+    pub rank: f64,
+    pub matched_terms: Vec<String>,
+    pub phonetic_codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmFtsSuggestion {
     pub term: String,
     pub distance: u8,
@@ -398,9 +409,9 @@ impl WasmDatabase {
         kind: Option<String>,
     ) -> Result<JsValue, JsValue> {
         let dir = match direction.as_deref() {
-            Some("incoming") => lilia_core::Direction::Incoming,
+            Some("incoming" | "inbound") => lilia_core::Direction::Inbound,
             Some("both") => lilia_core::Direction::Both,
-            _ => lilia_core::Direction::Outgoing,
+            _ => lilia_core::Direction::Outbound,
         };
         let neighbors = self
             .inner
@@ -419,9 +430,9 @@ impl WasmDatabase {
         let start_nodes: Vec<String> = serde_wasm_bindgen::from_value(start_nodes_val)
             .map_err(|e| JsValue::from_str(&format!("invalid start_nodes array: {e}")))?;
         let dir = match direction.as_deref() {
-            Some("incoming") => lilia_core::Direction::Incoming,
+            Some("incoming" | "inbound") => lilia_core::Direction::Inbound,
             Some("both") => lilia_core::Direction::Both,
-            _ => lilia_core::Direction::Outgoing,
+            _ => lilia_core::Direction::Outbound,
         };
         let reachable = self
             .inner
@@ -508,6 +519,31 @@ impl WasmDatabase {
                 rank: h.rank,
                 edit_distance: h.edit_distance,
                 matched_terms: h.matched_terms,
+            })
+            .collect();
+        serde_wasm_bindgen::to_value(&wasm_hits).map_err(to_js_err)
+    }
+
+    #[wasm_bindgen]
+    pub fn fts_phonetic_search(
+        &self,
+        collection: String,
+        query: String,
+        limit: Option<u32>,
+    ) -> Result<JsValue, JsValue> {
+        let hits = self
+            .inner
+            .fts_phonetic_search(&collection, &query, limit.unwrap_or(10))
+            .map_err(to_js_err)?;
+        let wasm_hits: Vec<WasmFtsPhoneticHit> = hits
+            .into_iter()
+            .map(|h| WasmFtsPhoneticHit {
+                collection: h.collection,
+                doc_id: h.doc_id,
+                snippet: h.snippet,
+                rank: h.rank,
+                matched_terms: h.matched_terms,
+                phonetic_codes: h.phonetic_codes,
             })
             .collect();
         serde_wasm_bindgen::to_value(&wasm_hits).map_err(to_js_err)

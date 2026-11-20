@@ -74,8 +74,8 @@ pub enum FfiDirection {
 impl From<FfiDirection> for Direction {
     fn from(d: FfiDirection) -> Self {
         match d {
-            FfiDirection::Outgoing => Direction::Outgoing,
-            FfiDirection::Incoming => Direction::Incoming,
+            FfiDirection::Outgoing => Direction::Outbound,
+            FfiDirection::Incoming => Direction::Inbound,
             FfiDirection::Both => Direction::Both,
         }
     }
@@ -138,6 +138,16 @@ pub struct FfiFtsFuzzyHit {
     pub rank: f64,
     pub edit_distance: u8,
     pub matched_terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, uniffi::Record)]
+pub struct FfiFtsPhoneticHit {
+    pub collection: String,
+    pub doc_id: String,
+    pub snippet: String,
+    pub rank: f64,
+    pub matched_terms: Vec<String>,
+    pub phonetic_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, uniffi::Record)]
@@ -1127,6 +1137,51 @@ impl LiliaDatabase {
                     rank: h.rank,
                     edit_distance: h.edit_distance,
                     matched_terms: h.matched_terms,
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| LiliaFfiError::Generic(e.to_string()))?
+    }
+
+    pub fn fts_phonetic_search_sync(
+        &self,
+        collection: String,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<FfiFtsPhoneticHit>, LiliaFfiError> {
+        let hits = self.inner.fts_phonetic_search(&collection, &query, limit)?;
+        Ok(hits
+            .into_iter()
+            .map(|h| FfiFtsPhoneticHit {
+                collection: h.collection,
+                doc_id: h.doc_id,
+                snippet: h.snippet,
+                rank: h.rank,
+                matched_terms: h.matched_terms,
+                phonetic_codes: h.phonetic_codes,
+            })
+            .collect())
+    }
+
+    pub async fn fts_phonetic_search(
+        &self,
+        collection: String,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<FfiFtsPhoneticHit>, LiliaFfiError> {
+        let db = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || {
+            let hits = db.fts_phonetic_search(&collection, &query, limit)?;
+            Ok(hits
+                .into_iter()
+                .map(|h| FfiFtsPhoneticHit {
+                    collection: h.collection,
+                    doc_id: h.doc_id,
+                    snippet: h.snippet,
+                    rank: h.rank,
+                    matched_terms: h.matched_terms,
+                    phonetic_codes: h.phonetic_codes,
                 })
                 .collect())
         })

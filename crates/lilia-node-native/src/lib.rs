@@ -185,6 +185,17 @@ pub struct NativeFtsFuzzyHit {
 
 #[napi(object)]
 #[derive(Debug, Clone)]
+pub struct NativeFtsPhoneticHit {
+    pub collection: String,
+    pub doc_id: String,
+    pub snippet: String,
+    pub rank: f64,
+    pub matched_terms: Vec<String>,
+    pub phonetic_codes: Vec<String>,
+}
+
+#[napi(object)]
+#[derive(Debug, Clone)]
 pub struct NativeVectorHit {
     pub collection: String,
     pub id: String,
@@ -1601,6 +1612,56 @@ impl NativeDatabase {
             .fts_load_dictionary(&collection, &refs)
             .map_err(napi_error)?;
         Ok(())
+    }
+
+    #[napi]
+    pub async fn fts_phonetic_search(
+        &self,
+        collection: String,
+        query: String,
+        limit: Option<u32>,
+    ) -> Result<Vec<NativeFtsPhoneticHit>> {
+        run_async(&self.inner, move |db| {
+            let hits = db
+                .fts_phonetic_search(&collection, &query, limit.unwrap_or(10))
+                .map_err(napi_error)?;
+            Ok(hits
+                .into_iter()
+                .map(|h| NativeFtsPhoneticHit {
+                    collection: h.collection,
+                    doc_id: h.doc_id,
+                    snippet: h.snippet,
+                    rank: h.rank,
+                    matched_terms: h.matched_terms,
+                    phonetic_codes: h.phonetic_codes,
+                })
+                .collect())
+        })
+        .await
+    }
+
+    #[napi]
+    pub fn fts_phonetic_search_sync(
+        &self,
+        collection: String,
+        query: String,
+        limit: Option<u32>,
+    ) -> Result<Vec<NativeFtsPhoneticHit>> {
+        let hits = self
+            .inner
+            .fts_phonetic_search(&collection, &query, limit.unwrap_or(10))
+            .map_err(napi_error)?;
+        Ok(hits
+            .into_iter()
+            .map(|h| NativeFtsPhoneticHit {
+                collection: h.collection,
+                doc_id: h.doc_id,
+                snippet: h.snippet,
+                rank: h.rank,
+                matched_terms: h.matched_terms,
+                phonetic_codes: h.phonetic_codes,
+            })
+            .collect())
     }
 
     #[napi]
