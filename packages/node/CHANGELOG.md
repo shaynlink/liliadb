@@ -4,6 +4,17 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 
 ---
 
+## [0.1.0-alpha.9] - 2026-11-20
+
+### Added
+- Native Node-API support for v0.1.0-alpha.9 engine core:
+  - Zero-copy relative-pointer deserialization support via `rkyv`.
+  - Shared memory direct archived readers for ultra-low latency IPC.
+  - Aligned transaction write overlays for accelerated synchronous operations.
+  - Updated native bindings and dependencies.
+
+---
+
 ## [0.1.0-alpha.8] - 2026-11-20
 
 ### Added

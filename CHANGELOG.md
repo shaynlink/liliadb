@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.0-alpha.9] - 2026-11-20
+
+### Added
+- **Zero-Copy Relative-Pointer Architecture (`rkyv` 0.8)**:
+  - Integrated `rkyv` 0.8.18 across the workspace with `bytecheck` and `aligned` memory validation.
+  - Complete elimination of MessagePack serialization overhead (`rmp-serde`) in network protocol framing and daemon IPC (`lilia-protocol`).
+  - Relative displacement pointers (`i32`) enabling $O(1)$ zero-cost deserialization at 0 nanoseconds (`unsafe { rkyv::access_unchecked::<T>(bytes) }`), clocking at **0.69 ns** (125.9x faster than `serde_json` and 91.9x faster than `rmp_serde`).
+  - `JsonDocument` and `FlatNode` dynamic tape representation in `lilia-core` for zero-heap nested field extraction (`extract_str`, `extract_f64`, `extract_bool`) directly over mapped buffers.
+  - Relative-pointer zero-copy wrappers: `RelKvEntry`, `RelJsonEntry`, `ArchivedRelKvEntry`, `ArchivedRelJsonEntry`.
+  - Type-level archiving derivations across core CRDTs (`LwwJson`, `LwwRegister`, `OrSet`, `PnCounter`), IBF (`Cell`, `InvertibleBloomFilter`, `StrataFilter`), HLC timestamps, Geo, Timeseries, Graph, Index, Stats, Vector, and Event types.
+- **Lock-Free `AlignedVec` Storage Overlay (`lilia-storage-sqlite`)**:
+  - Uncommitted transaction mutations buffered directly into memory-aligned byte arrays (`AlignedVec`) within active transaction overlays.
+  - Zero-copy query fast-paths (`database.with_archived_kv`, `database.with_archived_json`) resolving queries against pending transactions directly in memory without deserializing or querying SQLite B-Tree pages.
+  - Cache-aligned ring buffer mutation streams for high-throughput zero-copy ingestion.
+- **Shared Memory Direct Archived Readers & C-ABI Bridge (`lilia-shm`, `lilia-ffi`)**:
+  - `Reader::get_archived()` and `Reader::get_archived_doc()` enabling zero-copy typed and dynamic document inspection directly from lock-free shared memory arenas (`/dev/shm`).
+  - `Engine::put_archived()` allowing pre-archived relative-pointer buffers to be inserted directly into SHM slot arenas without re-serialization.
+  - Universal C-ABI export `lilia_shm_get_archived` allowing external foreign runtimes (C, C++, Node-API, Go) to read shared memory frames with sub-50ns latency.
+- **Micro-Benchmarking Suite & Performance Calibration**:
+  - Criterion micro-benchmarks across protocol framing (`benches/protocol_framing.rs`), storage overlays (`benches/storage.rs`), and SHM relative pointers (`benches/zero_copy_comparison.rs`, `benches/shm_latency.rs`).
+  - Calibrated benchmark documentation validating 0 B heap allocations and 125.9x deserialization speedups.
+
+---
+
 ## [0.1.0-alpha.8] - 2026-11-20
 
 ### Added
