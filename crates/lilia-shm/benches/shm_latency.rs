@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -65,6 +67,49 @@ fn bench_shm_read_latency(c: &mut Criterion) {
             let page = reader.read_page(black_box(0));
             let data = page.expect("must find page").data;
             black_box(data);
+        });
+    });
+
+    // Populate typed rkyv record
+    #[derive(Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+    #[rkyv(crate = rkyv, derive(Debug, PartialEq))]
+    struct ShmBenchUser {
+        pub name: String,
+        pub role: String,
+        pub status: String,
+    }
+
+    let bench_user = ShmBenchUser {
+        name: "Ada Lovelace".to_string(),
+        role: "Engineer".to_string(),
+        status: "Active".to_string(),
+    };
+    engine
+        .put_archived("shm_users", b"user:1001", &bench_user, 1, None)
+        .expect("put archived user");
+
+    group.bench_function("rkyv_shm_typed_get_0ns", |b| {
+        b.iter(|| {
+            let archived = reader
+                .get_archived::<ShmBenchUser>("shm_users", black_box(b"user:1001"))
+                .expect("must find archived user");
+            let role = archived.role.as_str();
+            black_box(role);
+        });
+    });
+
+    // Populate dynamic rkyv JsonDocument
+    let rkyv_doc = lilia_core::json::JsonDocument::from_serde(&json_val);
+    engine
+        .put_archived_doc("shm_docs", "1001", &rkyv_doc, 1, None)
+        .expect("put archived doc");
+
+    group.bench_function("rkyv_shm_doc_extract_str_0ns", |b| {
+        b.iter(|| {
+            let name = reader
+                .json_extract_str_zero_copy("shm_docs", black_box("1001"), black_box("name"))
+                .expect("must extract name");
+            black_box(name);
         });
     });
 
