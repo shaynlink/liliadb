@@ -2,7 +2,7 @@
   "name": "lilia-vscode",
   "displayName": "LiliaDB",
   "description": "Visual Studio Code extension for LiliaDB: manage, modify, visualize, and apply commands via daemon or embedded database files.",
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-alpha.9",
   "publisher": "liliadb",
   "license": "Apache-2.0",
   "repository": {
