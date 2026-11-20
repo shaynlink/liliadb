@@ -10,6 +10,7 @@ crossbeam-epoch = { workspace = true }
 lilia-core = { path = "../lilia-core" }
 memmap2 = { workspace = true }
 parking_lot = { workspace = true }
+rkyv = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -21,11 +22,17 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+rmp-serde = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3.17.1"
 
 [[bench]]
 name = "shm_latency"
+harness = false
+
+[[bench]]
+name = "zero_copy_comparison"
 harness = false
 
 [lints]

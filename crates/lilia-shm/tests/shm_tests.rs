@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -196,4 +198,127 @@ fn test_shm_concurrent_readers_and_writer() {
         let reads = h.join().expect("reader thread completed");
         assert!(reads > 0);
     }
+}
+
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq))]
+struct UserProfile {
+    pub name: String,
+    pub email: String,
+    pub score: f64,
+}
+
+#[test]
+fn test_shm_rkyv_zero_copy() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("rkyv.shm");
+
+    let engine = ShmEngine::create(
+        ShmOptions::file_backed(&path)
+            .with_size_bytes(4 * 1024 * 1024)
+            .with_slot_capacity(1024),
+    )
+    .expect("create engine");
+
+    // 1. Put typed struct
+    let profile = UserProfile {
+        name: "Ada Lovelace".to_string(),
+        email: "ada@lovelace.org".to_string(),
+        score: 99.5,
+    };
+    engine
+        .put_archived("users", b"ada", &profile, 1, None)
+        .expect("put archived profile");
+
+    let reader = engine.create_reader().expect("create reader");
+
+    // Reader reads typed struct directly with 0 ns cast
+    let archived_profile: &ArchivedUserProfile = reader
+        .get_archived::<UserProfile>("users", b"ada")
+        .expect("must find archived profile");
+    assert_eq!(archived_profile.name.as_str(), "Ada Lovelace");
+    assert_eq!(archived_profile.email.as_str(), "ada@lovelace.org");
+    assert_eq!(archived_profile.score.to_native(), 99.5);
+
+    // 2. Put dynamic JSON document
+    let json_val = serde_json::json!({
+        "order_id": 4242,
+        "customer": {
+            "name": "Charles Babbage",
+            "vip": true
+        },
+        "items": ["gear", "cam", "differential"]
+    });
+    let doc = lilia_core::json::JsonDocument::from_serde(&json_val);
+    engine
+        .put_archived_doc("orders", "4242", &doc, 1, None)
+        .expect("put archived doc");
+
+    // Zero-copy extraction directly from shared memory
+    let archived_doc = reader
+        .get_archived_doc("orders", "4242")
+        .expect("must find archived order");
+    assert_eq!(archived_doc.extract_i64("order_id"), Some(4242));
+    assert_eq!(
+        archived_doc.extract_str("customer.name"),
+        Some("Charles Babbage")
+    );
+    assert_eq!(archived_doc.extract_bool("customer.vip"), Some(true));
+    assert_eq!(archived_doc.extract_str("items.1"), Some("cam"));
+
+    // In-situ string extraction method
+    assert_eq!(
+        reader.json_extract_str_zero_copy("orders", "4242", "customer.name"),
+        Some("Charles Babbage")
+    );
+}
+
+#[test]
+fn test_nanosecond_comparison_metrics() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    let profile = UserProfile {
+        name: "Ada Lovelace".to_string(),
+        email: "ada@lovelace.org".to_string(),
+        score: 99.5,
+    };
+
+    let json_bytes = serde_json::to_vec(&profile).unwrap();
+    let rkyv_bytes = lilia_core::archive_to_bytes(&profile).unwrap();
+
+    const ITERS: u32 = 100_000;
+
+    // 1. serde_json
+    let start = Instant::now();
+    for _ in 0..ITERS {
+        let u: UserProfile = serde_json::from_slice(black_box(&json_bytes)).unwrap();
+        let email = black_box(&u.email);
+        black_box(email);
+    }
+    let serde_duration = start.elapsed();
+    let serde_ns_per_op = serde_duration.as_nanos() as f64 / ITERS as f64;
+
+    // 2. rkyv unchecked 0ns
+    let start = Instant::now();
+    for _ in 0..ITERS {
+        let u: &ArchivedUserProfile =
+            unsafe { lilia_core::access_archived_unchecked::<UserProfile>(black_box(&rkyv_bytes)) };
+        let email = black_box(u.email.as_str());
+        black_box(email);
+    }
+    let rkyv_duration = start.elapsed();
+    let rkyv_ns_per_op = rkyv_duration.as_nanos() as f64 / ITERS as f64;
+
+    println!("\n========================================================");
+    println!(">>> MICRO-BENCHMARK: 100,000 ITERATIONS COMPARISON <<<");
+    println!("serde_json latency : {:.2} ns / op", serde_ns_per_op);
+    println!("rkyv 0-ns latency  : {:.2} ns / op", rkyv_ns_per_op);
+    println!(
+        "Speedup factor     : {:.1}x FASTER",
+        serde_ns_per_op / rkyv_ns_per_op
+    );
+    println!("========================================================\n");
+
+    assert!(rkyv_ns_per_op < serde_ns_per_op);
 }

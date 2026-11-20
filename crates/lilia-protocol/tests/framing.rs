@@ -85,3 +85,40 @@ async fn subscribe_and_event_frame_round_trip() {
         other => panic!("unexpected response value: {other:?}"),
     }
 }
+
+#[derive(Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq))]
+struct FastIpcMessage {
+    pub session_id: u64,
+    pub command: String,
+    pub payload: Vec<u8>,
+}
+
+#[tokio::test]
+async fn rkyv_zero_copy_frame_round_trip() {
+    use lilia_protocol::{read_archived_frame, write_archived_frame};
+    use rkyv::util::AlignedVec;
+
+    let (mut client, mut server) = tokio::io::duplex(4_096);
+    let msg = FastIpcMessage {
+        session_id: 10007,
+        command: "QUERY_AGGREGATE".to_string(),
+        payload: vec![1, 2, 3, 4, 5],
+    };
+
+    let writer = tokio::spawn(async move {
+        write_archived_frame(&mut client, &msg).await.expect("write archived frame");
+    });
+
+    let mut buf = AlignedVec::new();
+    let archived = read_archived_frame::<FastIpcMessage>(&mut server, &mut buf)
+        .await
+        .expect("read archived frame");
+
+    writer.await.expect("writer task");
+
+    // Zero-copy in-situ assertions without deserialization!
+    assert_eq!(archived.session_id.to_native(), 10007);
+    assert_eq!(archived.command.as_str(), "QUERY_AGGREGATE");
+    assert_eq!(archived.payload.as_slice(), &[1, 2, 3, 4, 5]);
+}

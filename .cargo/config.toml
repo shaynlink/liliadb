@@ -1,4 +1,5 @@
 [env]
+DEVELOPER_DIR = "/Library/Developer/CommandLineTools"
 LIBSQLITE3_FLAGS = "-DSQLITE_ENABLE_GEOPOLY"
 
 [target.wasm32-unknown-unknown]

@@ -143,6 +143,40 @@ impl ShmReader {
         binary_doc.extract_str(path).map(ToOwned::to_owned)
     }
 
+    /// Read an archived typed struct directly from shared memory (0 nanosecond cast).
+    #[inline]
+    pub fn get_archived<'a, T: rkyv::Archive>(
+        &'a self,
+        space: &str,
+        key: &[u8],
+    ) -> Option<&'a T::Archived> {
+        let entry = self.get(space, key)?;
+        unsafe { Some(rkyv::access_unchecked::<T::Archived>(entry.value)) }
+    }
+
+    /// Read an archived JSON document directly from shared memory (0 nanosecond cast).
+    #[inline]
+    pub fn get_archived_doc<'a>(
+        &'a self,
+        space: &str,
+        id: &str,
+    ) -> Option<&'a lilia_core::json::ArchivedJsonDocument> {
+        let entry = self.get(space, id.as_bytes())?;
+        unsafe { Some(lilia_core::json::access_archived_doc_unchecked(entry.value)) }
+    }
+
+    /// Read an archived JSON document and extract a string slice zero-copy directly from shared memory.
+    #[inline]
+    pub fn json_extract_str_zero_copy<'a>(
+        &'a self,
+        space: &str,
+        id: &str,
+        path: &str,
+    ) -> Option<&'a str> {
+        let doc = self.get_archived_doc(space, id)?;
+        doc.extract_str(path)
+    }
+
     /// Read a snapshot page zero-copy.
     #[inline]
     pub fn read_page<'a>(&'a self, page_id: u32) -> Option<ShmPageRef<'a>> {

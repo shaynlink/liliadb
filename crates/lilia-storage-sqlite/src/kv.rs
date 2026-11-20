@@ -382,4 +382,53 @@ impl Database {
             Ok(None)
         }
     }
+
+    /// Put an archived typed value into a KV namespace.
+    pub fn typed_put<T>(
+        &self,
+        namespace: &str,
+        key: &[u8],
+        value: &T,
+        expires_at_ms: Option<i64>,
+    ) -> Result<u64>
+    where
+        T: for<'a> rkyv::Serialize<
+            rkyv::api::high::HighSerializer<
+                rkyv::util::AlignedVec,
+                rkyv::ser::allocator::ArenaHandle<'a>,
+                rkyv::rancor::Error,
+            >,
+        >,
+    {
+        let bytes = lilia_core::archive_to_bytes(value)?;
+        let results = self.batch(&[lilia_core::BatchOperation::KvSet {
+            namespace: namespace.to_owned(),
+            key: key.to_vec(),
+            value: bytes.to_vec(),
+            if_version: None,
+            expires_at_ms,
+        }])?;
+        Ok(results.first().and_then(|r| r.version).unwrap_or(1))
+    }
+
+    /// Read an archived typed struct directly from KV storage with 0 nanoseconds deserialization.
+    pub fn with_archived_kv<T, R, F>(
+        &self,
+        namespace: &str,
+        key: &[u8],
+        f: F,
+    ) -> Result<Option<R>>
+    where
+        T: rkyv::Archive,
+        T::Archived: for<'a> rkyv::bytecheck::CheckBytes<
+            rkyv::api::high::HighValidator<'a, rkyv::rancor::Error>,
+        >,
+        F: FnOnce(&T::Archived) -> R,
+    {
+        let Some(entry) = self.kv_get(namespace, key)? else {
+            return Ok(None);
+        };
+        let archived = lilia_core::access_archived::<T>(&entry.value)?;
+        Ok(Some(f(archived)))
+    }
 }

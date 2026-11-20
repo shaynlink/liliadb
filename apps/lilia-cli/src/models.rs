@@ -1309,7 +1309,7 @@ mod tests {
                 command: GraphCommand::Neighbors {
                     graph: "deps".into(),
                     node: "app".into(),
-                    direction: DirectionArg::Outgoing,
+                    direction: DirectionArg::Outbound,
                     kind: None,
                 },
             },
@@ -1324,7 +1324,7 @@ mod tests {
                 command: GraphCommand::Reach {
                     graph: "deps".into(),
                     start_nodes: vec!["app".into()],
-                    direction: DirectionArg::Outgoing,
+                    direction: DirectionArg::Outbound,
                 },
             },
             &db_path,

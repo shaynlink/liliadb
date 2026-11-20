@@ -21,6 +21,8 @@ fn unsigned_plugins_require_explicit_development_mode() {
         require_sandboxed_plugins: false,
         plugin_memory_limit_mb: 64,
         plugin_fuel_limit: 10_000_000,
+        shm: false,
+        shm_path: None,
     };
     let error = load_plugins(&arguments).expect_err("unsigned mode must fail closed");
     assert!(error.to_string().contains("--development"));
@@ -43,6 +45,8 @@ fn production_rejects_plugin_root_and_inline_key_overrides() {
         require_sandboxed_plugins: false,
         plugin_memory_limit_mb: 64,
         plugin_fuel_limit: 10_000_000,
+        shm: false,
+        shm_path: None,
     };
     assert!(load_plugins(&arguments)
         .expect_err("root override must fail")
@@ -77,6 +81,8 @@ fn development_root_still_rejects_plugins_outside_it() {
         require_sandboxed_plugins: false,
         plugin_memory_limit_mb: 64,
         plugin_fuel_limit: 10_000_000,
+        shm: false,
+        shm_path: None,
     };
 
     assert!(load_plugins(&arguments)
@@ -821,6 +827,8 @@ fn require_sandboxed_plugins_accepts_wasm_plugin() {
         require_sandboxed_plugins: true,
         plugin_memory_limit_mb: 64,
         plugin_fuel_limit: 10_000_000,
+        shm: false,
+        shm_path: None,
     };
 
     let plugins =
@@ -875,6 +883,8 @@ fn require_sandboxed_plugins_rejects_native_plugin() {
         require_sandboxed_plugins: true,
         plugin_memory_limit_mb: 64,
         plugin_fuel_limit: 10_000_000,
+        shm: false,
+        shm_path: None,
     };
 
     let err = load_plugins(&arguments)

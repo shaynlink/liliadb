@@ -288,6 +288,63 @@ impl ShmEngine {
         Ok(())
     }
 
+    /// Archive a typed value and write it into shared memory.
+    pub fn put_archived<T>(
+        &self,
+        space: &str,
+        key: &[u8],
+        value: &T,
+        version: u64,
+        expires_at_ms: Option<i64>,
+    ) -> Result<()>
+    where
+        T: for<'a> rkyv::Serialize<
+            rkyv::api::high::HighSerializer<
+                rkyv::util::AlignedVec,
+                rkyv::ser::allocator::ArenaHandle<'a>,
+                rkyv::rancor::Error,
+            >,
+        >,
+    {
+        let bytes = lilia_core::archive_to_bytes(value)?;
+        self.put_kv(space, key, &bytes, version, expires_at_ms)
+    }
+
+    /// Archive a JSON document and write it into shared memory.
+    pub fn put_archived_doc(
+        &self,
+        space: &str,
+        id: &str,
+        doc: &lilia_core::json::JsonDocument,
+        version: u64,
+        expires_at_ms: Option<i64>,
+    ) -> Result<()> {
+        let bytes = doc.to_archived_bytes()?;
+        self.put_json(space, id, &bytes, version, expires_at_ms)
+    }
+
+    /// Read an archived typed struct directly from shared memory (< 50 nanoseconds read path).
+    #[inline]
+    pub fn get_archived<'a, T: rkyv::Archive>(
+        &'a self,
+        space: &str,
+        key: &[u8],
+    ) -> Option<&'a T::Archived> {
+        let entry = self.get_zero_copy(space, key)?;
+        unsafe { Some(rkyv::access_unchecked::<T::Archived>(entry.value)) }
+    }
+
+    /// Read an archived JSON document directly from shared memory (< 50 nanoseconds read path).
+    #[inline]
+    pub fn get_archived_doc<'a>(
+        &'a self,
+        space: &str,
+        id: &str,
+    ) -> Option<&'a lilia_core::json::ArchivedJsonDocument> {
+        let entry = self.get_zero_copy(space, id.as_bytes())?;
+        unsafe { Some(lilia_core::json::access_archived_doc_unchecked(entry.value)) }
+    }
+
     /// Read a key-value record zero-copy from shared memory (< 50 nanoseconds read path).
     #[inline]
     pub fn get_zero_copy<'a>(&'a self, space: &str, key: &[u8]) -> Option<ShmZeroCopyEntry<'a>> {

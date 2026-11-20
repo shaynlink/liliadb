@@ -35,6 +35,7 @@ pub mod timeseries;
 mod types;
 mod version;
 pub mod wear;
+pub mod zero_copy;
 #[cfg(feature = "zk")]
 pub mod zk;
 
@@ -171,6 +172,9 @@ pub use types::{
     VectorElementType, VectorHit, VectorIndexInfo, VectorMetric, Version, WeightedPath,
 };
 pub use wear::{FlashWearTelemetry, FlashWearTier, FlashWearTracker, WearLevelingPolicy};
+pub use zero_copy::{
+    access_archived, access_archived_unchecked, archive_to_bytes, RelJsonEntry, RelKvEntry,
+};
 
 /// Ergonomic macro to construct document-style JSON values for updates, queries, and filters.
 

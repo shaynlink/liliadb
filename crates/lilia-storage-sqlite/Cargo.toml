@@ -41,6 +41,7 @@ crossbeam-queue = { workspace = true }
 hex.workspace = true
 rand.workspace = true
 parking_lot.workspace = true
+rkyv = { workspace = true }
 rusqlite = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

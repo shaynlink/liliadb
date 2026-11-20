@@ -1,8 +1,13 @@
+pub mod archived_value;
 pub mod binary;
 pub mod expr;
 pub mod jit;
 pub mod simd;
 
+pub use archived_value::{
+    access_archived_doc, access_archived_doc_unchecked, ArchivedFlatNode, ArchivedJsonDocument,
+    ArchivedJsonView, FlatNode, JsonDocument,
+};
 pub use binary::{
     BinaryArrayRef, BinaryDoc, BinaryDocBuilder, BinaryObjectRef, BinaryValueRef, MAGIC,
     MAGIC_ZSTD, MAGIC_ZSTD_V1,

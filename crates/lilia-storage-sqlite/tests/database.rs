@@ -145,3 +145,62 @@ fn online_backup_contains_confirmed_commits() {
     );
     assert!(backup.integrity_check().expect("backup integrity"));
 }
+
+#[derive(Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq))]
+struct AccountRecord {
+    pub account_id: u64,
+    pub owner: String,
+    pub balance: f64,
+}
+
+#[test]
+fn test_zero_copy_typed_and_json_access() {
+    let (_directory, database) = database();
+
+    // 1. Test typed_put and with_archived_kv (0 nanoseconds deserialization)
+    let account = AccountRecord {
+        account_id: 99991,
+        owner: "Grace Hopper".to_string(),
+        balance: 12500.50,
+    };
+    let ver = database
+        .typed_put("accounts", b"acc:99991", &account, None)
+        .expect("typed put");
+    assert!(ver >= 1);
+
+    let res = database
+        .with_archived_kv::<AccountRecord, _, _>("accounts", b"acc:99991", |archived| {
+            assert_eq!(archived.account_id.to_native(), 99991);
+            assert_eq!(archived.owner.as_str(), "Grace Hopper");
+            assert_eq!(archived.balance.to_native(), 12500.50);
+            archived.owner.as_str().to_string()
+        })
+        .expect("read archived kv");
+    assert_eq!(res, Some("Grace Hopper".to_string()));
+
+    // 2. Test with_archived_json (0 nanoseconds in-situ JSON path traversal)
+    database
+        .batch(&[BatchOperation::JsonPut {
+            space: "devices".into(),
+            id: "dev:1".into(),
+            value: json!({
+                "serial": "SN-9876",
+                "telemetry": {
+                    "temp_c": 42.5,
+                    "active": true
+                }
+            }),
+            if_version: None,
+        }])
+        .expect("put json");
+
+    let temp = database
+        .with_archived_json("devices", "dev:1", |archived| {
+            assert_eq!(archived.extract_str("serial"), Some("SN-9876"));
+            assert_eq!(archived.extract_bool("telemetry.active"), Some(true));
+            archived.extract_f64("telemetry.temp_c")
+        })
+        .expect("with archived json");
+    assert_eq!(temp, Some(Some(42.5)));
+}

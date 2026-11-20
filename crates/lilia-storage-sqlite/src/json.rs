@@ -482,6 +482,21 @@ impl Database {
         self.mask_json_entry(space, entry).map(Some)
     }
 
+    /// Read an archived JSON document with in-situ path traversal and 0 nanoseconds deserialization.
+    pub fn with_archived_json<R, F>(&self, space: &str, id: &str, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(&lilia_core::json::ArchivedJsonDocument) -> R,
+    {
+        let Some(entry) = self.json_get(space, id)? else {
+            return Ok(None);
+        };
+        let val = entry.value();
+        let doc = lilia_core::json::JsonDocument::from_serde(&val);
+        let bytes = doc.to_archived_bytes()?;
+        let archived = lilia_core::json::access_archived_doc(&bytes)?;
+        Ok(Some(f(archived)))
+    }
+
     pub fn json_extract(
         &self,
         space: &str,
