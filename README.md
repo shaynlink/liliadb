@@ -11,9 +11,10 @@ transaction boundary, across embedded Rust, WebAssembly (browser OPFS & Edge), N
 
 ---
 
-## Status: v0.1.0-alpha.8
+## Status: v0.1.0-alpha.9
 
-This repository contains the `0.1.0-alpha.8` release featuring:
+This repository contains the `0.1.0-alpha.9` release featuring:
+- **Zero-Copy Relative-Pointer Architecture (`rkyv` 0.8 & `lilia-protocol`)**: End-to-end elimination of MessagePack serialization (`rmp-serde`) across network protocols and inter-process framing in favor of zero-copy relative pointers. $O(1)$ zero-cost deserialization at 0 nanoseconds (`0.69 ns` access latency, 125.9x faster than `serde_json` and 91.9x faster than MessagePack), zero-heap dynamic JSON tape extraction (`JsonDocument`, `FlatNode`), `AlignedVec` transaction pending write overlays in SQLite, and C-ABI SHM reader extensions.
 - **Embedded Zero-Knowledge Proofs (`lilia-zk`, Arkworks Groth16 & BN254)**: Micro-prover & sub-millisecond verifier for privacy-critical applications (banking, sovereign identity, healthcare). Generate succinct 128-byte cryptographic proofs certifying arbitrary predicates over confidential data (e.g. `balance >= 1000` AND `age >= 18`) without revealing underlying values, identity, or birthday. Native Poseidon cryptographic commitments with zero-knowledge verification in SQL (`zk_verify()`) and CLI (`lilia zk prove / verify`).
 - **Sub-50ns Zero-Copy Shared Memory IPC (`lilia-shm`)**: Lock-free shared memory ring buffer and arena allocator providing sub-50 nanosecond inter-process read latencies, atomic version synchronization, and zero-copy deserialization directly from shared OS memory.
 - **Partially Homomorphic Paillier Cryptosystem (`lilia-core`)**: Additive homomorphic encryption allowing arithmetic operations directly over encrypted residues modulo $n^2$ without ever decrypting intermediate values in RAM; fully integrated into aggregation pipelines (`HomomorphicSumAccumulator`) and SQL functions (`paillier_add`, `paillier_sum`).

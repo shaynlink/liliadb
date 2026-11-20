@@ -871,35 +871,54 @@ Private Document (e.g. {"balance": 3500, "age": 28})
 
 ---
 
-## Zero-Copy Relative-Pointer Architecture & Sub-Nanosecond Shared Memory Engine (`rkyv`, `lilia-core`, `lilia-shm`, `lilia-storage-sqlite`)
+## Zero-Copy Relative-Pointer Architecture & Sub-Nanosecond Shared Memory Engine (`rkyv`, `lilia-core`, `lilia-protocol`, `lilia-shm`, `lilia-storage-sqlite`, `lilia-ffi`)
 
-For ultra-low latency IPC between the LiliaDB daemon and co-located client applications, LiliaDB pairs lock-free shared memory with an end-to-end **Zero-Copy Relative-Pointer Architecture** (`rkyv`).
+Introduced in LiliaDB v0.1.0-alpha.9, the engine implements an end-to-end **Zero-Copy Relative-Pointer Architecture** (`rkyv` 0.8), fully replacing MessagePack (`rmp-serde`) across network protocols, IPC framing, storage transaction overlays, and shared memory arenas.
 
 ```text
-Daemon / Writer Process
-   │ Writes to SQLite WAL
-   ▼ Atomically mirrors updates as rkyv relative bytes
+Daemon / Network / Writer Process
+   │ Serializes relative pointers (rkyv) into AlignedVec
+   ├─► Network / IPC Socket: write_archived_frame() / read_archived_frame() [Zero Deserialization]
+   ├─► Transaction Pending Overlay: In-memory AlignedVec [0-alloc fast-path query]
+   ├─► Writes to SQLite WAL: Persistent storage
+   ▼ Atomically mirrors updates into Shared Memory
 Shared Memory Segment (/dev/shm or memory-mapped file)
    │ Header (version, writer epoch, ring offsets)
    │ Slot Map & Fixed-Size Page Arenas (Relative Offsets)
    ▼ Zero-Copy Pointer Cast (0.69 ns / 0 ns deserialization)
-Reader Process 1        Reader Process 2        Reader Process N
+Reader Process 1        Reader Process 2        C-ABI / FFI Consumers
 ```
 
 ### 1. Relative Pointers vs Absolute Memory Addresses
 - Traditional serializers embed 64-bit virtual memory pointers that become invalid once written to disk, transferred over IPC, or mapped across different process addresses.
 - `rkyv` represents references as relative displacement offsets (`i32`). A serialized buffer is byte-for-byte identical to the CPU RAM layout and can be mapped at arbitrary virtual addresses with zero fixups.
-- Deserialization cost is **$O(1)$ at 0 nanoseconds** (`unsafe { rkyv::access_unchecked::<T>(bytes) }`), operating in **0.69 ns** (125x faster than `serde_json`).
+- Deserialization cost is **$O(1)$ at 0 nanoseconds** (`unsafe { rkyv::access_unchecked::<T>(bytes) }`), operating in **0.69 ns** (125.9x faster than `serde_json` and 91.9x faster than `rmp_serde`).
 
 ### 2. Flat Node Tape Representation for Dynamic JSON
 - Hierarchical recursive enums create cyclic trait resolutions and heap allocation overhead.
 - `lilia_core::json::JsonDocument` flattens arbitrary JSON trees into a contiguous tape arena (`Vec<FlatNode>`), where object keys and array elements refer to children by `u32` node indices.
-- Readers extract nested fields (`archived.extract_str("profile.name")`, `archived.extract_f64("telemetry.reading")`) directly from the mapped buffer without parsing JSON text or allocating memory.
+- Readers extract nested fields (`archived.extract_str("profile.name")`, `archived.extract_f64("telemetry.reading")`, `archived.extract_bool("flags.active")`) directly from the mapped buffer without parsing JSON text or allocating heap memory.
 
 ### 3. Multi-Process Zero-Copy Shared Memory Access
 - Writers update slot maps with epoch-based synchronization (`crossbeam-epoch`).
-- Client readers map the segment directly into their address space and inspect typed structures (`reader.get_archived::<T>()`) or dynamic JSON (`reader.json_extract_str_zero_copy()`) with sub-nanosecond access latency.
-- Database callbacks (`database.with_archived_kv`, `database.with_archived_json`) allow in-engine zero-copy inspection directly over SQLite stored blobs.
+- Client readers map the segment directly into their address space and inspect typed structures (`reader.get_archived::<T>()`) or dynamic JSON (`reader.get_archived_doc()`, `reader.json_extract_str_zero_copy()`) with sub-nanosecond access latency.
+- Writers can push pre-archived buffers directly into SHM via `Engine::put_archived()`, skipping intermediate serialization.
+
+### 4. Zero-Copy Protocol Framing (`lilia-protocol`)
+- MessagePack serialization (`rmp-serde`) is completely eliminated from the wire protocol.
+- Sockets and IPC connections communicate through `write_archived_frame()` and `read_archived_frame()` operating over `RawFrame` envelopes.
+- Core types (CRDTs `LwwJson`/`LwwRegister`/`OrSet`/`PnCounter`, IBF, HLC timestamps, Geo, Timeseries, Graph, and Vector types) derive `Archive`, `Serialize`, and `Deserialize`, eliminating wire conversion costs.
+
+### 5. Storage Engine `AlignedVec` Pending Overlay (`lilia-storage-sqlite`)
+- Active, uncommitted write transactions buffer mutations in an in-memory `AlignedVec` overlay rather than intermediate heap objects.
+- Read queries execute against `with_archived_json()` and `with_archived_kv()` fast paths:
+  1. Inspect the transaction `AlignedVec` overlay first via zero-copy relative-pointer dereferencing.
+  2. If hit, yield the uncommitted data immediately with zero allocation and zero deserialization.
+  3. If miss, fall back to SQLite page reads.
+
+### 6. Universal C-ABI Shared Memory Bridge (`lilia-ffi`)
+- Cross-language bindings (C, C++, Node-API, Python, Go) consume shared memory frames through `lilia_shm_get_archived()`.
+- External runtimes map shared arenas and perform zero-copy reads without passing through intermediate JSON strings or serialization layers.
 
 ---
 

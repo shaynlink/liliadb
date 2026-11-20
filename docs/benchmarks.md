@@ -4,7 +4,7 @@
 **Platform**: Darwin 27.2.0 (arm64)  
 **CPU**: Apple M3 Max (14 cores)  
 **Node.js**: v26.5.0  
-**Engine**: LiliaDB v0.1.0-alpha.7 (SQLite engine, WAL, Durability::Durable)
+**Engine**: LiliaDB v0.1.0-alpha.9 (SQLite engine, WAL, Durability::Durable)
 
 ---
 
@@ -13,7 +13,7 @@
 LiliaDB benchmarks measure sustained mutation throughput and latency distributions across four official execution surfaces:
 1. **Rust Native Embedded**: direct in-process database access via `lilia-storage-sqlite`.
 2. **Node.js (Node-API) Embedded**: high-performance native addon bindings via `@liliadb/node`.
-3. **Daemon via IPC**: local binary MessagePack framing over Unix domain socket / Windows named pipe.
+3. **Daemon via IPC**: local zero-copy relative-pointer (rkyv) and binary framing over Unix domain socket / Windows named pipe.
 4. **Daemon via HTTP**: local loopback REST gateway with persistent keep-alive connections.
 
 Metrics are reported across two workloads:
