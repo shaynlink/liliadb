@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - 0.2.0-alpha.1
+
+### Added
+- **Comparative benchmark suite (`tools/lilia-bench`)**: one command (`pnpm bench:compare`) measures
+  LiliaDB against SQLite (with and without `fullfsync`), LMDB, redb, fjall, RocksDB (with and
+  without `HAVE_FULLFSYNC`) and DuckDB, on writes (1–64 concurrent writers, batches, value sizes,
+  updates, deletes), reads (point reads after reopen and warm, 1–N threads, multi-get, ranges,
+  scans), YCSB A–F, JSON documents, full-text search, vector search and analytics, plus the
+  JavaScript surfaces. Every engine runs in its most durable mode and every row states the sync
+  primitive it uses, checked against the measured commit latency. Wrong answers fail a run instead
+  of producing a number. Raw results are kept in `docs/benchmarks.jsonl`.
+- **v0.2 storage RFC** (`docs/v0.2-storage-paradigm.md`): audit of the write path and the
+  native log-structured engine plan.
+
+### Changed
+- `docs/benchmarks.md` is generated from measurements; the README no longer carries hand-written
+  benchmark numbers.
+- JavaScript benchmark drivers moved out of the published `@liliadb/node` package into
+  `tools/benchmarks/sdk/`, one process per surface, with read workloads added.
+
+### Removed
+- `lilia_bench`, `bench_rusqlite` and `lilia_bench_analytics` binaries and the `bench-bin` feature of
+  `lilia-storage-sqlite`, with their `clap` and `rusqlite` dependencies.
+- `jit_bench` binary of `lilia-storage-sqlite`: a printing duplicate of the criterion benchmark
+  `benches/query_jit.rs` (interpreted, JIT single, JIT batch).
+- `docs/benchmarks_comparison.md` and `tools/benchmarks/run_comparative_suite.mjs`, whose analysis
+  text was written by hand and contradicted their own tables.
+
+---
+
 ## [0.1.0-alpha.9] - 2026-11-20
 
 ### Added
