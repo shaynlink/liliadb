@@ -274,6 +274,94 @@ fn test_shm_rkyv_zero_copy() {
 }
 
 #[test]
+fn test_shm_phase3_archived_json_view_and_extractors() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("phase3.shm");
+
+    let engine = ShmEngine::create(
+        ShmOptions::file_backed(&path)
+            .with_size_bytes(4 * 1024 * 1024)
+            .with_slot_capacity(1024),
+    )
+    .expect("create engine");
+
+    let order = serde_json::json!({
+        "order_id": 9999,
+        "amount": 149.99,
+        "customer": {
+            "name": "Ada Lovelace",
+            "vip": true
+        },
+        "tags": ["urgent", "priority", "direct"]
+    });
+
+    // 1. Put JSON directly using put_archived_json with serde_json::Value
+    engine
+        .put_archived_json("orders", "9999", &order, 1, None)
+        .expect("put archived json");
+
+    // 2. Read via ShmReader::get_archived_json (returns ArchivedJsonView)
+    let reader = engine.create_reader().expect("create reader");
+    let view = reader
+        .get_archived_json("orders", "9999")
+        .expect("must find archived json view");
+
+    // 3. Navigate in-situ via dot and pointer paths
+    assert_eq!(
+        view.get("customer")
+            .and_then(|c| c.get("name"))
+            .and_then(|n| n.as_str()),
+        Some("Ada Lovelace")
+    );
+    assert_eq!(view.extract("/customer/vip").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(view.extract("tags.1").and_then(|t| t.as_str()), Some("priority"));
+
+    // 4. In-situ zero-copy typed extractors on ShmReader
+    assert_eq!(
+        reader.json_extract_str_zero_copy("orders", "9999", "/customer/name"),
+        Some("Ada Lovelace")
+    );
+    assert_eq!(
+        reader.json_extract_i64_zero_copy("orders", "9999", "/order_id"),
+        Some(9999)
+    );
+    assert_eq!(
+        reader.json_extract_f64_zero_copy("orders", "9999", "/amount"),
+        Some(149.99)
+    );
+    assert_eq!(
+        reader.json_extract_bool_zero_copy("orders", "9999", "/customer/vip"),
+        Some(true)
+    );
+
+    // 5. Test checked reader with bytecheck validation
+    let profile = UserProfile {
+        name: "Charles Babbage".into(),
+        email: "charles@diff-engine.uk".into(),
+        score: 100.0,
+    };
+    engine
+        .put_archived("profiles", b"charles", &profile, 1, None)
+        .expect("put archived struct");
+
+    let checked_profile = reader
+        .get_archived_checked::<UserProfile>("profiles", b"charles")
+        .expect("validation passed")
+        .expect("found profile");
+    assert_eq!(checked_profile.name.as_str(), "Charles Babbage");
+    assert_eq!(checked_profile.score.to_native(), 100.0);
+
+    // 6. Test ShmEngine::get_archived_json on writer
+    let engine_view = engine
+        .get_archived_json("orders", "9999")
+        .expect("engine find json view");
+    assert_eq!(
+        engine_view.extract_str("/customer/name"),
+        Some("Ada Lovelace")
+    );
+}
+
+#[test]
 fn test_nanosecond_comparison_metrics() {
     use std::hint::black_box;
     use std::time::Instant;

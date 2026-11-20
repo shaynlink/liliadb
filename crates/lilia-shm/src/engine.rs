@@ -323,6 +323,19 @@ impl ShmEngine {
         self.put_json(space, id, &bytes, version, expires_at_ms)
     }
 
+    /// Archive a JSON value and write it into shared memory.
+    pub fn put_archived_json(
+        &self,
+        space: &str,
+        id: &str,
+        value: &serde_json::Value,
+        version: u64,
+        expires_at_ms: Option<i64>,
+    ) -> Result<()> {
+        let doc = lilia_core::json::JsonDocument::from_serde(value);
+        self.put_archived_doc(space, id, &doc, version, expires_at_ms)
+    }
+
     /// Read an archived typed struct directly from shared memory (< 50 nanoseconds read path).
     #[inline]
     pub fn get_archived<'a, T: rkyv::Archive>(
@@ -343,6 +356,17 @@ impl ShmEngine {
     ) -> Option<&'a lilia_core::json::ArchivedJsonDocument> {
         let entry = self.get_zero_copy(space, id.as_bytes())?;
         unsafe { Some(lilia_core::json::access_archived_doc_unchecked(entry.value)) }
+    }
+
+    /// Read an archived JSON document view directly from shared memory (< 50 nanoseconds read path).
+    #[inline]
+    pub fn get_archived_json<'a>(
+        &'a self,
+        space: &str,
+        id: &str,
+    ) -> Option<lilia_core::json::ArchivedJsonView<'a>> {
+        let doc = self.get_archived_doc(space, id)?;
+        Some(doc.root_view())
     }
 
     /// Read a key-value record zero-copy from shared memory (< 50 nanoseconds read path).

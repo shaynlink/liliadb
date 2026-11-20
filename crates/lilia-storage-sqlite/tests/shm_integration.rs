@@ -56,6 +56,28 @@ fn test_database_shm_mirroring_and_zero_copy_reads() {
     let location = reader.json_extract_str("devices", "sensor_alpha", "location");
     assert_eq!(location.as_deref(), Some("lab-1"));
 
+    // Phase 3: Zero-copy direct rkyv archived view & fast-path extractors
+    let archived_view = reader
+        .get_archived_json("devices", "sensor_alpha")
+        .expect("reader get_archived_json");
+    assert_eq!(archived_view.extract_str("location"), Some("lab-1"));
+    assert_eq!(archived_view.extract_f64("temperature"), Some(23.5));
+    assert_eq!(archived_view.extract_str("status"), Some("online"));
+
+    // Direct Database method
+    let db_view = db
+        .shm_get_archived_json("devices", "sensor_alpha")
+        .expect("db shm_get_archived_json");
+    assert_eq!(db_view.extract_str("location"), Some("lab-1"));
+
+    // with_archived_json SHM fast-path
+    let with_archived_result = db
+        .with_archived_json("devices", "sensor_alpha", |doc| {
+            doc.extract_str("location").map(ToString::to_string)
+        })
+        .expect("with_archived_json");
+    assert_eq!(with_archived_result, Some(Some("lab-1".to_string())));
+
     // 3. Delete KV
     db.batch(&[BatchOperation::KvDelete {
         namespace: "tokens".into(),

@@ -487,6 +487,11 @@ impl Database {
     where
         F: FnOnce(&lilia_core::json::ArchivedJsonDocument) -> R,
     {
+        if let Some(ref shm) = self.shm_engine {
+            if let Some(archived) = shm.get_archived_doc(space, id) {
+                return Ok(Some(f(archived)));
+            }
+        }
         let Some(entry) = self.json_get(space, id)? else {
             return Ok(None);
         };

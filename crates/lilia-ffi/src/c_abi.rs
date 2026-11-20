@@ -1382,6 +1382,43 @@ pub unsafe extern "C" fn lilia_c_shm_reader_json_get(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn lilia_c_shm_reader_json_extract_str(
+    reader: *mut lilia_shm::ShmReader,
+    space: *const c_char,
+    id: *const c_char,
+    path: *const c_char,
+    out_str_ptr: *mut *const u8,
+    out_str_len: *mut usize,
+) -> c_int {
+    if reader.is_null()
+        || space.is_null()
+        || id.is_null()
+        || path.is_null()
+        || out_str_ptr.is_null()
+        || out_str_len.is_null()
+    {
+        return -1;
+    }
+    let Some(space_str) = str_from_ptr(space) else {
+        return -1;
+    };
+    let Some(id_str) = str_from_ptr(id) else {
+        return -1;
+    };
+    let Some(path_str) = str_from_ptr(path) else {
+        return -1;
+    };
+    let r = &*reader;
+    if let Some(s) = r.json_extract_str_zero_copy(space_str, id_str, path_str) {
+        *out_str_ptr = s.as_ptr();
+        *out_str_len = s.len();
+        0
+    } else {
+        1
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn lilia_c_shm_reader_read_page(
     reader: *mut lilia_shm::ShmReader,
     page_id: u32,

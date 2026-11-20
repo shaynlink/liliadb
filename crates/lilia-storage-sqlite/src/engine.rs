@@ -1512,6 +1512,17 @@ impl Database {
             .and_then(|e| e.json_get_zero_copy(space, id))
     }
 
+    /// Read an archived JSON document view zero-copy from shared memory (< 50 nanoseconds).
+    pub fn shm_get_archived_json<'a>(
+        &'a self,
+        space: &str,
+        id: &str,
+    ) -> Option<lilia_core::json::ArchivedJsonView<'a>> {
+        self.shm_engine
+            .as_ref()
+            .and_then(|e| e.get_archived_json(space, id))
+    }
+
     pub(crate) fn sync_operations_to_shm(
         &self,
         operations: &[BatchOperation],
@@ -1539,12 +1550,7 @@ impl Database {
                     space, id, value, ..
                 } => {
                     let version = res.version.unwrap_or(1);
-                    if let Ok(bytes) = serde_json::to_vec(value) {
-                        if let Ok(binary_doc) = lilia_core::json::parse_json_slice_to_binary(&bytes)
-                        {
-                            let _ = shm.put_json(space, id, binary_doc.as_bytes(), version, None);
-                        }
-                    }
+                    let _ = shm.put_archived_json(space, id, value, version, None);
                 }
                 BatchOperation::JsonDelete { space, id, .. } => {
                     let _ = shm.delete(space, id.as_bytes());

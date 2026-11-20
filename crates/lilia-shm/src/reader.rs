@@ -137,6 +137,9 @@ impl ShmReader {
 
     /// Read a binary JSON document and extract a string path zero-copy.
     pub fn json_extract_str(&self, space: &str, id: &str, path: &str) -> Option<String> {
+        if let Some(s) = self.json_extract_str_zero_copy(space, id, path) {
+            return Some(s.to_string());
+        }
         let json_entry = self.json_get(space, id)?;
         let binary_doc =
             lilia_core::json::BinaryDoc::from_bytes(json_entry.value_bytes.to_vec()).ok()?;
@@ -154,6 +157,25 @@ impl ShmReader {
         unsafe { Some(rkyv::access_unchecked::<T::Archived>(entry.value)) }
     }
 
+    /// Safely read an archived typed struct with bytecheck validation.
+    pub fn get_archived_checked<'a, T>(
+        &'a self,
+        space: &str,
+        key: &[u8],
+    ) -> Result<Option<&'a T::Archived>>
+    where
+        T: rkyv::Archive,
+        T::Archived: for<'b> rkyv::bytecheck::CheckBytes<
+            rkyv::api::high::HighValidator<'b, rkyv::rancor::Error>,
+        >,
+    {
+        let Some(entry) = self.get(space, key) else {
+            return Ok(None);
+        };
+        let archived = lilia_core::access_archived::<T>(entry.value)?;
+        Ok(Some(archived))
+    }
+
     /// Read an archived JSON document directly from shared memory (0 nanosecond cast).
     #[inline]
     pub fn get_archived_doc<'a>(
@@ -163,6 +185,17 @@ impl ShmReader {
     ) -> Option<&'a lilia_core::json::ArchivedJsonDocument> {
         let entry = self.get(space, id.as_bytes())?;
         unsafe { Some(lilia_core::json::access_archived_doc_unchecked(entry.value)) }
+    }
+
+    /// Read an archived JSON document view directly from shared memory (0 nanosecond cast).
+    #[inline]
+    pub fn get_archived_json<'a>(
+        &'a self,
+        space: &str,
+        id: &str,
+    ) -> Option<lilia_core::json::ArchivedJsonView<'a>> {
+        let doc = self.get_archived_doc(space, id)?;
+        Some(doc.root_view())
     }
 
     /// Read an archived JSON document and extract a string slice zero-copy directly from shared memory.
@@ -175,6 +208,42 @@ impl ShmReader {
     ) -> Option<&'a str> {
         let doc = self.get_archived_doc(space, id)?;
         doc.extract_str(path)
+    }
+
+    /// Read an archived JSON document and extract an integer zero-copy directly from shared memory.
+    #[inline]
+    pub fn json_extract_i64_zero_copy(
+        &self,
+        space: &str,
+        id: &str,
+        path: &str,
+    ) -> Option<i64> {
+        let doc = self.get_archived_doc(space, id)?;
+        doc.extract_i64(path)
+    }
+
+    /// Read an archived JSON document and extract a float zero-copy directly from shared memory.
+    #[inline]
+    pub fn json_extract_f64_zero_copy(
+        &self,
+        space: &str,
+        id: &str,
+        path: &str,
+    ) -> Option<f64> {
+        let doc = self.get_archived_doc(space, id)?;
+        doc.extract_f64(path)
+    }
+
+    /// Read an archived JSON document and extract a boolean zero-copy directly from shared memory.
+    #[inline]
+    pub fn json_extract_bool_zero_copy(
+        &self,
+        space: &str,
+        id: &str,
+        path: &str,
+    ) -> Option<bool> {
+        let doc = self.get_archived_doc(space, id)?;
+        doc.extract_bool(path)
     }
 
     /// Read a snapshot page zero-copy.

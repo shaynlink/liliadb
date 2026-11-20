@@ -425,6 +425,11 @@ impl Database {
         >,
         F: FnOnce(&T::Archived) -> R,
     {
+        if let Some(ref shm) = self.shm_engine {
+            if let Some(archived) = shm.get_archived::<T>(namespace, key) {
+                return Ok(Some(f(archived)));
+            }
+        }
         let Some(entry) = self.kv_get(namespace, key)? else {
             return Ok(None);
         };

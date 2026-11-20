@@ -329,6 +329,13 @@ impl ArchivedJsonDocument {
         }
     }
 
+    /// Convenient alias for `root_view()`.
+    #[inline]
+    #[must_use]
+    pub fn view(&self) -> ArchivedJsonView<'_> {
+        self.root_view()
+    }
+
     /// Extract a field along a path in 0-nanoseconds.
     #[inline]
     #[must_use]
