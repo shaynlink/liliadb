@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [features]
 # Each feature group is compiled into its own binary by `lilia-bench suite`.
-lilia = ["dep:lilia-core", "dep:lilia-storage-sqlite", "dep:lilia-engine"]
+lilia = ["dep:lilia-core", "dep:lilia-storage-sqlite", "dep:lilia-engine", "dep:lilia-db"]
 sqlite = ["dep:rusqlite"]
 kvs = ["dep:redb", "dep:fjall", "dep:heed"]
 rocksdb = ["dep:rocksdb"]
@@ -31,6 +31,7 @@ serde_json = "1.0.154"
 tempfile = "3.27.0"
 
 lilia-core = { path = "../../crates/lilia-core", optional = true }
+lilia-db = { path = "../../crates/lilia-db", optional = true }
 lilia-engine = { path = "../../crates/lilia-engine", optional = true }
 lilia-storage-sqlite = { path = "../../crates/lilia-storage-sqlite", default-features = false, features = ["analytics"], optional = true }
 rusqlite = { version = "=0.40.2", features = ["bundled"], optional = true }

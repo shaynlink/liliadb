@@ -57,7 +57,7 @@ const BUILDS: [Build; 3] = [
     Build {
         name: "core",
         features: &["lilia", "kvs", "rocksdb"],
-        engines: &["lilia", "lilia-noledger", "lilia-aes", "lilia-engine", "lilia-engine-balanced", "redb", "fjall", "lmdb", "rocksdb"],
+        engines: &["lilia", "lilia-noledger", "lilia-aes", "lilia-engine", "lilia-engine-balanced", "lilia-db", "lilia-db-ledger", "redb", "fjall", "lmdb", "rocksdb"],
         env: &[],
         apple_only: false,
     },

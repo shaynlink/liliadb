@@ -14,6 +14,8 @@ mod fjall;
 #[cfg(feature = "lilia")]
 pub mod lilia;
 #[cfg(feature = "lilia")]
+mod lilia_db;
+#[cfg(feature = "lilia")]
 mod lilia_engine;
 #[cfg(feature = "kvs")]
 mod lmdb;
@@ -57,6 +59,8 @@ pub fn available() -> Vec<&'static str> {
         &lilia::IDS,
         #[cfg(feature = "lilia")]
         &lilia_engine::IDS,
+        #[cfg(feature = "lilia")]
+        &lilia_db::IDS,
         #[cfg(feature = "sqlite")]
         &sqlite::IDS,
         #[cfg(feature = "kvs")]
@@ -76,6 +80,10 @@ pub fn open(id: &str, dir: &Path) -> Result<Box<dyn Engine>> {
     #[cfg(feature = "lilia")]
     if lilia_engine::IDS.contains(&id) {
         return Ok(Box::new(lilia_engine::LiliaEngine::open(id, dir)?));
+    }
+    #[cfg(feature = "lilia")]
+    if lilia_db::IDS.contains(&id) {
+        return Ok(Box::new(lilia_db::LiliaDb::open(id, dir)?));
     }
     #[cfg(feature = "sqlite")]
     if sqlite::IDS.contains(&id) {
