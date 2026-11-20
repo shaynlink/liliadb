@@ -513,6 +513,38 @@ curl -s -X POST http://127.0.0.1:4444/v1/fts/search \
 }
 ```
 
+#### `POST /v1/fts/phonetic`
+Phonetic search matching documents based on phonetic pronunciation (Double Metaphone and Soundex algorithms), tolerating typos, spelling mistakes, and transliteration differences.
+
+**Request:**
+```bash
+curl -s -X POST http://127.0.0.1:4444/v1/fts/phonetic \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collection": "articles",
+    "query": "smith",
+    "limit": 5
+  }'
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "ok": true,
+  "hits": [
+    {
+      "collection": "articles",
+      "doc_id": "art_2",
+      "snippet": "John Smyth authored the research.",
+      "rank": 0.95,
+      "matched_terms": ["Smyth"],
+      "phonetic_codes": ["SM0", "XMT"]
+    }
+  ]
+}
+```
+
 ---
 
 ### Vector Embeddings & Hybrid Search Endpoints

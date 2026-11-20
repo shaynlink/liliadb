@@ -11,9 +11,19 @@ transaction boundary, across embedded Rust, WebAssembly (browser OPFS & Edge), N
 
 ---
 
-## Status: v0.2.0
+## Status: v0.1.0-alpha.8
 
-This repository contains the `0.2.0` release featuring:
+This repository contains the `0.1.0-alpha.8` release featuring:
+- **Embedded Zero-Knowledge Proofs (`lilia-zk`, Arkworks Groth16 & BN254)**: Micro-prover & sub-millisecond verifier for privacy-critical applications (banking, sovereign identity, healthcare). Generate succinct 128-byte cryptographic proofs certifying arbitrary predicates over confidential data (e.g. `balance >= 1000` AND `age >= 18`) without revealing underlying values, identity, or birthday. Native Poseidon cryptographic commitments with zero-knowledge verification in SQL (`zk_verify()`) and CLI (`lilia zk prove / verify`).
+- **Sub-50ns Zero-Copy Shared Memory IPC (`lilia-shm`)**: Lock-free shared memory ring buffer and arena allocator providing sub-50 nanosecond inter-process read latencies, atomic version synchronization, and zero-copy deserialization directly from shared OS memory.
+- **Partially Homomorphic Paillier Cryptosystem (`lilia-core`)**: Additive homomorphic encryption allowing arithmetic operations directly over encrypted residues modulo $n^2$ without ever decrypting intermediate values in RAM; fully integrated into aggregation pipelines (`HomomorphicSumAccumulator`) and SQL functions (`paillier_add`, `paillier_sum`).
+- **Crash-Safe Double-Header Envelope Encryption (`lilia-core`, `lilia-storage-sqlite`)**: Robust cryptographic envelope with front (page 0) and rear trailer headers, BLAKE3 integrity authentication, and atomic generation bumps resisting power loss and sudden crashes during key rotation.
+- **Unified Cross-Model Query Engine: "LiliaQL" (`lilia-storage-sqlite`)**: Fluent, type-safe query pipeline uniting JSON document filtering, graph traversals, lexical BM25 matching, and HNSW vector similarity with Reciprocal Rank Fusion (RRF) and strongly typed deserialization (`execute_as::<T>()`).
+- **Reactive Incremental Dataflow Engine (`lilia-core`, `lilia-storage-sqlite`)**: Materialized view pipelines with diff streaming and subscription listeners, automatically propagating mutations across collections without full table scans.
+- **Battery-Aware & Energy-Efficient Adaptive Engine (`lilia-core`, `lilia-storage-sqlite`)**: Smartwatch and mobile power profile heuristics, execution throttling, sort memory penalties, and `EXPLAIN DIAGNOSE` pedagogical query recommendations.
+- **Optimistic Concurrency Control (OCC) (`lilia-storage-sqlite`)**: Lock-free parallel write transactions with conflict detection, snapshot validation, and automatic retry loops.
+- **Multilingual CJK & Phonetic Full-Text Search (`lilia-core`, `lilia-storage-sqlite`)**: Multilingual CJK tokenization (Chinese Jieba, Japanese Kana, Korean Hangul) and phonetic search (Double Metaphone & Soundex) with CLI (`fts phonetic`) and HTTP REST (`POST /v1/fts/phonetic`) support.
+- **Predictive Markov Cache & Bitemporal Branching (`lilia-core`, `lilia-storage-sqlite`)**: Adaptive prefetching utilizing Markov state transition graphs, paired with bitemporal transaction history and git-like branch diffing.
 - **Vectorized Columnar Analytics (`lilia-analytics`, DataFusion 55 & Apache Arrow)**: In-process analytical SQL engine executing on persistent immutable Arrow columnar segments in batches of 1,024 rows. Sub-millisecond aggregations on 500k rows (0.97ms filter/sum/avg) with zone-map pruning and merge-on-read rowstore deltas.
 - **Native Query JIT Compilation (`lilia-core`, Cranelift JIT)**: Direct compilation of JSON query expressions into native host machine code (ARM64 / x86_64) for zero-interpreter batch document filtering.
 - **Sandboxed WebAssembly User-Defined Functions (WASM UDF via Wasmtime)**: Safe in-database execution of user-supplied WebAssembly bytecode as scalar SQL functions with strict CPU fuel metering and linear memory limits.
@@ -86,6 +96,11 @@ lilia --database ./demo.lilia json get users ada --output json
 
 # Query using SQL analytics
 lilia --database ./demo.lilia sql "SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'users'"
+
+# Embedded Zero-Knowledge Proof (prove balance >= 1000 and age >= 18 without revealing data)
+lilia --database ./demo.lilia zk commit users ada '{"balance": 1500, "age": 25}'
+lilia --database ./demo.lilia zk prove users ada --min-balance 1000 --min-age 18 --out-proof proof.json
+lilia zk verify --proof proof.json
 
 # Create atomic online backup snapshot
 lilia --database ./demo.lilia backup ./snapshots/demo.lilia --output json
@@ -193,7 +208,37 @@ for (const hit of hits) {
 
 ---
 
-### 3. Encryption at Rest (AES-256-GCM AEAD)
+### 3. Unified Cross-Model Query Engine: "LiliaQL" (Fluid Query API)
+Cross-model joins, graph traversals, BM25 full-text search, and HNSW vector similarity fused into one fluent, type-safe query pipeline with Reciprocal Rank Fusion (RRF):
+
+```rust
+use lilia_storage_sqlite::{doc, projection, Database, DatabaseOptions, Direction};
+
+let results = db.query()
+    .from_json("users")                                  // JSON Document model
+    .filter(doc! { "plan": "pro", "active": true })     // Secondary index / predicate filter
+    .traverse_graph("FOLLOWS", Direction::Outbound)     // Graph relationship traversal
+    .search_fts("technologies", "rust database")         // FTS5 lexical BM25 matching
+    .with_vector_near("bio_embedding", &user_vec, 0.85)  // Pre-filtered HNSW dense vectors
+    .project(projection! {                               // Contextual projection & RRF scoring
+        "user_name": "$.name",
+        "friend_name": "$graph.target.name",
+        "relevance_score": "$rrf_score",
+    })
+    .execute()?;
+
+// Strongly-typed deserialization:
+let recommendations: Vec<Recommendation> = db.query()
+    .from_json("users")
+    .filter(doc! { "plan": "pro" })
+    .traverse_graph("FOLLOWS", Direction::Outbound)
+    .project(projection! { ... })
+    .execute_as()?;
+```
+
+---
+
+### 4. Encryption at Rest (AES-256-GCM AEAD)
 Start the CLI or Daemon with native authenticated encryption at rest:
 
 ```sh
@@ -211,7 +256,7 @@ lilia --database ./secure.lilia --plugin ./target/release/liblilia_plugin_codec.
 
 ---
 
-### 4. Local Daemon & HTTP REST Gateway
+### 5. Local Daemon & HTTP REST Gateway
 Run the background daemon on Unix with both IPC socket and loopback HTTP gateway:
 
 ```sh
@@ -226,7 +271,7 @@ See [HTTP REST API Reference](docs/http_api.md) for endpoint details.
 
 ---
 
-### 5. WebAssembly Plugin Sandboxing (Wasmtime / WASI)
+### 6. WebAssembly Plugin Sandboxing (Wasmtime / WASI)
 Safely execute untrusted third-party plugins with out-of-bounds protection, fault isolation, and resource caps:
 - **Linear Memory Boundaries**: Guest plugins operate inside isolated 32-bit linear memory—panics or traps never crash the host daemon.
 - **Resource Limiter**: Memory bounded via `--plugin-memory-limit-mb` (default 64MB).
@@ -244,7 +289,7 @@ See [Plugin Architecture & Sandboxing Guide](docs/plugins.md).
 
 ---
 
-### 6. WebAssembly & OPFS Storage for Browsers & Edge (`@liliadb/wasm`)
+### 7. WebAssembly & OPFS Storage for Browsers & Edge (`@liliadb/wasm`)
 Run identical LiliaDB storage engines across web browsers and serverless edge functions:
 - **Browser Origin Private File System (OPFS)**: High-speed zero-copy persistence using Synchronous Access Handle Pool (`opfs-sahpool`) without locking the browser's UI thread.
 - **Serverless Edge Runtimes**: Zero-native-dependency deployment on Cloudflare Workers, Deno Deploy, and Vercel Edge.
@@ -252,7 +297,7 @@ Run identical LiliaDB storage engines across web browsers and serverless edge fu
 
 ---
 
-### 7. In-Database Embeddings (`lilia-embed`, Rust API)
+### 8. In-Database Embeddings (`lilia-embed`, Rust API)
 Declare which text field to embed and the engine keeps the HNSW index up to date; the application never computes a vector:
 
 ```rust
@@ -275,7 +320,7 @@ let hits = db.vector_search_text("articles", "how do I cook noodles?", 5)?;
 
 ---
 
-### 8. Cross-Model Integrity Contracts (Foreign Keys & JSON CHECK, Rust API)
+### 9. Cross-Model Integrity Contracts (Foreign Keys & JSON CHECK, Rust API)
 Enforce strong consistency across KV, JSON, and Graph models with declarative contracts evaluated inside the SQLite WAL write transaction:
 
 ```rust
