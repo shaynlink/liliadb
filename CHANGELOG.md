@@ -33,7 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checksummed sorted runs with Bloom filters and a sharded block cache, an atomic manifest, and
   leveled compaction on background threads. Recovery replays journals up to the first damaged
   record. Validated by an oracle test, a concurrent maintenance stress test, and 100,000
-  simulated power cuts with torn writes and injected I/O errors.
+  simulated power cuts with torn writes and injected I/O errors. Read path: CLOCK block cache
+  spread over 64 shards, runs that keep their own open table, binary-search index blocks, a
+  blocked Bloom filter per memtable, batched memtable iteration and zero-copy scan values
+  (point reads ×2.5 single-threaded, ×2.9 with 10 threads).
 
 ### Changed
 - `docs/benchmarks.md` is generated from measurements; the README no longer carries hand-written
