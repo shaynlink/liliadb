@@ -4175,6 +4175,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lilia-db"
+version = "0.1.0-alpha.9"
+dependencies = [
+ "blake3",
+ "bytes",
+ "hex",
+ "lilia-core",
+ "lilia-engine",
+ "lilia-io",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "lilia-embed"
 version = "0.1.0-alpha.9"
 dependencies = [

@@ -5,6 +5,7 @@ members = [
   "apps/lilia-daemon",
   "crates/lilia-analytics",
   "crates/lilia-core",
+  "crates/lilia-db",
   "crates/lilia-embed",
   "crates/lilia-engine",
   "crates/lilia-graph",
