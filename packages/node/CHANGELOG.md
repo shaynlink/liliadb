@@ -4,15 +4,18 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 
 ---
 
-## [0.2.0] - 2026-11-17
+## [0.1.0-alpha.8] - 2026-11-20
 
 ### Added
-- Native Node-API support for v0.2.0 engine core:
+- Native Node-API support for v0.1.0-alpha.8 engine core:
   - Cranelift JIT acceleration for query filters and batch operations.
   - Transparent support for Row-Level Security contexts and Dynamic Data Masking policies.
   - Flash wear-leveling endurance monitoring and telemetry hooks.
   - Automatic Reed-Solomon parity repair integration for corrupted pages.
   - Invertible Bloom Filter (IBF) set reconciliation primitives.
+  - Multilingual CJK tokenization and phonetic matching in FTS search queries.
+  - Zero-copy shared memory integration (`ShmOptions`) for ultra-low latency IPC reads.
+  - Synchronous query execution and type-safe query extensions.
 
 ---
 

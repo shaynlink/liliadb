@@ -12,8 +12,10 @@ members = [
   "crates/lilia-protocol",
   "crates/lilia-sqlite-native",
   "crates/lilia-storage-sqlite",
+  "crates/lilia-shm",
   "crates/lilia-wasm",
   "crates/lilia-ffi",
+  "crates/lilia-zk",
   "plugins/lilia-plugin-json",
   "plugins/lilia-plugin-kv",
   "plugins/lilia-plugin-codec",
@@ -21,7 +23,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.1.0-alpha.8"
 edition = "2021"
 rust-version = "1.100.0"
 license = "Apache-2.0"
@@ -31,6 +33,15 @@ repository = "https://github.com/shaynlink/lilia"
 aes-gcm = "0.10.3"
 aes-siv = "0.8.0"
 anyhow = "1.0.100"
+ark-ff = "0.6.0"
+ark-ec = "0.6.0"
+ark-bn254 = { version = "0.6.0", features = ["curve", "r1cs"] }
+ark-groth16 = { version = "0.6.0", features = ["r1cs"] }
+ark-relations = "0.6.0"
+ark-r1cs-std = "0.6.0"
+ark-crypto-primitives = { version = "0.6.0", features = ["constraints", "sponge", "crh", "snark"] }
+ark-serialize = { version = "0.6.0", features = ["derive"] }
+ark-std = "0.6.0"
 arrow = { version = "59.3.2", default-features = false }
 axum = "0.8.9"
 bytes = "1.12.1"
@@ -43,6 +54,7 @@ cranelift-frontend = "0.137.2"
 cranelift-jit = "0.137.2"
 cranelift-module = "0.137.2"
 cranelift-native = "0.137.2"
+crossbeam-epoch = "0.9.21"
 crossbeam-queue = "0.3"
 datafusion = { version = "55.2.0", default-features = false, features = [
     "datetime_expressions",
@@ -60,6 +72,9 @@ memmap2 = "0.9.12"
 miniz_oxide = "0.8"
 napi = { version = "3.4.0", features = ["napi8", "tokio_rt"] }
 napi-derive = "3.3.0"
+num-bigint = { version = "0.4.8", features = ["rand", "serde"] }
+num-integer = "0.1.47"
+num-traits = "0.2.19"
 parking_lot = "0.12.5"
 parquet = { version = "59.3.2", default-features = false, features = ["arrow", "snap", "flate2-rust_backend", "zstd"] }
 pbkdf2 = "0.12.2"

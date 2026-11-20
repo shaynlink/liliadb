@@ -7,9 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.2.0] - 2026-11-17
+## [0.1.0-alpha.8] - 2026-11-20
 
 ### Added
+- **Embedded Zero-Knowledge Proofs (`lilia-zk`, `lilia-core`, `lilia-storage-sqlite`, `lilia-cli`)**:
+  - Succinct Zero-Knowledge Proof generation and verification based on Arkworks Groth16 over the pairing-friendly BN254 elliptic curve.
+  - Poseidon cryptographic commitments over private document fields with zero-knowledge witness verification.
+  - `SoldeAgePredicateCircuit` enforcing confidential predicate conditions (e.g. `balance >= 1000 AND age >= 18`) without disclosing plaintext values or identity.
+  - Sub-millisecond verification (<1 ms) with ultra-compact 128-byte proof payloads.
+  - SQL verification function `zk_verify()` and CLI commands (`lilia zk setup`, `commit`, `prove`, `verify`).
+- **Sub-50ns Shared Memory Zero-Copy Multi-Process Engine (`lilia-shm`, `lilia-storage-sqlite`, `lilia-daemon`)**:
+  - High-throughput lock-free inter-process communication utilizing shared memory (`/dev/shm` and memory-mapped files).
+  - Slot map allocation and ring buffer architecture providing sub-50 nanosecond read latencies across co-located processes.
+  - Real-time mirroring from SQLite WAL write transactions directly into shared memory arenas.
+  - Universal C-ABI reader (`lilia_shm_reader`) and daemon CLI option (`--shm`, `--shm-path`).
+- **Partially Homomorphic Paillier Cryptosystem (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Additive homomorphic encryption over large integer residues modulo $n^2$ via the Paillier cryptosystem.
+  - `HomomorphicSumAccumulator` executing streaming aggregations over encrypted data without plaintext decryption in RAM.
+  - SQL functions `paillier_add(c1, c2, n_squared)` and `paillier_sum(ciphertext, n_squared)` for privacy-preserving analytics over untrusted infrastructure.
+- **Crash-Safe Double-Header Envelope Encryption (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Dual-header architecture (Header Page 0 and rear trailer) with BLAKE3 tamper-proofing and integrity authentication tags.
+  - Atomic generation bumps ensuring resilience against sudden power loss and process termination during key rotation.
+  - Automatic rollback and self-healing when encountering corrupted or interrupted header writes.
+- **Unified Cross-Model Query Engine: "LiliaQL" (`lilia-storage-sqlite`)**:
+  - Fluent, type-safe query builder integrating JSON document filtering, graph traversals, BM25 text ranking, and dense vector similarity.
+  - Reciprocal Rank Fusion (RRF) for fused relevance scoring across lexical and vector modalities.
+  - Direct zero-cost projection into strongly typed structs (`execute_as::<T>()`).
+- **Reactive Incremental Dataflow Query Engine (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Incremental computation engine maintaining reactive materialized view pipelines with minimal differential updates ($\Delta$).
+  - Event subscription bus with streaming delta notifications (`Insert`, `Update`, `Delete`) and exact HLC timestamps.
+- **Battery-Aware & Energy-Efficient Adaptive Engine (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Hardware power profile heuristics (`Normal`, `LowPower`, `Critical`, `Smartwatch`) dynamically adapting query execution and memory limits.
+  - `EXPLAIN DIAGNOSE` pedagogical query inspector providing actionable energy and performance optimization recommendations.
+- **Optimistic Concurrency Control (OCC) (`lilia-storage-sqlite`)**:
+  - High-concurrency lock-free transaction execution with Read-Your-Own-Writes (RYOW) thread-local memory buffering.
+  - Snapshot validation, conflict detection, and automatic retry loops maximizing multi-core write throughput.
+- **Multilingual CJK & Phonetic Full-Text Search (`lilia-core`, `lilia-storage-sqlite`, `lilia-daemon`, `lilia-cli`)**:
+  - Native CJK tokenization engine supporting Chinese (Jieba compound segmentation), Japanese (Kanji/Kana unigram-bigram), and Korean (Hangul jamo splitting).
+  - Double Metaphone and Soundex phonetic search matching phonetically equivalent terms despite spelling errors or transliteration differences.
+  - Full CLI (`lilia fts phonetic`) and HTTP REST (`POST /v1/fts/phonetic`) support.
+- **Predictive Markov Cache & Bitemporal Branching (`lilia-core`, `lilia-storage-sqlite`)**:
+  - Adaptive Markov state transition prefetching anticipating upcoming queries.
+  - Bitemporal data modeling tracking assertion time vs valid time, paired with branch simulation and diffing.
 - **Native Query JIT Compilation (`lilia-core`, `lilia-storage-sqlite`, Cranelift)**:
   - Just-In-Time native machine code compilation (ARM64 & x86_64) for JSON query filter expressions using Cranelift JIT compiler (`JitCompiler`).
   - Native predicates evaluate directly against raw `BinaryDoc` byte buffers with zero interpreter or AST traversal overhead.
