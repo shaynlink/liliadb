@@ -6,7 +6,8 @@ use serde_json::Value;
 use super::timestamp::Hlc;
 
 /// Strategy for resolving concurrent mutations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictResolutionStrategy {
     /// Deterministic Last-Write-Wins based on strict HLC total ordering.
@@ -47,7 +48,8 @@ pub struct ThreeWayMergeResult {
 }
 
 /// Audit record representing a detected conflict in persistent storage.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct ConflictRecord {
     pub id: Option<i64>,
     pub model: String,
@@ -56,8 +58,11 @@ pub struct ConflictRecord {
     pub base_hlc: Option<Hlc>,
     pub ours_hlc: Hlc,
     pub theirs_hlc: Hlc,
+    #[rkyv(with = crate::zero_copy::AsJsonString)]
     pub ours_value: Value,
+    #[rkyv(with = crate::zero_copy::AsJsonString)]
     pub theirs_value: Value,
+    #[rkyv(with = rkyv::with::Map<crate::zero_copy::AsJsonString>)]
     pub resolved_value: Option<Value>,
     pub resolution_strategy: ConflictResolutionStrategy,
     pub status: String,

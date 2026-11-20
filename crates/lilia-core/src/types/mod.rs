@@ -8,7 +8,10 @@ mod index;
 mod stats;
 mod vector;
 
-pub use entry::{BatchOperation, BitemporalEntry, Durability, JsonEntry, KvEntry, MutationResult};
+pub use entry::{
+    ArchivedBatchOperation, ArchivedMutationResult, BatchOperation, BitemporalEntry, Durability,
+    JsonEntry, KvEntry, MutationResult,
+};
 pub use events::{DatabaseEvent, HlcMutationOutcome, HlcRecord};
 pub use fts::{
     FtsFuzzyHit, FtsFuzzyOptions, FtsHit, FtsPhoneticHit, FtsSuggestion, PhoneticAlgorithm,

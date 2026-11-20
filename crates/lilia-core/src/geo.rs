@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 pub const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
 
 /// A GPS location fix recorded during an outdoor activity (running, walking, etc.).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct GpsPoint {
     pub timestamp: i64,
     pub latitude: f64,
@@ -75,7 +76,8 @@ impl GpsPoint {
 }
 
 /// A matched geofence polygonal zone.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct GeofenceMatch {
     pub id: String,
     pub name: String,

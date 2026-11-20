@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use super::timestamp::Hlc;
 
 /// The causal relationship between two mutations on the same key/document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum CausalRelation {
     /// A happened before B (A -> B): B causally replaces A without conflict.

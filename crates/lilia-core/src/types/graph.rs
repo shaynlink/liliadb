@@ -7,7 +7,8 @@ pub(crate) const fn default_edge_weight() -> f64 {
     1.0
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
     Outbound,
@@ -15,11 +16,13 @@ pub enum Direction {
     Both,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct GraphNode {
     pub graph: String,
     pub id: String,
     pub kind: String,
+    #[rkyv(with = crate::zero_copy::AsJsonString)]
     pub metadata: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_space: Option<String>,
@@ -27,7 +30,8 @@ pub struct GraphNode {
     pub doc_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct GraphEdge {
     pub graph: String,
     pub source: String,
@@ -37,7 +41,8 @@ pub struct GraphEdge {
     pub weight: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct PathEdge {
     pub source: String,
     pub target: String,
@@ -46,20 +51,23 @@ pub struct PathEdge {
     pub weight: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct WeightedPath {
     pub nodes: Vec<String>,
     pub total_weight: f64,
     pub edges: Vec<PathEdge>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct NodeScore {
     pub node: String,
     pub score: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum CentralityType {
     Betweenness,
@@ -67,7 +75,8 @@ pub enum CentralityType {
     Degree,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentType {
     StronglyConnected,
@@ -75,9 +84,11 @@ pub enum ComponentType {
 }
 
 /// Tabular output returned by embedded Cypher queries.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct CypherResult {
     pub columns: Vec<String>,
+    #[rkyv(with = rkyv::with::Map<rkyv::with::Map<crate::zero_copy::AsJsonString>>)]
     pub rows: Vec<Vec<Value>>,
 }
 
@@ -118,7 +129,8 @@ const fn default_pagerank_direction() -> Direction {
 }
 
 /// Configuration for weighted / personalized `PageRank` graph computation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct PageRankConfig {
     #[serde(default = "default_pagerank_damping")]
     pub damping_factor: f64,

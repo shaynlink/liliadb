@@ -9,7 +9,8 @@ use super::CvRdt;
 /// Enables distributed counting across multiple offline actors where each actor
 /// can increment and decrement independently. Merging is monotonic, commutative,
 /// associative, and idempotent.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct PNCounter {
     /// Cumulative increments per actor.
     pub p: BTreeMap<String, u64>,

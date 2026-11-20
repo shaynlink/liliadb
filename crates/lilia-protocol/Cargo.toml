@@ -8,7 +8,6 @@ license.workspace = true
 [dependencies]
 lilia-core = { path = "../lilia-core" }
 rkyv = { workspace = true }
-rmp-serde.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 serde_json.workspace = true

@@ -13,7 +13,7 @@ use lilia_core::{
     TimeSeriesStats, UndoEntry, UndoResult, VectorElementType, VectorHit, VectorIndexInfo,
     VectorMetric, WeightedPath,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 pub use serde_bytes::ByteBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -21,7 +21,11 @@ pub const PROTOCOL_MAJOR: u16 = 1;
 pub const PROTOCOL_MINOR: u16 = 2;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct Request {
     pub id: String,
     pub token: String,
@@ -31,7 +35,11 @@ pub struct Request {
     pub operation: Operation,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Operation {
     Handshake {
@@ -85,6 +93,7 @@ pub enum Operation {
     },
     JsonFind {
         space: String,
+        #[rkyv(with = lilia_core::zero_copy::AsJsonString)]
         query: serde_json::Value,
         after: Option<String>,
         limit: u32,
@@ -94,6 +103,7 @@ pub enum Operation {
     },
     SqlQuery {
         sql: String,
+        #[rkyv(with = rkyv::with::Map<lilia_core::zero_copy::AsJsonString>)]
         params: Vec<serde_json::Value>,
     },
     GraphNeighbors {
@@ -208,6 +218,7 @@ pub enum Operation {
     JsonPutHlc {
         space: String,
         id: String,
+        #[rkyv(with = lilia_core::zero_copy::AsJsonString)]
         value: serde_json::Value,
         #[serde(default)]
         hlc: Option<Hlc>,
@@ -495,6 +506,7 @@ pub enum Operation {
     },
     ResolveConflict {
         conflict_id: i64,
+        #[rkyv(with = lilia_core::zero_copy::AsJsonString)]
         resolved_value: serde_json::Value,
     },
     Undo,
@@ -514,6 +526,7 @@ pub enum Operation {
     LiveQuerySubscribe {
         sql: String,
         #[serde(default)]
+        #[rkyv(with = rkyv::with::Map<lilia_core::zero_copy::AsJsonString>)]
         params: Vec<serde_json::Value>,
     },
     P2pSync {
@@ -522,7 +535,11 @@ pub enum Operation {
 }
 
 /// Decentralized P2P Set Reconciliation protocol messages using Strata Estimators and IBFs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum P2pSyncMessage {
     EstimateRequest {
@@ -550,13 +567,21 @@ pub enum P2pSyncMessage {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct Response {
     pub id: String,
     pub result: std::result::Result<ResponseValue, LiliaError>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ResponseValue {
     Handshake {
@@ -578,21 +603,21 @@ pub enum ResponseValue {
     GraphNeighbors(Vec<String>),
     GraphReachability(Vec<String>),
     FtsHits(Vec<FtsHit>),
-    Vector(Option<(u32, VectorElementType, serde_bytes::ByteBuf)>),
+    Vector(Option<(u32, VectorElementType, Vec<u8>)>),
     VectorHits(Vec<VectorHit>),
     HybridHits(Vec<HybridHit>),
     Event(DatabaseEvent),
     CrdtCounter(i64),
     CrdtSet(Vec<String>),
-    CrdtJson(Option<serde_json::Value>),
+    CrdtJson(#[rkyv(with = rkyv::with::Map<lilia_core::zero_copy::AsJsonString>)] Option<serde_json::Value>),
     Bool(bool),
     F64(f64),
     Usize(usize),
     U64(u64),
     CheckpointStats(CheckpointStats),
     TableStorageStats(Vec<TableStorageStat>),
-    JsonExtracted(Option<serde_json::Value>),
-    JsonValue(serde_json::Value),
+    JsonExtracted(#[rkyv(with = rkyv::with::Map<lilia_core::zero_copy::AsJsonString>)] Option<serde_json::Value>),
+    JsonValue(#[rkyv(with = lilia_core::zero_copy::AsJsonString)] serde_json::Value),
     JsonRevisions(Vec<JsonRevisionInfo>),
     DictStats(DictStats),
     Hlc(Hlc),
@@ -628,13 +653,19 @@ pub enum ResponseValue {
     ReconciliationSummary(ReconciliationSummary),
 }
 
-/// Decode one size-prefixed `MessagePack` frame.
+/// Decode one size-prefixed zero-copy rkyv frame into an owned value.
 ///
 /// # Errors
 /// Returns an I/O error for truncated, oversized, empty, or malformed frames.
-pub async fn read_frame<T: DeserializeOwned>(
+pub async fn read_frame<T>(
     stream: &mut (impl AsyncRead + Unpin),
-) -> io::Result<T> {
+) -> io::Result<T>
+where
+    T: rkyv::Archive,
+    T::Archived: for<'a> rkyv::bytecheck::CheckBytes<
+            rkyv::api::high::HighValidator<'a, rkyv::rancor::Error>,
+        > + rkyv::Deserialize<T, rkyv::api::high::HighDeserializer<rkyv::rancor::Error>>,
+{
     let length = stream.read_u32().await? as usize;
     if length == 0 || length > MAX_FRAME_BYTES {
         return Err(io::Error::new(
@@ -642,32 +673,31 @@ pub async fn read_frame<T: DeserializeOwned>(
             "invalid frame length",
         ));
     }
-    let mut bytes = vec![0; length];
-    stream.read_exact(&mut bytes).await?;
-    rmp_serde::from_slice(&bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    let mut buffer = rkyv::util::AlignedVec::<16>::with_capacity(length);
+    buffer.resize(length, 0);
+    stream.read_exact(&mut buffer).await?;
+    rkyv::from_bytes::<T, rkyv::rancor::Error>(&buffer)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
 }
 
-/// Encode and write one size-prefixed `MessagePack` frame.
+/// Encode and write one size-prefixed zero-copy rkyv frame.
 ///
 /// # Errors
 /// Returns an I/O error when serialization or writing fails, or when the frame is oversized.
-pub async fn write_frame<T: Serialize>(
+pub async fn write_frame<T>(
     stream: &mut (impl AsyncWrite + Unpin),
     value: &T,
-) -> io::Result<()> {
-    let bytes = rmp_serde::to_vec_named(value)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if bytes.len() > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "frame exceeds size limit",
-        ));
-    }
-    let length = u32::try_from(bytes.len())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "frame exceeds u32 length"))?;
-    stream.write_u32(length).await?;
-    stream.write_all(&bytes).await?;
-    stream.flush().await
+) -> io::Result<()>
+where
+    T: for<'a> rkyv::Serialize<
+        rkyv::api::high::HighSerializer<
+            rkyv::util::AlignedVec,
+            rkyv::ser::allocator::ArenaHandle<'a>,
+            rkyv::rancor::Error,
+        >,
+    >,
+{
+    write_archived_frame(stream, value).await
 }
 
 /// Encode and write one zero-copy frame using rkyv.

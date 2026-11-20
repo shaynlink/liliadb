@@ -3,18 +3,21 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Error)]
+#[derive(Debug, Clone, Serialize, Deserialize, Error, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 #[error("{message}")]
 pub struct LiliaError {
     pub code: ErrorCode,
     pub message: String,
     pub retryable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[rkyv(with = rkyv::with::Map<crate::zero_copy::AsJsonString>)]
     pub details: Option<Value>,
     pub request_id: Uuid,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
     Closed,

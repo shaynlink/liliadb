@@ -3,9 +3,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct SqlQueryResult {
     pub columns: Vec<String>,
+    #[rkyv(with = rkyv::with::Map<rkyv::with::Map<crate::zero_copy::AsJsonString>>)]
     pub rows: Vec<Vec<Value>>,
     pub rows_affected: u64,
 }
@@ -32,7 +34,8 @@ impl SqlQueryResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct JsonIndexInfo {
     pub space: String,
     pub index_name: String,
@@ -93,7 +96,8 @@ impl From<Option<String>> for IndexOptions {
 }
 
 /// 64-bit strictly monotonic logical version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash))]
 #[repr(transparent)]
 pub struct Version(pub u64);
 
@@ -135,7 +139,8 @@ impl std::fmt::Display for Version {
 }
 
 /// Metadata and diff information for a historical JSON document revision.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct JsonRevisionInfo {
     pub space: String,
     pub id: String,
@@ -143,11 +148,13 @@ pub struct JsonRevisionInfo {
     pub timestamp_ms: i64,
     pub is_deletion: bool,
     pub is_keyframe: bool,
+    #[rkyv(with = rkyv::with::Map<crate::zero_copy::AsJsonString>)]
     pub patch: Option<Value>,
 }
 
 /// Result returned after undoing a database mutation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct UndoResult {
     pub id: i64,
     pub summary: String,
@@ -155,7 +162,8 @@ pub struct UndoResult {
 }
 
 /// Result returned after redoing a database mutation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct RedoResult {
     pub id: i64,
     pub summary: String,
@@ -163,7 +171,8 @@ pub struct RedoResult {
 }
 
 /// A transaction recorded in the database's native undo/redo log.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct UndoEntry {
     pub id: i64,
     pub timestamp_ms: i64,
@@ -172,17 +181,22 @@ pub struct UndoEntry {
 }
 
 /// Precise differential delta emitted for a live query subscription.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct LiveQueryDiff {
     pub subscription_id: u64,
+    #[rkyv(with = rkyv::with::Map<crate::zero_copy::AsJsonString>)]
     pub added: Vec<Value>,
+    #[rkyv(with = rkyv::with::Map<crate::zero_copy::AsJsonString>)]
     pub updated: Vec<Value>,
+    #[rkyv(with = rkyv::with::Map<crate::zero_copy::AsJsonString>)]
     pub removed: Vec<Value>,
     pub is_initial: bool,
 }
 
 /// Metadata catalog entry describing an active incremental materialized view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct MaterializedViewInfo {
     pub name: String,
     pub source_table: String,

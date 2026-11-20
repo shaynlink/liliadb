@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::Durability;
 
 /// Storage tier determining persistence, memory residency, and write-buffering behavior.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum StorageTier {
     /// Durable persistence in SQLite WAL on disk (default).
@@ -53,7 +54,8 @@ impl fmt::Display for StorageTier {
 }
 
 /// Logical `LiliaDB` data model / collection category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum CollectionKind {
     Kv,

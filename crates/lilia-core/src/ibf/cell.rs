@@ -21,7 +21,11 @@ pub fn compute_checksum(key: u128) -> u32 {
 }
 
 /// A single cell in an Invertible Bloom Filter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct IbfCell {
     /// Net count of elements mapped to this bucket (+1 per insert, -1 per delete).
     pub count: i32,

@@ -103,7 +103,11 @@ pub fn get_hash_buckets(key: u128, m: usize, k: u32, seed: u64) -> Vec<usize> {
 }
 
 /// Invertible Bloom Filter data structure.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct InvertibleBloomFilter {
     /// Array of cells.
     pub cells: Vec<IbfCell>,

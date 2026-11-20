@@ -28,7 +28,11 @@ pub use strata::{
 use serde::{Deserialize, Serialize};
 
 /// Payload representing a document update or deletion transferred during P2P sync.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct P2pDocumentPayload {
     /// Data model ("json", "kv", etc.).
     pub model: String,
@@ -37,6 +41,7 @@ pub struct P2pDocumentPayload {
     /// Unique document ID.
     pub id: String,
     /// Document value (`None` denotes a tombstone / deletion).
+    #[rkyv(with = rkyv::with::Map<crate::zero_copy::AsJsonString>)]
     pub value: Option<serde_json::Value>,
     /// Hybrid Logical Clock timestamp of this mutation.
     pub hlc: crate::hlc::Hlc,
@@ -45,7 +50,11 @@ pub struct P2pDocumentPayload {
 }
 
 /// Statistics reported after applying incoming P2P changesets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct P2pApplyStats {
     /// Number of document mutations applied.
     pub applied_count: usize,
@@ -56,7 +65,11 @@ pub struct P2pApplyStats {
 }
 
 /// Summary of an end-to-end P2P reconciliation execution.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct ReconciliationSummary {
     /// Total communication rounds used (1 for Fast-Path, 2 for Normal-Path).
     pub rounds_used: u32,
@@ -75,7 +88,11 @@ pub struct ReconciliationSummary {
 }
 
 /// A composite 128-bit item representation combining document/record identity and state fingerprint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct ReconciliationItem {
     /// 64-bit BLAKE3 hash of the document identifier (`model:space:id`).
     pub id_hash: u64,

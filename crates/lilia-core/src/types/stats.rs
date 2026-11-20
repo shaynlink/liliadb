@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Resource footprint profile configuring SQLite cache, mmap, WAL checkpoints, and retention defaults.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceProfile {
     #[default]
@@ -13,7 +14,8 @@ pub enum ResourceProfile {
 }
 
 /// Background WAL checkpoint worker counters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct CheckpointStats {
     pub attempts: u64,
     pub incomplete: u64,
@@ -23,7 +25,8 @@ pub struct CheckpointStats {
 }
 
 /// Physical page and payload storage statistics for a single SQLite B-tree/table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct TableStorageStat {
     pub name: String,
     pub page_count: i64,
@@ -32,7 +35,8 @@ pub struct TableStorageStat {
 }
 
 /// Metadata and compression stats for a trained Zstandard JSON dictionary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct DictStats {
     pub space: String,
     pub dict_id: u32,
@@ -42,7 +46,8 @@ pub struct DictStats {
 }
 
 /// Transitive graph dependency impact summary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct ImpactAnalysis {
     pub direct: Vec<String>,
     pub dependants: Vec<String>,
@@ -50,7 +55,8 @@ pub struct ImpactAnalysis {
 }
 
 /// Conflict resolution and merge strategy when merging a branch into the main database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum MergeStrategy {
     /// Only merge if the main database has not had conflicting modifications

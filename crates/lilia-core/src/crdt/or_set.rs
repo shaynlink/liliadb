@@ -11,7 +11,11 @@ use super::CvRdt;
 /// is removed, all tags currently observed locally for that element are recorded in
 /// the tombstone set. Concurrent additions generate distinct tags that are not yet
 /// observed by the removing replica, so the addition wins on merge.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct OrSet<T: Ord + Clone> {
     /// Active and tombstoned entries mapping to their birth tags.
     pub entries: BTreeMap<T, BTreeSet<String>>,

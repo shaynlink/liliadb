@@ -9,8 +9,10 @@ use rkyv::{Archive, Serialize};
 use crate::{ErrorCode, LiliaError, Result};
 
 pub mod entry;
+pub mod wrapper;
 
 pub use entry::{RelJsonEntry, RelKvEntry};
+pub use wrapper::AsJsonString;
 
 /// Serialize any typed value into an aligned zero-copy byte buffer.
 ///

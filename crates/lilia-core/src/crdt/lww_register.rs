@@ -7,7 +7,9 @@ use super::CvRdt;
 /// A Lamport / Hybrid Logical Clock counter for deterministic event ordering.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
 )]
+#[rkyv(crate = rkyv)]
 pub struct LogicalClock {
     /// Physical or logical timestamp in milliseconds.
     pub timestamp_ms: i64,
@@ -37,7 +39,11 @@ impl LogicalClock {
 }
 
 /// A composite clock including an actor identifier for deterministic total ordering.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct LwwClock {
     /// The logical clock.
     pub clock: LogicalClock,

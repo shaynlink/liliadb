@@ -907,9 +907,7 @@ fn dispatch(database: &Database, operation: Operation) -> lilia_core::Result<Res
             limit,
         } => ResponseValue::FtsHits(database.fts_search(&collection, &query, limit)?),
         Operation::VectorGet { collection, id } => {
-            let res = database
-                .vector_get(&collection, &id)?
-                .map(|(dim, et, vec)| (dim, et, lilia_protocol::ByteBuf::from(vec)));
+            let res = database.vector_get(&collection, &id)?;
             ResponseValue::Vector(res)
         }
         Operation::VectorSearch {

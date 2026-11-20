@@ -6,7 +6,8 @@ use serde_json::Value;
 use super::graph::default_edge_weight;
 use super::vector::VectorElementType;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum Durability {
     #[default]
@@ -15,7 +16,8 @@ pub enum Durability {
     Performance,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct KvEntry {
     pub namespace: String,
     #[serde(with = "serde_bytes")]
@@ -27,7 +29,8 @@ pub struct KvEntry {
     pub expires_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct JsonEntry {
     pub space: String,
     pub id: String,
@@ -37,7 +40,8 @@ pub struct JsonEntry {
     pub version: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct BitemporalEntry {
     pub space: String,
     pub id: String,
@@ -45,6 +49,7 @@ pub struct BitemporalEntry {
     pub vt_to: i64,
     pub tt_from: i64,
     pub tt_to: i64,
+    #[rkyv(with = crate::zero_copy::AsJsonString)]
     pub value: Value,
     #[serde(with = "crate::version")]
     pub version: u64,
@@ -117,7 +122,8 @@ impl JsonEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 #[serde(tag = "model", rename_all = "snake_case")]
 pub enum BatchOperation {
     KvSet {
@@ -140,6 +146,7 @@ pub enum BatchOperation {
     JsonPut {
         space: String,
         id: String,
+        #[rkyv(with = crate::zero_copy::AsJsonString)]
         value: Value,
         #[serde(default, with = "crate::version::optional")]
         if_version: Option<u64>,
@@ -162,6 +169,7 @@ pub enum BatchOperation {
         graph: String,
         id: String,
         kind: String,
+        #[rkyv(with = crate::zero_copy::AsJsonString)]
         metadata: Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         doc_space: Option<String>,
@@ -237,6 +245,7 @@ pub enum BatchOperation {
         id: String,
         actor_id: String,
         path: String,
+        #[rkyv(with = crate::zero_copy::AsJsonString)]
         value: Value,
         #[serde(default)]
         timestamp_ms: Option<i64>,
@@ -258,6 +267,7 @@ pub enum BatchOperation {
     JsonPutHlc {
         space: String,
         id: String,
+        #[rkyv(with = crate::zero_copy::AsJsonString)]
         value: Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hlc: Option<crate::hlc::Hlc>,
@@ -269,6 +279,7 @@ pub enum BatchOperation {
     BitemporalPut {
         space: String,
         id: String,
+        #[rkyv(with = crate::zero_copy::AsJsonString)]
         value: Value,
         vt_from: i64,
         vt_to: i64,
@@ -287,7 +298,8 @@ pub enum BatchOperation {
     },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct MutationResult {
     #[serde(default, with = "crate::version::optional")]
     pub version: Option<u64>,

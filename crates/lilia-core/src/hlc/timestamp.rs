@@ -55,7 +55,8 @@ impl From<HlcError> for LiliaError {
 ///
 /// Combines an approximate physical time in milliseconds, a monotonic logical counter,
 /// and a unique node/actor identifier for deterministic total ordering.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct Hlc {
     /// Physical or highest observed logical timestamp in milliseconds.
     pub millis: i64,

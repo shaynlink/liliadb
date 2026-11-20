@@ -33,7 +33,8 @@ pub const TAG_ARRAY: u8 = 0x07;
 pub const TAG_OBJECT: u8 = 0x08;
 
 /// A validated, owned zero-copy binary JSON document.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct BinaryDoc {
     pub(crate) data: Vec<u8>,
 }

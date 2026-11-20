@@ -6,9 +6,14 @@ use serde_json::{Map, Value};
 use super::{CvRdt, LwwClock};
 
 /// Represents an individual field within an LWW JSON document.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct LwwField {
     /// The stored JSON value of this field.
+    #[rkyv(with = crate::zero_copy::AsJsonString)]
     pub value: Value,
     /// The logical clock of the last write.
     pub clock: LwwClock,
@@ -21,7 +26,11 @@ pub struct LwwField {
 /// Rather than resolving conflicts at the coarse whole-document level (which results in silent
 /// overwrites of unrelated changes), `LwwJsonDocument` tracks logical clocks per field/path.
 /// Concurrent offline edits to distinct fields merge seamlessly without data loss.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Default, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct LwwJsonDocument {
     /// Maps normalized JSON Pointer paths (e.g. `/author/name`) to their LWW field state.
     pub fields: BTreeMap<String, LwwField>,

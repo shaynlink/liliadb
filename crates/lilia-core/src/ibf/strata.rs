@@ -50,7 +50,11 @@ pub fn stratum_for_key(key: u128, num_strata: usize, seed: u64) -> usize {
 }
 
 /// A collection of geometric-sampling IBFs for difference estimation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize,
+    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv)]
 pub struct StrataEstimator {
     /// Array of small IBFs, one per stratum level 0..L-1.
     pub strata: Vec<InvertibleBloomFilter>,

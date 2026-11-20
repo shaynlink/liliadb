@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DatabaseEvent {
     KvMutated {
@@ -112,7 +113,8 @@ impl DatabaseEvent {
 }
 
 /// Metadata representing an HLC-tracked record in persistent storage.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct HlcRecord {
     pub model: String,
     pub space: String,
@@ -124,7 +126,8 @@ pub struct HlcRecord {
 }
 
 /// Detailed outcome of an HLC-tracked mutation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct HlcMutationOutcome {
     pub hlc: crate::hlc::Hlc,
     pub version: u64,

@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::{ErrorCode, LiliaError, Result};
 
 /// A single timestamped floating-point observation for time-series.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct TimeSeriesPoint {
     pub timestamp: i64,
     pub value: f64,
@@ -26,7 +27,8 @@ impl TimeSeriesPoint {
 }
 
 /// Aggregated statistical summary for a time-series range.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct TimeSeriesStats {
     pub min: f64,
     pub max: f64,
@@ -36,7 +38,8 @@ pub struct TimeSeriesStats {
 }
 
 /// Aggregation functions for downsampling high-frequency series into wider buckets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub enum DownsampleAggregation {
     #[default]
     Avg,
@@ -49,7 +52,8 @@ pub enum DownsampleAggregation {
 }
 
 /// A declarative rule within a time-series lifecycle policy.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct TimeSeriesRetentionRule {
     /// Target bucket resolution in milliseconds (e.g. 0 for raw, `60_000` for 1 minute, `3_600_000` for 1 hour).
     pub resolution_ms: i64,
@@ -76,7 +80,8 @@ impl TimeSeriesRetentionRule {
 }
 
 /// Declarative lifecycle policy for time-series streams.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct TimeSeriesLifecyclePolicy {
     /// Series ID or pattern (e.g. "`heart_rate`", "sensor:*", or "*" for global default).
     pub series_pattern: String,
@@ -95,7 +100,8 @@ impl TimeSeriesLifecyclePolicy {
 }
 
 /// Statistics returned after applying time-series lifecycle retention and downsampling.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct TimeSeriesRetentionStats {
     pub series_processed: u64,
     pub downsampled_points_created: u64,

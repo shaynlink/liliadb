@@ -162,7 +162,8 @@ pub use timeseries::{
     TimeSeriesRetentionRule, TimeSeriesRetentionStats, TimeSeriesStats,
 };
 pub use types::{
-    BatchOperation, BitemporalEntry, BranchDiff, CentralityType, CheckpointStats, ComponentType,
+    ArchivedBatchOperation, ArchivedMutationResult, BatchOperation, BitemporalEntry, BranchDiff,
+    CentralityType, CheckpointStats, ComponentType,
     CypherResult, DatabaseEvent, DictStats, Direction, Durability, FtsFuzzyHit, FtsFuzzyOptions,
     FtsHit, FtsPhoneticHit, FtsSuggestion, GraphEdge, GraphNode, HlcMutationOutcome, HlcRecord,
     HnswConfig, HybridHit, ImpactAnalysis, IndexOptions, JsonEntry, JsonIndexInfo,
@@ -173,7 +174,8 @@ pub use types::{
 };
 pub use wear::{FlashWearTelemetry, FlashWearTier, FlashWearTracker, WearLevelingPolicy};
 pub use zero_copy::{
-    access_archived, access_archived_unchecked, archive_to_bytes, RelJsonEntry, RelKvEntry,
+    access_archived, access_archived_unchecked, archive_to_bytes, AsJsonString, RelJsonEntry,
+    RelKvEntry,
 };
 
 /// Ergonomic macro to construct document-style JSON values for updates, queries, and filters.
