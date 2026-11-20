@@ -1,0 +1,30 @@
+//! Platform layer of `LiliaDB`.
+//!
+//! Every byte the storage engine reads or writes, and every durability decision it makes, goes
+//! through the [`Vfs`] trait of this crate:
+//!
+//! - [`NativeVfs`]: the operating system's file system, with the strongest sync primitive of each
+//!   platform ([`SyncLevel`]);
+//! - [`MemVfs`]: an in-memory file system that models what survives a power cut (synced data,
+//!   synced directory entries, an optional torn tail of unsynced writes) and can inject I/O
+//!   errors, so crash recovery can be tested deterministically.
+//!
+//! [`HardwareProfile`] describes the machine the engine runs on, and [`qos`] lowers the priority
+//! of the engine's own background threads. This crate is the only one of the engine stack that
+//! calls the operating system directly; each `unsafe` block states why it is sound.
+
+// reason: every fallible function of this crate is an I/O operation that returns the operating
+// system's (or the simulated file system's) `io::Error` unchanged; there is nothing to document
+// per function beyond that.
+#![allow(clippy::missing_errors_doc)]
+
+mod hardware;
+mod mem;
+mod native;
+pub mod qos;
+mod vfs;
+
+pub use hardware::HardwareProfile;
+pub use mem::{CrashOptions, MemVfs};
+pub use native::NativeVfs;
+pub use vfs::{File, LockGuard, OpenMode, SyncLevel, Vfs};

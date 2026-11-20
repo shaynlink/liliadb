@@ -6,7 +6,9 @@ members = [
   "crates/lilia-analytics",
   "crates/lilia-core",
   "crates/lilia-embed",
+  "crates/lilia-engine",
   "crates/lilia-graph",
+  "crates/lilia-io",
   "crates/lilia-node-native",
   "crates/lilia-plugin-api",
   "crates/lilia-protocol",
@@ -56,6 +58,8 @@ cranelift-module = "0.137.2"
 cranelift-native = "0.137.2"
 crossbeam-epoch = "0.9.21"
 crossbeam-queue = "0.3"
+crossbeam-skiplist = "0.1.3"
+crc32c = "0.6.9"
 datafusion = { version = "55.2.0", default-features = false, features = [
     "datetime_expressions",
     "recursive_protection",
@@ -67,6 +71,7 @@ datafusion = { version = "55.2.0", default-features = false, features = [
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 h3o = { version = "0.11", default-features = false }
 hex = "0.4.3"
+libc = "0.2.186"
 libloading = "0.9.0"
 memmap2 = "0.9.12"
 miniz_oxide = "0.8"
