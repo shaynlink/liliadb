@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use lilia_core::aggregation::{Aggregate, FilterExpr, Sort};
 use lilia_core::Result;
 use serde_json::Value;
@@ -154,8 +156,12 @@ impl<'a> AggregationPipeline<'a> {
 
         // If aggregations are requested:
         if !self.aggregates.is_empty() || self.group_by_field.is_some() {
-            let mut grouped =
-                execute_group_by(doc_stream, self.group_by_field.as_deref(), &self.aggregates)?;
+            let mut grouped = execute_group_by(
+                doc_stream,
+                self.group_by_field.as_deref(),
+                &self.aggregates,
+                Some(Arc::clone(self.db.key_registry())),
+            )?;
 
             // Sort and Top-K optimization
             if let Some(ref sort) = self.sort {

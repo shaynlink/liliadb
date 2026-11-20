@@ -1,10 +1,13 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::sync::Arc;
 
 use lilia_core::aggregation::{
-    Aggregate, AnomalyAccumulator, CountAccumulator, FilterExpr, HyperLogLog, MaxAccumulator,
-    MinAccumulator, Sort, SortDirection, SumAccumulator, TDigest, WelfordAccumulator,
+    Aggregate, AnomalyAccumulator, CountAccumulator, FilterExpr, HomomorphicSumAccumulator,
+    HyperLogLog, MaxAccumulator, MinAccumulator, Sort, SortDirection, SumAccumulator, TDigest,
+    WelfordAccumulator,
 };
+use lilia_core::fle::{decrypt_paillier_f64, decrypt_paillier_i64, EncryptedEnvelope, KeyRegistry};
 use lilia_core::Result;
 use serde_json::Value;
 
@@ -151,10 +154,20 @@ impl<I: Iterator<Item = Result<StreamDocument>>> Iterator for UnwindStream<I> {
 }
 
 /// Dynamic running accumulator matching an `Aggregate` definition.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum RunningAccumulator {
     Count(CountAccumulator),
-    Sum(SumAccumulator),
+    Sum {
+        plain: SumAccumulator,
+        homomorphic: Option<HomomorphicSumAccumulator>,
+        key_id: Option<String>,
+        keys: Option<Arc<KeyRegistry>>,
+    },
+    HomomorphicSum {
+        acc: Option<HomomorphicSumAccumulator>,
+        key_id: Option<String>,
+        keys: Option<Arc<KeyRegistry>>,
+    },
     Avg(WelfordAccumulator),
     Min(MinAccumulator),
     Max(MaxAccumulator),
@@ -168,10 +181,20 @@ pub enum RunningAccumulator {
 
 impl RunningAccumulator {
     #[must_use]
-    pub fn from_aggregate(agg: &Aggregate) -> Self {
+    pub fn from_aggregate(agg: &Aggregate, keys: Option<Arc<KeyRegistry>>) -> Self {
         match agg {
             Aggregate::Count { .. } => Self::Count(CountAccumulator::new()),
-            Aggregate::Sum { .. } => Self::Sum(SumAccumulator::new()),
+            Aggregate::Sum { .. } => Self::Sum {
+                plain: SumAccumulator::new(),
+                homomorphic: None,
+                key_id: None,
+                keys,
+            },
+            Aggregate::HomomorphicSum { key_id, .. } => Self::HomomorphicSum {
+                acc: None,
+                key_id: key_id.clone(),
+                keys,
+            },
             Aggregate::Avg { .. } => Self::Avg(WelfordAccumulator::new()),
             Aggregate::Min { .. } => Self::Min(MinAccumulator::new()),
             Aggregate::Max { .. } => Self::Max(MaxAccumulator::new()),
@@ -190,9 +213,53 @@ impl RunningAccumulator {
     pub fn update(&mut self, doc: &StreamDocument, field: Option<&str>) {
         match self {
             Self::Count(c) => c.update(),
-            Self::Sum(s) => {
-                if let Some(f) = field.and_then(|name| doc.extract_f64(name)) {
-                    s.update(f);
+            Self::Sum {
+                plain,
+                homomorphic,
+                key_id,
+                keys,
+            } => {
+                if let Some(f_name) = field {
+                    if let Some(s) = doc.extract_str(f_name) {
+                        if s.starts_with("ENC:paillier:") {
+                            if let Some(env) = EncryptedEnvelope::parse(&s) {
+                                if homomorphic.is_none() {
+                                    if let Some(k_reg) = keys {
+                                        if let Some(pk) = k_reg.get_paillier_public(&env.key_id) {
+                                            *homomorphic = Some(HomomorphicSumAccumulator::new(pk));
+                                            *key_id = Some(env.key_id.clone());
+                                        }
+                                    }
+                                }
+                                if let Some(h) = homomorphic {
+                                    let _ = h.update_envelope(&env);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    if let Some(f) = doc.extract_f64(f_name) {
+                        plain.update(f);
+                    }
+                }
+            }
+            Self::HomomorphicSum { acc, key_id, keys } => {
+                if let Some(f_name) = field {
+                    if let Some(s) = doc.extract_str(f_name) {
+                        if let Some(env) = EncryptedEnvelope::parse(&s) {
+                            if acc.is_none() {
+                                if let Some(k_reg) = keys {
+                                    if let Some(pk) = k_reg.get_paillier_public(&env.key_id) {
+                                        *acc = Some(HomomorphicSumAccumulator::new(pk));
+                                        *key_id = Some(env.key_id.clone());
+                                    }
+                                }
+                            }
+                            if let Some(h) = acc {
+                                let _ = h.update_envelope(&env);
+                            }
+                        }
+                    }
                 }
             }
             Self::Avg(w) | Self::Variance(w) | Self::StdDev(w) => {
@@ -231,8 +298,58 @@ impl RunningAccumulator {
     pub fn finalize(&mut self) -> Value {
         match self {
             Self::Count(c) => Value::Number(c.value().into()),
-            Self::Sum(s) => {
-                serde_json::Number::from_f64(s.value()).map_or(Value::Null, Value::Number)
+            Self::Sum {
+                plain,
+                homomorphic,
+                key_id,
+                keys,
+            } => {
+                if let Some(h) = homomorphic {
+                    if let (Some(kid), Some(k_reg)) = (key_id.as_deref(), keys) {
+                        if let (Some(sk), Some(pk)) = (
+                            k_reg.get_paillier_private(kid),
+                            k_reg.get_paillier_public(kid),
+                        ) {
+                            let ct = h.ciphertext();
+                            if ct.scale() == 0 {
+                                if let Ok(i) = decrypt_paillier_i64(&sk, &pk, &ct) {
+                                    return Value::Number(i.into());
+                                }
+                            } else if let Ok(f) = decrypt_paillier_f64(&sk, &pk, &ct) {
+                                return serde_json::Number::from_f64(f)
+                                    .map_or(Value::Null, Value::Number);
+                            }
+                        }
+                        return Value::String(h.to_envelope(kid));
+                    }
+                    Value::Null
+                } else {
+                    serde_json::Number::from_f64(plain.value()).map_or(Value::Null, Value::Number)
+                }
+            }
+            Self::HomomorphicSum { acc, key_id, keys } => {
+                if let Some(h) = acc {
+                    if let (Some(kid), Some(k_reg)) = (key_id.as_deref(), keys) {
+                        if let (Some(sk), Some(pk)) = (
+                            k_reg.get_paillier_private(kid),
+                            k_reg.get_paillier_public(kid),
+                        ) {
+                            let ct = h.ciphertext();
+                            if ct.scale() == 0 {
+                                if let Ok(i) = decrypt_paillier_i64(&sk, &pk, &ct) {
+                                    return Value::Number(i.into());
+                                }
+                            } else if let Ok(f) = decrypt_paillier_f64(&sk, &pk, &ct) {
+                                return serde_json::Number::from_f64(f)
+                                    .map_or(Value::Null, Value::Number);
+                            }
+                        }
+                        return Value::String(h.to_envelope(kid));
+                    }
+                    Value::Null
+                } else {
+                    Value::Null
+                }
             }
             Self::Avg(w) => {
                 serde_json::Number::from_f64(w.mean()).map_or(Value::Null, Value::Number)
@@ -268,6 +385,7 @@ pub fn execute_group_by<I: Iterator<Item = Result<StreamDocument>>>(
     upstream: I,
     group_key_field: Option<&str>,
     aggregates: &[Aggregate],
+    keys: Option<Arc<KeyRegistry>>,
 ) -> Result<Vec<Value>> {
     let mut groups: HashMap<String, Vec<RunningAccumulator>> = HashMap::new();
 
@@ -282,7 +400,7 @@ pub fn execute_group_by<I: Iterator<Item = Result<StreamDocument>>>(
         let accs = groups.entry(key).or_insert_with(|| {
             aggregates
                 .iter()
-                .map(RunningAccumulator::from_aggregate)
+                .map(|agg| RunningAccumulator::from_aggregate(agg, keys.as_ref().map(Arc::clone)))
                 .collect()
         });
 

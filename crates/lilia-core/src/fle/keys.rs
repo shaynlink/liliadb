@@ -1,10 +1,11 @@
 //! Key material management and concurrent key registry for compartments.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use sha2::Sha256;
 
+use crate::fle::paillier::{PaillierKeypair, PaillierPrivateKey, PaillierPublicKey};
 use crate::{ErrorCode, LiliaError, Result};
 
 pub const KEY_EXPANSION_INFO: &[u8] = b"liliadb:aes-siv:key-expansion:v1";
@@ -116,6 +117,8 @@ pub struct CompartmentInfo {
 #[derive(Debug, Default)]
 pub struct KeyRegistry {
     keys: RwLock<HashMap<String, KeyMaterial>>,
+    paillier_public: RwLock<HashMap<String, Arc<PaillierPublicKey>>>,
+    paillier_private: RwLock<HashMap<String, Arc<PaillierPrivateKey>>>,
 }
 
 impl KeyRegistry {
@@ -123,6 +126,8 @@ impl KeyRegistry {
     pub fn new() -> Self {
         Self {
             keys: RwLock::new(HashMap::new()),
+            paillier_public: RwLock::new(HashMap::new()),
+            paillier_private: RwLock::new(HashMap::new()),
         }
     }
 
@@ -135,13 +140,48 @@ impl KeyRegistry {
         guard.insert(id.into(), key);
     }
 
-    /// Locks / removes a key from memory for compartment `id`.
+    /// Registers a Paillier public key for compartment `id`.
+    pub fn register_paillier_public(&self, id: impl Into<String>, pk: Arc<PaillierPublicKey>) {
+        let mut guard = self
+            .paillier_public
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.insert(id.into(), pk);
+    }
+
+    /// Registers a complete Paillier keypair (both public and private keys) for compartment `id`.
+    pub fn register_paillier_keypair(&self, id: impl Into<String>, kp: &PaillierKeypair) {
+        let id_str = id.into();
+        self.register_paillier_public(id_str.clone(), Arc::clone(&kp.public_key));
+        let mut guard = self
+            .paillier_private
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.insert(id_str, Arc::clone(&kp.private_key));
+    }
+
+    /// Registers a Paillier private key for compartment `id`.
+    pub fn register_paillier_private(&self, id: impl Into<String>, sk: Arc<PaillierPrivateKey>) {
+        let mut guard = self
+            .paillier_private
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.insert(id.into(), sk);
+    }
+
+    /// Locks / removes private key material from memory for compartment `id`.
     pub fn lock_key(&self, id: &str) -> bool {
         let mut guard = self
             .keys
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.remove(id).is_some()
+        let mut priv_guard = self
+            .paillier_private
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let r1 = guard.remove(id).is_some();
+        let r2 = priv_guard.remove(id).is_some();
+        r1 || r2
     }
 
     /// Checks if the compartment `id` is currently unlocked in memory.
@@ -149,6 +189,33 @@ impl KeyRegistry {
     pub fn is_unlocked(&self, id: &str) -> bool {
         let guard = self
             .keys
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.contains_key(id) {
+            return true;
+        }
+        let priv_guard = self
+            .paillier_private
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        priv_guard.contains_key(id)
+    }
+
+    /// Checks if the compartment has a Paillier public key registered.
+    #[must_use]
+    pub fn has_paillier_public(&self, id: &str) -> bool {
+        let guard = self
+            .paillier_public
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.contains_key(id)
+    }
+
+    /// Checks if the compartment has a Paillier private key unlocked.
+    #[must_use]
+    pub fn has_paillier_private(&self, id: &str) -> bool {
+        let guard = self
+            .paillier_private
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.contains_key(id)
@@ -159,6 +226,26 @@ impl KeyRegistry {
     pub fn get_key(&self, id: &str) -> Option<KeyMaterial> {
         let guard = self
             .keys
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.get(id).cloned()
+    }
+
+    /// Retrieves the Paillier public key for compartment `id`.
+    #[must_use]
+    pub fn get_paillier_public(&self, id: &str) -> Option<Arc<PaillierPublicKey>> {
+        let guard = self
+            .paillier_public
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.get(id).cloned()
+    }
+
+    /// Retrieves the Paillier private key for compartment `id` if unlocked.
+    #[must_use]
+    pub fn get_paillier_private(&self, id: &str) -> Option<Arc<PaillierPrivateKey>> {
+        let guard = self
+            .paillier_private
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.get(id).cloned()

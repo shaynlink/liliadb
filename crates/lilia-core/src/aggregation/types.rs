@@ -78,6 +78,11 @@ pub enum Aggregate {
         threshold: f64,
         output: String,
     },
+    HomomorphicSum {
+        field: String,
+        output: String,
+        key_id: Option<String>,
+    },
 }
 
 impl Aggregate {
@@ -167,6 +172,28 @@ impl Aggregate {
     }
 
     #[must_use]
+    pub fn homomorphic_sum(field: impl Into<String>, output: impl Into<String>) -> Self {
+        Self::HomomorphicSum {
+            field: field.into(),
+            output: output.into(),
+            key_id: None,
+        }
+    }
+
+    #[must_use]
+    pub fn homomorphic_sum_with_key(
+        field: impl Into<String>,
+        output: impl Into<String>,
+        key_id: impl Into<String>,
+    ) -> Self {
+        Self::HomomorphicSum {
+            field: field.into(),
+            output: output.into(),
+            key_id: Some(key_id.into()),
+        }
+    }
+
+    #[must_use]
     pub fn output_name(&self) -> &str {
         match self {
             Self::Count { output }
@@ -178,7 +205,8 @@ impl Aggregate {
             | Self::StdDev { output, .. }
             | Self::Quantile { output, .. }
             | Self::ApproxCountDistinct { output, .. }
-            | Self::AnomalyCount { output, .. } => output,
+            | Self::AnomalyCount { output, .. }
+            | Self::HomomorphicSum { output, .. } => output,
         }
     }
 
@@ -194,7 +222,8 @@ impl Aggregate {
             | Self::StdDev { field, .. }
             | Self::Quantile { field, .. }
             | Self::ApproxCountDistinct { field, .. }
-            | Self::AnomalyCount { field, .. } => Some(field),
+            | Self::AnomalyCount { field, .. }
+            | Self::HomomorphicSum { field, .. } => Some(field),
         }
     }
 }

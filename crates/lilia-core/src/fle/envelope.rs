@@ -66,9 +66,11 @@ impl EncryptedEnvelope {
         let rest = &s[ENC_PREFIX.len()..];
         let (algorithm, after_algo) = if let Some(stripped) = rest.strip_prefix("gcm:") {
             (FieldCipherAlgorithm::RandomizedGcm, stripped)
-        } else {
-            let stripped = rest.strip_prefix("siv:")?;
+        } else if let Some(stripped) = rest.strip_prefix("siv:") {
             (FieldCipherAlgorithm::DeterministicSiv, stripped)
+        } else {
+            let stripped = rest.strip_prefix("paillier:")?;
+            (FieldCipherAlgorithm::HomomorphicPaillier, stripped)
         };
 
         // Key ID can contain colons (e.g. "vault:team"), so split at the last colon for base64 payload
@@ -129,37 +131,98 @@ pub fn encrypt_json_fields(doc: &mut Value, policy: &FlePolicy, keys: &KeyRegist
                 }
             }
 
-            let key_material = keys.get_key(&rule.key_id).ok_or_else(|| {
-                LiliaError::new(
-                    ErrorCode::Unauthorized,
-                    format!(
-                        "cannot encrypt field '{}': compartment key '{}' is locked or not found",
-                        rule.path, rule.key_id
-                    ),
-                    false,
-                )
-            })?;
-
-            let plain_bytes = serde_json::to_vec(target).map_err(|e| {
-                LiliaError::new(
-                    ErrorCode::InvalidInput,
-                    format!("failed to serialize field '{}' to json: {e}", rule.path),
-                    false,
-                )
-            })?;
-
-            let ad = if rule.bind_path_as_ad {
-                Some(norm_path.as_bytes())
-            } else {
-                None
-            };
-
             let cipher_bytes = match rule.algorithm {
                 FieldCipherAlgorithm::RandomizedGcm => {
+                    let key_material = keys.get_key(&rule.key_id).ok_or_else(|| {
+                        LiliaError::new(
+                            ErrorCode::Unauthorized,
+                            format!(
+                                "cannot encrypt field '{}': compartment key '{}' is locked or not found",
+                                rule.path, rule.key_id
+                            ),
+                            false,
+                        )
+                    })?;
+                    let plain_bytes = serde_json::to_vec(target).map_err(|e| {
+                        LiliaError::new(
+                            ErrorCode::InvalidInput,
+                            format!("failed to serialize field '{}' to json: {e}", rule.path),
+                            false,
+                        )
+                    })?;
+                    let ad = if rule.bind_path_as_ad {
+                        Some(norm_path.as_bytes())
+                    } else {
+                        None
+                    };
                     encrypt_gcm(&plain_bytes, key_material.gcm_key(), ad)?
                 }
                 FieldCipherAlgorithm::DeterministicSiv => {
+                    let key_material = keys.get_key(&rule.key_id).ok_or_else(|| {
+                        LiliaError::new(
+                            ErrorCode::Unauthorized,
+                            format!(
+                                "cannot encrypt field '{}': compartment key '{}' is locked or not found",
+                                rule.path, rule.key_id
+                            ),
+                            false,
+                        )
+                    })?;
+                    let plain_bytes = serde_json::to_vec(target).map_err(|e| {
+                        LiliaError::new(
+                            ErrorCode::InvalidInput,
+                            format!("failed to serialize field '{}' to json: {e}", rule.path),
+                            false,
+                        )
+                    })?;
+                    let ad = if rule.bind_path_as_ad {
+                        Some(norm_path.as_bytes())
+                    } else {
+                        None
+                    };
                     encrypt_siv(&plain_bytes, key_material.siv_key(), ad)?
+                }
+                FieldCipherAlgorithm::HomomorphicPaillier => {
+                    let pk = keys.get_paillier_public(&rule.key_id).ok_or_else(|| {
+                        LiliaError::new(
+                            ErrorCode::Unauthorized,
+                            format!(
+                                "cannot encrypt field '{}': Paillier public key for compartment '{}' not found",
+                                rule.path, rule.key_id
+                            ),
+                            false,
+                        )
+                    })?;
+                    let ct = if let Some(i) = target.as_i64() {
+                        crate::fle::paillier::encrypt_i64(&pk, i)
+                    } else if let Some(f) = target.as_f64() {
+                        crate::fle::paillier::encrypt_f64(&pk, f, 2)
+                    } else if let Some(s) = target.as_str() {
+                        if let Ok(i) = s.parse::<i64>() {
+                            crate::fle::paillier::encrypt_i64(&pk, i)
+                        } else if let Ok(f) = s.parse::<f64>() {
+                            crate::fle::paillier::encrypt_f64(&pk, f, 2)
+                        } else {
+                            return Err(LiliaError::new(
+                                ErrorCode::InvalidInput,
+                                format!(
+                                    "field '{}' value '{}' cannot be parsed as numeric for Paillier encryption",
+                                    rule.path, s
+                                ),
+                                false,
+                            ));
+                        }
+                    } else {
+                        return Err(LiliaError::new(
+                            ErrorCode::InvalidInput,
+                            format!(
+                                "field '{}' must be a numeric value for Paillier encryption",
+                                rule.path
+                            ),
+                            false,
+                        ));
+                    };
+                    ct.to_bytes()
                 }
             };
 
@@ -211,6 +274,58 @@ fn decrypt_value_recursive(
                 return Ok(());
             };
 
+            if env.algorithm == FieldCipherAlgorithm::HomomorphicPaillier {
+                let Some(sk) = keys.get_paillier_private(&env.key_id) else {
+                    match mode {
+                        DecryptionMode::Tolerant => return Ok(()),
+                        DecryptionMode::Strict => {
+                            return Err(LiliaError::new(
+                                ErrorCode::Unauthorized,
+                                format!(
+                                    "compartment '{}' Paillier private key is locked",
+                                    env.key_id
+                                ),
+                                false,
+                            ));
+                        }
+                        DecryptionMode::Redact => {
+                            *val = Value::Null;
+                            return Ok(());
+                        }
+                    }
+                };
+                let Some(pk) = keys.get_paillier_public(&env.key_id) else {
+                    match mode {
+                        DecryptionMode::Tolerant => return Ok(()),
+                        DecryptionMode::Strict => {
+                            return Err(LiliaError::new(
+                                ErrorCode::Unauthorized,
+                                format!(
+                                    "compartment '{}' Paillier public key is missing",
+                                    env.key_id
+                                ),
+                                false,
+                            ));
+                        }
+                        DecryptionMode::Redact => {
+                            *val = Value::Null;
+                            return Ok(());
+                        }
+                    }
+                };
+
+                let ct = crate::fle::paillier::PaillierCiphertext::from_bytes(&env.ciphertext)?;
+                if ct.scale() == 0 {
+                    let int_val = crate::fle::paillier::decrypt_i64(&sk, &pk, &ct)?;
+                    *val = Value::Number(serde_json::Number::from(int_val));
+                } else {
+                    let float_val = crate::fle::paillier::decrypt_f64(&sk, &pk, &ct)?;
+                    *val =
+                        serde_json::Number::from_f64(float_val).map_or(Value::Null, Value::Number);
+                }
+                return Ok(());
+            }
+
             let Some(key_material) = keys.get_key(&env.key_id) else {
                 match mode {
                     DecryptionMode::Tolerant => return Ok(()),
@@ -250,6 +365,7 @@ fn decrypt_value_recursive(
                         decrypt_siv(&env.ciphertext, key_material.siv_key(), None)?
                     }
                 }
+                FieldCipherAlgorithm::HomomorphicPaillier => unreachable!(),
             };
 
             let restored_val: Value = serde_json::from_slice(&decrypted_bytes).map_err(|e| {

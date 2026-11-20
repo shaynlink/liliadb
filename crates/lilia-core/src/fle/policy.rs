@@ -14,6 +14,10 @@ pub enum FieldCipherAlgorithm {
     /// Enables direct equality searches (`WHERE field = :val`) and index lookups.
     #[serde(alias = "siv")]
     DeterministicSiv,
+    /// Paillier Additive Homomorphic Encryption.
+    /// Enables linear operations (SUM, scalar multiplication) on encrypted data in memory without decryption.
+    #[serde(alias = "paillier", alias = "homomorphic")]
+    HomomorphicPaillier,
 }
 
 impl FieldCipherAlgorithm {
@@ -22,6 +26,7 @@ impl FieldCipherAlgorithm {
         match self {
             Self::RandomizedGcm => "gcm",
             Self::DeterministicSiv => "siv",
+            Self::HomomorphicPaillier => "paillier",
         }
     }
 
@@ -30,6 +35,7 @@ impl FieldCipherAlgorithm {
         match s.trim().to_ascii_lowercase().as_str() {
             "gcm" | "randomized" | "randomized_gcm" => Some(Self::RandomizedGcm),
             "siv" | "deterministic" | "deterministic_siv" => Some(Self::DeterministicSiv),
+            "paillier" | "homomorphic" | "homomorphic_paillier" => Some(Self::HomomorphicPaillier),
             _ => None,
         }
     }

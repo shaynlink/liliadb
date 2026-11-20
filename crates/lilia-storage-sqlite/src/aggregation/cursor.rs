@@ -128,7 +128,6 @@ pub struct SqliteCursorStream<'a> {
     space: String,
     codec: Arc<dyn lilia_core::ValueCodec>,
     dict_registry: Arc<lilia_core::DictionaryRegistry>,
-    key_registry: Arc<lilia_core::KeyRegistry>,
     symbol_filter: Option<u64>,
     finished: bool,
 }
@@ -177,7 +176,7 @@ impl Iterator for SqliteCursorStream<'_> {
                         &self.space,
                         self.codec.as_ref(),
                         &self.dict_registry,
-                        Some(self.key_registry.as_ref()),
+                        None,
                     ) {
                         Ok(doc) => return Some(Ok(StreamDocument::new(id, doc))),
                         Err(e) => {
@@ -248,7 +247,6 @@ pub fn open_document_stream_filtered<'a>(
         space: space.to_string(),
         codec: Arc::clone(&db.codec),
         dict_registry: Arc::clone(&db.dict_registry),
-        key_registry: Arc::clone(&db.key_registry),
         symbol_filter,
         finished: false,
     }))

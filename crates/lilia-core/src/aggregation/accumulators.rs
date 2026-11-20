@@ -5,6 +5,13 @@
 )]
 
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use num_bigint::BigUint;
+
+use crate::fle::paillier::{homomorphic as paillier_ops, PaillierCiphertext, PaillierPublicKey};
+use crate::fle::EncryptedEnvelope;
+use crate::Result;
 
 /// Running counter accumulator.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -49,6 +56,85 @@ impl SumAccumulator {
     #[must_use]
     pub fn value(&self) -> f64 {
         self.sum
+    }
+}
+
+/// Running additive homomorphic accumulator over Paillier ciphertexts.
+///
+/// Multiplies encrypted residues modulo $n^2$ in memory without ever decrypting
+/// intermediate values, ensuring zero plaintext exposure in RAM:
+/// $$acc = \prod_{i=1}^k c_i \pmod{n^2}$$
+#[derive(Debug, Clone)]
+pub struct HomomorphicSumAccumulator {
+    public_key: Arc<PaillierPublicKey>,
+    acc: BigUint,
+    scale: u8,
+    count: u64,
+}
+
+impl HomomorphicSumAccumulator {
+    #[must_use]
+    pub fn new(public_key: Arc<PaillierPublicKey>) -> Self {
+        Self {
+            public_key,
+            acc: paillier_ops::zero_raw(),
+            scale: 0,
+            count: 0,
+        }
+    }
+
+    /// Multiplies a raw ciphertext integer into the accumulator.
+    pub fn update_raw(&mut self, c: &BigUint) {
+        self.acc = paillier_ops::add_raw(self.public_key.n_squared(), &self.acc, c);
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// Multiplies a `PaillierCiphertext` into the accumulator, tracking its scale.
+    pub fn update_ciphertext(&mut self, ct: &PaillierCiphertext) {
+        if self.count == 0 {
+            self.scale = ct.scale();
+        }
+        self.update_raw(ct.raw());
+    }
+
+    /// Decodes an `EncryptedEnvelope` (must be `ENC:paillier:...`) and accumulates it.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` if ciphertext is malformed.
+    pub fn update_envelope(&mut self, env: &EncryptedEnvelope) -> Result<()> {
+        let ct = PaillierCiphertext::from_bytes(&env.ciphertext)?;
+        self.update_ciphertext(&ct);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn accumulator(&self) -> &BigUint {
+        &self.acc
+    }
+
+    #[must_use]
+    pub fn scale(&self) -> u8 {
+        self.scale
+    }
+
+    #[must_use]
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+
+    #[must_use]
+    pub fn ciphertext(&self) -> PaillierCiphertext {
+        PaillierCiphertext::new(self.acc.clone(), self.scale)
+    }
+
+    #[must_use]
+    pub fn to_envelope(&self, key_id: &str) -> String {
+        EncryptedEnvelope::new(
+            crate::fle::FieldCipherAlgorithm::HomomorphicPaillier,
+            key_id,
+            self.ciphertext().to_bytes(),
+        )
+        .encode()
     }
 }
 
