@@ -106,6 +106,12 @@ impl Vocabularies {
         Ok(f(vocabulary))
     }
 
+    /// Forgets the vocabulary of `collection`, after a write that reported no term counts (an
+    /// undo): it is built again when next needed.
+    pub fn evict(&self, collection: &str) {
+        self.loaded.lock().remove(collection);
+    }
+
     /// Applies the term counts of a write committed at sequence `first` to the vocabularies
     /// built before it.
     pub fn apply(&self, deltas: &Deltas, first: u64) {

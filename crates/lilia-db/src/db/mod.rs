@@ -3,6 +3,7 @@
 
 mod proofs;
 mod schema;
+mod undo;
 
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Bound;
@@ -29,6 +30,9 @@ use crate::session::Session;
 use crate::vectors::VectorIndexes;
 use crate::write::{Plan, Planner};
 
+use self::undo::Undo;
+pub use self::undo::UndoStep;
+
 /// Version of this layer's on-disk layout ([`crate::keys`], [`crate::record`]).
 const FORMAT_VERSION: u8 = 1;
 /// Documents indexed, or index entries deleted, per engine batch while building or dropping an
@@ -50,6 +54,9 @@ pub struct Options {
     /// How long old versions are kept for reads in the past ([`crate::history`]); zero keeps
     /// none. Sets [`lilia_engine::Options::retain_history`].
     pub history_retention: Duration,
+    /// Commits [`Database::undo`] can undo, newest first; zero (the default) makes commits not
+    /// undoable. Needs a [`Options::history_retention`]: an undo restores what the history kept.
+    pub undo_depth: usize,
 }
 
 /// Default [`Options::history_retention`]: a week.
@@ -64,6 +71,7 @@ impl Options {
             ledger: false,
             verify_ledger: LedgerVerifyMode::None,
             history_retention: DEFAULT_HISTORY_RETENTION,
+            undo_depth: 0,
         }
     }
 }
@@ -92,6 +100,7 @@ pub struct Database {
     /// HNSW indexes built so far.
     vector_indexes: VectorIndexes,
     history: History,
+    undo: Undo,
 }
 
 impl Database {
@@ -127,6 +136,7 @@ impl Database {
                 )))
             }
         }
+        let undo = Undo::open(&engine, options.undo_depth, history.enabled())?;
         let catalog = Catalog::load(&engine)?;
         let ledger = Ledger::open(&engine, options.ledger, max_group_bytes)?;
         let db = Self {
@@ -137,6 +147,7 @@ impl Database {
             vocabularies: Vocabularies::default(),
             vector_indexes: VectorIndexes::default(),
             history,
+            undo,
         };
         db.history.trim(&db.engine, now_ms())?;
         db.finish_maintenance()?;
@@ -218,10 +229,22 @@ impl Database {
 
     /// Plans with `plan` and commits, planning again while the plan goes stale.
     pub(crate) fn run(&self, plan: impl Fn(&Catalog) -> Result<Plan>) -> Result<Vec<Outcome>> {
-        self.history.maybe_trim(&self.engine, now_ms())?;
+        self.commit_plan(plan, true)
+    }
+
+    /// As [`Database::run`]; `undoable` commits write an undo entry ([`undo`]).
+    fn commit_plan(
+        &self,
+        plan: impl Fn(&Catalog) -> Result<Plan>,
+        undoable: bool,
+    ) -> Result<Vec<Outcome>> {
+        let now = now_ms();
+        self.history.maybe_trim(&self.engine, now)?;
+        self.undo.maybe_trim(&self.engine, now)?;
         loop {
             let catalog = self.catalog.read();
             let mut plan = plan(&catalog)?;
+            let clears_redo = undoable && self.undo.record(&self.engine, &mut plan)?;
             let planned = now_ms();
             self.history.mark(&mut plan, planned);
             let vocabulary = std::mem::take(&mut plan.vocabulary);
@@ -233,6 +256,9 @@ impl Database {
             drop(catalog);
             if let Attempt::Committed { first, outcomes } = attempt {
                 self.history.committed(planned);
+                if clears_redo {
+                    self.undo.redo_cleared();
+                }
                 self.vocabularies.apply(&vocabulary, first);
                 self.vector_indexes.apply(&vectors, first)?;
                 return Ok(outcomes);
@@ -287,6 +313,7 @@ impl Database {
         } else {
             self.engine.put(keys::schema(name), schema.encode()?)?;
         }
+        self.undo.clear(&self.engine)?;
         catalog.set(name, schema);
         Ok(())
     }

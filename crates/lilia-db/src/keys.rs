@@ -31,6 +31,7 @@
 //! | `0x17` | space `\0` entity id `\0` valid from (ordered) | current bitemporal slice ([`crate::bitemporal`]) |
 //! | `0x18` | space `\0` entity id `\0` superseded at, valid from (ordered) | past bitemporal slice |
 //! | `0x19` | space `\0` entity id | transaction time of the entity's last change |
+//! | `0x1A` | `u` or `r`, entry id | undo or redo entry: the keys of a commit ([`crate::Database::undo`]) |
 //!
 //! Collection names never contain control characters ([`validate_name`]), so the `\0` after a
 //! name separates collections and keeps them in name order.
@@ -64,6 +65,7 @@ pub const CLOCK: u8 = 0x16;
 pub const BT_CURRENT: u8 = 0x17;
 pub const BT_PAST: u8 = 0x18;
 pub const BT_STATE: u8 = 0x19;
+pub const UNDO: u8 = 0x1A;
 
 /// Tags of the keyspaces whose records the ledger attests. Derived keyspaces (secondary
 /// index entries, inbound edge mirrors) are not records of their own.

@@ -135,7 +135,7 @@ fn read_commit(engine: &Db, index: u64) -> Result<CommitRecord> {
 }
 
 /// Model, collection and id of the record stored at `key`, as ledger deltas name them.
-fn record_identity(key: &[u8]) -> Option<(Model, String, String)> {
+pub(crate) fn record_identity(key: &[u8]) -> Option<(Model, String, String)> {
     let (&tag, rest) = key.split_first()?;
     let split = rest.iter().position(|&b| b == 0)?;
     let space = String::from_utf8(rest[..split].to_vec()).ok()?;
