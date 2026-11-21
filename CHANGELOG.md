@@ -49,12 +49,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`lilia-engine`**: `WriteBatch::at_sequence` (commit only at a given sequence number),
   `Db::last_sequence`, and the group commit queue exported as `GroupCommit` for layers that
   serialize their own commits.
+- **`lilia-db` models (alpha.3b)**: every data model now runs on `lilia-engine`, each a model
+  handle of a session or transaction whose writes are batch writes like any other, read through
+  the caller's policies, with ledger records and proofs:
+  - graph nodes and edges (outbound and inbound adjacency), traversals;
+  - full-text search: postings, BM25, phrase, fuzzy and phonetic queries, suggestions;
+  - vectors with exact search and an optional HNSW index (`f32`, `i8`, bits);
+  - time series in compressed chunks of up to 1,024 points, with range statistics, lifecycle
+    policies (downsampling then expiry per tier, resumable) and late writes;
+  - geofences found by the points they contain (a multi-level grid, then an exact polygon test)
+    and GPS tracks with exact H3 proximity;
+  - CRDTs (PN-counters, add-wins OR-sets, LWW JSON documents) merged with remote replica states,
+    stored so that concurrent writers of one object rarely conflict;
+  - bitemporal entities: values over valid-time intervals recorded at transaction times, a
+    permanent audit trail, reads as known now or at any earlier time.
+- **`lilia-db` history**: `Options::history_retention` (a week by default) keeps old versions in the
+  engine; `Session::at_version` / `at_time` read the database as it was, through every model;
+  `json_history`, `kv_history` and `json_diff` list and compare the versions of a record.
+  `Options::undo_depth` makes commits undoable (`Database::undo`, `redo`, `undo_history`).
+  Validated by 22,000 simulated power cuts that now write every model in each batch, then check
+  every model, the bitemporal audit trail, and an undo then redo of the last batch.
+- **`lilia-engine`**: history retention (`Options::retain_history`, `Db::set_history_horizon`),
+  snapshots at a past sequence (`Db::snapshot_at`) and the kept versions of a key (`Db::history`).
 
 ### Changed
 - `docs/benchmarks.md` is generated from measurements; the README no longer carries hand-written
   benchmark numbers.
 - JavaScript benchmark drivers moved out of the published `@liliadb/node` package into
   `tools/benchmarks/sdk/`, one process per surface, with read workloads added.
+
+### Fixed
+- **`lilia-engine`**: a run moved to the next level unchanged had its file deleted once the moved
+  copy was compacted away, while an older version still listed it; a long read through that
+  version (ledger verification) then failed with "file not found". The file now belongs to every
+  placement of the run.
 
 ### Removed
 - `lilia_bench`, `bench_rusqlite` and `lilia_bench_analytics` binaries and the `bench-bin` feature of
