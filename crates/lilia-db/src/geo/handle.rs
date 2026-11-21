@@ -10,8 +10,8 @@ use serde_json::json;
 
 use super::polygon::validate_position;
 use super::store::{
-    cell_entry_parts, cell_prefix, decode_point, fence_key, from_ordered, grid_cells_at, point_key,
-    track_prefix, Fence, CELL_RESOLUTION,
+    cell_entry_parts, cell_prefix, decode_point, fence_key, grid_cells_at, point_key, track_prefix,
+    Fence, CELL_RESOLUTION,
 };
 use super::GeoWrite;
 use crate::batch::{Outcome, Write};
@@ -187,7 +187,7 @@ impl<'c, C: Context> Geo<'c, C> {
         for item in reader.range(Bound::Included(&first), Bound::Excluded(&last))? {
             let item = item?;
             reader.observe(&item);
-            let timestamp = from_ordered(keys::suffix(&item.key, &prefix))
+            let timestamp = keys::from_ordered(keys::suffix(&item.key, &prefix))
                 .ok_or_else(|| corruption("unreadable GPS point key"))?;
             points.push(decode_point(timestamp, &item.value)?);
         }

@@ -29,6 +29,7 @@ pub mod fts;
 pub mod geo;
 pub mod graph;
 pub mod guard;
+pub mod history;
 mod keys;
 pub mod ledger;
 mod read;
@@ -43,21 +44,22 @@ mod write;
 pub use batch::{Batch, Outcome, Write};
 pub use context::Context;
 pub use crdt::{Crdt, CrdtCounter, CrdtDoc, CrdtSet, CrdtWrite};
-pub use db::{Database, Options};
+pub use db::{Database, Options, DEFAULT_HISTORY_RETENTION};
 pub use error::{Error, Result};
 pub use fts::{Fts, FtsWrite};
 pub use geo::{Fence, Geo, GeoWrite, Polygon, TrackPoint};
 pub use graph::{Graph, GraphWrite};
 pub use guard::Access;
+pub use history::{JsonRevision, KvRevision};
 pub use ledger::mmr::MmrProof;
 pub use ledger::{CommitProof, RecordProof};
 pub use lilia_core::{
-    BinaryDoc, Direction, GeofenceMatch, GpsPoint, DownsampleAggregation, FtsFuzzyHit, FtsHit, FtsPhoneticHit,
-    FtsSuggestion, GraphEdge, GraphNode, HnswConfig, IndexOptions, JsonEntry, JsonIndexInfo,
-    KvEntry, LedgerCommit, LedgerVerificationReport, LedgerVerifyMode, MaskFunction, MaskingRule,
-    NamedPolicy, Policy, PolicyAction, SecurityContext, TimeSeriesLifecyclePolicy, TimeSeriesPoint,
-    TimeSeriesRetentionRule, TimeSeriesRetentionStats, TimeSeriesStats, VectorElementType,
-    VectorHit, VectorIndexInfo, VectorMetric,
+    BinaryDoc, Direction, DownsampleAggregation, FtsFuzzyHit, FtsHit, FtsPhoneticHit,
+    FtsSuggestion, GeofenceMatch, GpsPoint, GraphEdge, GraphNode, HnswConfig, IndexOptions,
+    JsonEntry, JsonIndexInfo, KvEntry, LedgerCommit, LedgerVerificationReport, LedgerVerifyMode,
+    MaskFunction, MaskingRule, NamedPolicy, Policy, PolicyAction, SecurityContext,
+    TimeSeriesLifecyclePolicy, TimeSeriesPoint, TimeSeriesRetentionRule, TimeSeriesRetentionStats,
+    TimeSeriesStats, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric,
 };
 pub use read::Scan;
 pub use session::Session;

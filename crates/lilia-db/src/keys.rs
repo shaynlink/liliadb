@@ -27,6 +27,7 @@
 //! | `0x13` | space `\0` counter id `\0` actor | PN-counter totals of one actor ([`crate::crdt`]) |
 //! | `0x14` | space `\0` set id `\0` element (escaped), tag | OR-set entry: live or tombstoned |
 //! | `0x15` | space `\0` document id `\0` path | LWW document field |
+//! | `0x16` | commit time (ms, ordered) | empty: a time mark ([`crate::history`]) |
 //!
 //! Collection names never contain control characters ([`validate_name`]), so the `\0` after a
 //! name separates collections and keeps them in name order.
@@ -56,6 +57,7 @@ pub const GEO_CELL: u8 = 0x12;
 pub const CRDT_COUNTER: u8 = 0x13;
 pub const CRDT_SET: u8 = 0x14;
 pub const CRDT_FIELD: u8 = 0x15;
+pub const CLOCK: u8 = 0x16;
 
 /// Tags of the keyspaces whose records the ledger attests. Derived keyspaces (secondary
 /// index entries, inbound edge mirrors) are not records of their own.
@@ -98,6 +100,24 @@ pub fn validate_name(field: &str, value: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Key bytes of `value` that sort like the value.
+pub fn ordered(value: i64) -> [u8; 8] {
+    (value.cast_unsigned() ^ (1 << 63)).to_be_bytes()
+}
+
+/// The value of [`ordered`] bytes.
+pub fn from_ordered(bytes: &[u8]) -> Option<i64> {
+    let bytes: [u8; 8] = bytes.try_into().ok()?;
+    Some((u64::from_be_bytes(bytes) ^ (1 << 63)).cast_signed())
+}
+
+/// Time mark of `time_ms`.
+pub fn clock(time_ms: i64) -> Bytes {
+    let mut key = vec![CLOCK];
+    key.extend_from_slice(&ordered(time_ms));
+    key.into()
 }
 
 /// `tag | name | 0x00`: the prefix of every key of one collection.
@@ -274,6 +294,18 @@ mod tests {
         }
         assert_eq!(split_escaped(b"ab"), None, "unterminated");
         assert_eq!(split_escaped(&[b'a', 0, 7]), None, "bad escape");
+    }
+
+    #[test]
+    fn ordered_integers_sort_like_their_values() {
+        let values = [i64::MIN, -1_000, -1, 0, 1, 1_000, i64::MAX];
+        for pair in values.windows(2) {
+            assert!(ordered(pair[0]) < ordered(pair[1]));
+        }
+        for value in values {
+            assert_eq!(from_ordered(&ordered(value)), Some(value));
+        }
+        assert_eq!(from_ordered(b"short"), None);
     }
 
     #[test]

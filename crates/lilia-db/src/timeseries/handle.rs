@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::chunk::{self, Summary};
 use super::TimeSeriesWrite;
-use super::{bound_of, chunk_key, from_ordered, tier, tier_end, validate_resolution};
+use super::{bound_of, chunk_key, tier, tier_end, validate_resolution};
 use crate::batch::{Outcome, Write};
 use crate::context::{guard, Context};
 use crate::error::{corruption, Result};
@@ -311,7 +311,7 @@ fn resolutions(reader: &impl Source, series: &str) -> Result<Vec<i64>> {
         reader.observe(&item);
         let resolution = keys::suffix(&item.key, &base)
             .get(..8)
-            .and_then(from_ordered)
+            .and_then(keys::from_ordered)
             .ok_or_else(|| corruption("unreadable series chunk key"))?;
         out.push(resolution);
         from = tier_end(&tier(series, resolution));

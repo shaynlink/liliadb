@@ -1,6 +1,9 @@
 //! Sessions: reads and writes on behalf of one caller.
 
+use std::sync::Arc;
+
 use lilia_core::{JsonEntry, KvEntry};
+use lilia_engine::Snapshot;
 use serde_json::{Map, Value};
 
 use crate::batch::{Batch, Outcome, Write};
@@ -12,6 +15,7 @@ use crate::fts::Fts;
 use crate::geo::Geo;
 use crate::graph::Graph;
 use crate::guard::{Access, Guard};
+use crate::history::{self, JsonRevision, KvRevision};
 use crate::keys::validate_name;
 use crate::read::{self, Latest, Scan};
 use crate::record::now_ms;
@@ -20,15 +24,150 @@ use crate::txn::Transaction;
 use crate::vectors::Vectors;
 
 /// Reads and writes on behalf of one caller. Cheap to create and clone.
+///
+/// A session in the past ([`Session::at_version`], [`Session::at_time`]) reads the database as
+/// it was then, through every model, and refuses writes with [`Error::ReadOnly`].
 #[derive(Debug, Clone)]
 pub struct Session<'db> {
     db: &'db Database,
     access: Access,
+    past: Option<Past>,
+}
+
+/// The state a session in the past reads.
+#[derive(Debug, Clone)]
+struct Past {
+    snapshot: Arc<Snapshot>,
+    /// The time key-value expiry is judged at.
+    time_ms: i64,
 }
 
 impl<'db> Session<'db> {
     pub(crate) fn new(db: &'db Database, access: Access) -> Self {
-        Self { db, access }
+        Self {
+            db,
+            access,
+            past: None,
+        }
+    }
+
+    /// This session's caller, reading the database as it was after the commit of `version`.
+    /// Key-value expiry is judged at the current time.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::HistoryUnavailable`] for a version older than [`Database::oldest_version`];
+    /// [`Error::InvalidArgument`] for one not written yet.
+    pub fn at_version(&self, version: u64) -> Result<Self> {
+        self.past_at(version, now_ms())
+    }
+
+    /// This session's caller, reading the database as it was at `time_ms` (milliseconds since
+    /// the epoch); see [`crate::history`] for the precision. Key-value expiry is judged at
+    /// `time_ms`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::version_at`].
+    pub fn at_time(&self, time_ms: i64) -> Result<Self> {
+        let version = self.db.version_at(time_ms)?;
+        self.past_at(version, time_ms)
+    }
+
+    fn past_at(&self, version: u64, time_ms: i64) -> Result<Self> {
+        let snapshot = self
+            .db
+            .engine()
+            .snapshot_at(version)
+            .map_err(history::unavailable)?;
+        Ok(Self {
+            db: self.db,
+            access: self.access.clone(),
+            past: Some(Past {
+                snapshot: Arc::new(snapshot),
+                time_ms,
+            }),
+        })
+    }
+
+    /// The version a session in the past reads at; `None` for the latest state.
+    #[must_use]
+    pub fn version(&self) -> Option<u64> {
+        self.past.as_ref().map(|p| p.snapshot.sequence())
+    }
+
+    /// The versions of document `id` of `space` kept in the history window (up to this
+    /// session's version), oldest first, as this caller may read them: a version a read policy
+    /// rejects is left out, and masked fields are masked.
+    ///
+    /// # Errors
+    ///
+    /// Invalid space, records that do not decode, engine errors.
+    pub fn json_history(&self, space: &str, id: &str) -> Result<Vec<JsonRevision>> {
+        validate_name("space", space)?;
+        history::json_revisions(
+            self.db.engine(),
+            &self.guard(space),
+            (space, id),
+            self.upto(),
+        )
+    }
+
+    /// The versions of `key` of `namespace`, as [`Session::json_history`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::json_history`].
+    pub fn kv_history(&self, namespace: &str, key: &[u8]) -> Result<Vec<KvRevision>> {
+        validate_name("namespace", namespace)?;
+        history::kv_revisions(
+            self.db.engine(),
+            &self.guard(namespace),
+            (namespace, key),
+            self.upto(),
+        )
+    }
+
+    /// The JSON patch (RFC 6902) from document `id` of `space` at version `from` to the
+    /// document at version `to`, as this caller reads them; an absent document is `null`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::at_version`] and [`Session::json_get`].
+    pub fn json_diff(&self, space: &str, id: &str, from: u64, to: u64) -> Result<Value> {
+        let value = |version| -> Result<Value> {
+            Ok(self
+                .at_version(version)?
+                .json_get(space, id)?
+                .map_or(Value::Null, |doc| doc.value()))
+        };
+        Ok(lilia_core::json_patch::diff(&value(from)?, &value(to)?))
+    }
+
+    fn upto(&self) -> u64 {
+        self.version().unwrap_or(u64::MAX)
+    }
+
+    /// The source of a read: this session's past state, or the latest one (`pinned` for a
+    /// multi-step read).
+    fn latest(&self, pinned: bool) -> Latest<'db> {
+        match &self.past {
+            Some(past) => Latest::at(self.db.engine(), &past.snapshot),
+            None if pinned => Latest::pinned(self.db.engine()),
+            None => Latest::now(self.db.engine()),
+        }
+    }
+
+    /// The time key-value expiry is judged at.
+    fn now(&self) -> i64 {
+        self.past.as_ref().map_or_else(now_ms, |p| p.time_ms)
+    }
+
+    fn execute(&self, writes: &[Write]) -> Result<Vec<Outcome>> {
+        if self.past.is_some() {
+            return Err(Error::ReadOnly);
+        }
+        self.db.execute(&self.access, writes, None)
     }
 
     #[must_use]
@@ -48,11 +187,11 @@ impl<'db> Session<'db> {
     pub fn kv_get(&self, namespace: &str, key: &[u8]) -> Result<Option<KvEntry>> {
         validate_name("namespace", namespace)?;
         read::kv_get(
-            &Latest::now(self.db.engine()),
+            &self.latest(false),
             &self.guard(namespace),
             namespace,
             key,
-            now_ms(),
+            self.now(),
         )
     }
 
@@ -64,11 +203,11 @@ impl<'db> Session<'db> {
     pub fn kv_scan(&self, namespace: &str, scan: &Scan) -> Result<Vec<KvEntry>> {
         validate_name("namespace", namespace)?;
         read::kv_scan(
-            &Latest::pinned(self.db.engine()),
+            &self.latest(true),
             &self.guard(namespace),
             namespace,
             scan,
-            now_ms(),
+            self.now(),
         )
     }
 
@@ -79,12 +218,7 @@ impl<'db> Session<'db> {
     /// Invalid space, engine errors.
     pub fn json_get(&self, space: &str, id: &str) -> Result<Option<JsonEntry>> {
         validate_name("space", space)?;
-        read::doc_get(
-            &Latest::now(self.db.engine()),
-            &self.guard(space),
-            space,
-            id,
-        )
+        read::doc_get(&self.latest(false), &self.guard(space), space, id)
     }
 
     /// Documents of `space` in id order.
@@ -111,7 +245,7 @@ impl<'db> Session<'db> {
         let schema = self.db.schema(space);
         let guard = Guard::new(&self.access, schema.clone());
         read::doc_find(
-            &Latest::pinned(self.db.engine()),
+            &self.latest(true),
             &guard,
             schema.as_deref(),
             space,
@@ -127,7 +261,7 @@ impl<'db> Session<'db> {
     /// [`Error::Conflict`] for a failed `if_version`, [`Error::Denied`] for a write a policy
     /// rejects, invalid names, engine errors. Nothing is written on error.
     pub fn commit(&self, batch: &Batch) -> Result<Vec<Outcome>> {
-        self.db.execute(&self.access, batch.writes(), None)
+        self.execute(batch.writes())
     }
 
     /// Commits one write.
@@ -136,9 +270,7 @@ impl<'db> Session<'db> {
     ///
     /// As [`Session::commit`].
     pub fn write(&self, write: &Write) -> Result<Outcome> {
-        let mut outcomes = self
-            .db
-            .execute(&self.access, std::slice::from_ref(write), None)?;
+        let mut outcomes = self.execute(std::slice::from_ref(write))?;
         outcomes
             .pop()
             .ok_or_else(|| corruption("a write produced no outcome"))
@@ -247,10 +379,16 @@ impl<'db> Session<'db> {
         TimeSeries::new(self, name)
     }
 
-    /// Starts an optimistic transaction over a snapshot of the database as of now.
+    /// Starts an optimistic transaction over a snapshot of the database as of now, or, for a
+    /// session in the past, as of its version: its commit then fails if a record it read has
+    /// changed since.
     #[must_use]
     pub fn transaction(&self) -> Transaction<'db> {
-        Transaction::new(self.db, self.access.clone())
+        let snapshot = self.past.as_ref().map_or_else(
+            || Arc::new(self.db.engine().snapshot()),
+            |past| Arc::clone(&past.snapshot),
+        );
+        Transaction::new(self.db, self.access.clone(), snapshot)
     }
 }
 
@@ -266,14 +404,10 @@ impl sealed::Inner for Session<'_> {
     }
 
     fn reader(&self, pinned: bool) -> Reader<'_> {
-        if pinned {
-            Reader::Latest(Latest::pinned(self.db.engine()))
-        } else {
-            Reader::Latest(Latest::now(self.db.engine()))
-        }
+        Reader::Latest(self.latest(pinned))
     }
 
     fn submit(&self, writes: Vec<Write>) -> Result<Vec<Outcome>> {
-        self.db.execute(&self.access, &writes, None)
+        self.execute(&writes)
     }
 }

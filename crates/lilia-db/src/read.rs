@@ -5,6 +5,7 @@
 //! functions are the only ones that turn stored records into entries.
 
 use std::ops::Bound;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use lilia_core::{JsonEntry, KvEntry};
@@ -106,7 +107,7 @@ pub trait Source {
 #[derive(Debug)]
 pub struct Latest<'a> {
     engine: &'a Db,
-    snapshot: Option<Snapshot>,
+    snapshot: Option<Arc<Snapshot>>,
 }
 
 impl<'a> Latest<'a> {
@@ -122,7 +123,15 @@ impl<'a> Latest<'a> {
     pub fn pinned(engine: &'a Db) -> Self {
         Self {
             engine,
-            snapshot: Some(engine.snapshot()),
+            snapshot: Some(Arc::new(engine.snapshot())),
+        }
+    }
+
+    /// Reads the state of `snapshot`.
+    pub fn at(engine: &'a Db, snapshot: &Arc<Snapshot>) -> Self {
+        Self {
+            engine,
+            snapshot: Some(Arc::clone(snapshot)),
         }
     }
 }

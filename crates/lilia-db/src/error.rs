@@ -40,6 +40,14 @@ pub enum Error {
     #[error("not found: {0}")]
     NotFound(String),
 
+    /// A read in the past, before the history kept ([`crate::Options::history_retention`]).
+    #[error("history unavailable: {0}")]
+    HistoryUnavailable(String),
+
+    /// A write through a session in the past ([`crate::Session::at_version`]).
+    #[error("a session in the past is read-only")]
+    ReadOnly,
+
     /// A ledger operation on a database opened without a ledger.
     #[error("the ledger is not enabled for this database")]
     LedgerDisabled,

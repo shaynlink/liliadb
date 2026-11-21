@@ -114,6 +114,21 @@ impl Plan {
         }
     }
 
+    /// Puts a write before every other one of the plan, shifting the operation indices that
+    /// refer to them.
+    pub fn prepend(&mut self, key: Bytes, value: Option<Bytes>) {
+        self.ops.insert(0, (key, value));
+        for op in self.results.iter_mut().filter_map(|(op, _)| op.as_mut()) {
+            *op += 1;
+        }
+        for delta in &mut self.deltas {
+            delta.op += 1;
+        }
+        for vector in &mut self.vectors {
+            vector.op += 1;
+        }
+    }
+
     /// Approximate size of the plan's writes, to bound commit groups.
     pub fn approximate_bytes(&self) -> usize {
         self.ops

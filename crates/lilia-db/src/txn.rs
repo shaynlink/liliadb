@@ -14,6 +14,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::iter::Peekable;
 use std::ops::Bound;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use lilia_core::{BinaryDoc, JsonEntry, KvEntry};
@@ -42,7 +43,7 @@ use crate::write::overlay;
 pub struct Transaction<'db> {
     db: &'db Database,
     access: Access,
-    snapshot: Snapshot,
+    snapshot: Arc<Snapshot>,
     reads: RefCell<HashMap<Bytes, Option<u64>>>,
     writes: RefCell<Vec<Write>>,
     /// Records as the transaction's writes leave them; `None` for a delete.
@@ -192,8 +193,7 @@ where
 }
 
 impl<'db> Transaction<'db> {
-    pub(crate) fn new(db: &'db Database, access: Access) -> Self {
-        let snapshot = db.engine().snapshot();
+    pub(crate) fn new(db: &'db Database, access: Access, snapshot: Arc<Snapshot>) -> Self {
         Self {
             db,
             access,

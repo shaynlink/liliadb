@@ -8,6 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use lilia_core::{LedgerVerifyMode, SecurityContext};
@@ -20,6 +21,7 @@ use crate::catalog::{Catalog, Schema};
 use crate::error::{corruption, invalid, Result};
 use crate::fts::Vocabularies;
 use crate::guard::Access;
+use crate::history::History;
 use crate::keys::{self};
 use crate::ledger::{Attempt, Ledger};
 use crate::record::{decode_kv, now_ms};
@@ -45,7 +47,13 @@ pub struct Options {
     pub ledger: bool,
     /// Verification of the ledger when the database opens; an invalid ledger fails the open.
     pub verify_ledger: LedgerVerifyMode,
+    /// How long old versions are kept for reads in the past ([`crate::history`]); zero keeps
+    /// none. Sets [`lilia_engine::Options::retain_history`].
+    pub history_retention: Duration,
 }
+
+/// Default [`Options::history_retention`]: a week.
+pub const DEFAULT_HISTORY_RETENTION: Duration = Duration::from_hours(7 * 24);
 
 impl Options {
     /// Engine buffers sized from `hardware`, no ledger.
@@ -55,6 +63,7 @@ impl Options {
             engine: lilia_engine::Options::for_hardware(hardware),
             ledger: false,
             verify_ledger: LedgerVerifyMode::None,
+            history_retention: DEFAULT_HISTORY_RETENTION,
         }
     }
 }
@@ -82,6 +91,7 @@ pub struct Database {
     vocabularies: Vocabularies,
     /// HNSW indexes built so far.
     vector_indexes: VectorIndexes,
+    history: History,
 }
 
 impl Database {
@@ -102,7 +112,10 @@ impl Database {
     /// As [`Database::open`].
     pub fn open_with(vfs: Arc<dyn Vfs>, path: impl AsRef<Path>, options: Options) -> Result<Self> {
         let max_group_bytes = options.engine.max_group_bytes;
-        let engine = Db::open_with(vfs, path, options.engine)?;
+        let history = History::new(options.history_retention);
+        let mut engine_options = options.engine;
+        engine_options.retain_history = history.enabled();
+        let engine = Db::open_with(vfs, path, engine_options)?;
         match engine.get(keys::FORMAT)? {
             None => {
                 engine.put(Bytes::from_static(keys::FORMAT), vec![FORMAT_VERSION])?;
@@ -123,7 +136,9 @@ impl Database {
             admin: Mutex::new(()),
             vocabularies: Vocabularies::default(),
             vector_indexes: VectorIndexes::default(),
+            history,
         };
+        db.history.trim(&db.engine, now_ms())?;
         db.finish_maintenance()?;
         if db.ledger.is_some() && options.verify_ledger != LedgerVerifyMode::None {
             let report = Ledger::verify(&db.engine, options.verify_ledger)?;
@@ -203,9 +218,12 @@ impl Database {
 
     /// Plans with `plan` and commits, planning again while the plan goes stale.
     pub(crate) fn run(&self, plan: impl Fn(&Catalog) -> Result<Plan>) -> Result<Vec<Outcome>> {
+        self.history.maybe_trim(&self.engine, now_ms())?;
         loop {
             let catalog = self.catalog.read();
             let mut plan = plan(&catalog)?;
+            let planned = now_ms();
+            self.history.mark(&mut plan, planned);
             let vocabulary = std::mem::take(&mut plan.vocabulary);
             let vectors = std::mem::take(&mut plan.vectors);
             let attempt = match &self.ledger {
@@ -214,6 +232,7 @@ impl Database {
             };
             drop(catalog);
             if let Attempt::Committed { first, outcomes } = attempt {
+                self.history.committed(planned);
                 self.vocabularies.apply(&vocabulary, first);
                 self.vector_indexes.apply(&vectors, first)?;
                 return Ok(outcomes);
@@ -323,6 +342,33 @@ impl Database {
             Ok(planner.finish())
         })?;
         Ok(outcomes.len() as u64)
+    }
+
+    /// Moves the start of the history window to now minus [`Options::history_retention`]:
+    /// compactions may then drop the versions only older reads would see. Writers do this at
+    /// most once a second.
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    pub fn trim_history(&self) -> Result<()> {
+        self.history.trim(&self.engine, now_ms())
+    }
+
+    /// The oldest version a session can still read at ([`Session::at_version`]).
+    #[must_use]
+    pub fn oldest_version(&self) -> u64 {
+        self.engine.oldest_sequence()
+    }
+
+    /// The version current at `time_ms` (milliseconds since the epoch): the newest commit
+    /// planned at or before it; see [`crate::history`] for the precision.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::HistoryUnavailable`] without history or before the window; engine errors.
+    pub fn version_at(&self, time_ms: i64) -> Result<u64> {
+        self.history.version_at(&self.engine, time_ms)
     }
 
     /// Writes the memtable to a sorted run.

@@ -108,20 +108,10 @@ pub(crate) fn validate_resolution(resolution_ms: i64) -> Result<()> {
     Ok(())
 }
 
-/// Key bytes of `value` that sort like the value.
-fn ordered(value: i64) -> [u8; 8] {
-    (value.cast_unsigned() ^ (1 << 63)).to_be_bytes()
-}
-
-fn from_ordered(bytes: &[u8]) -> Option<i64> {
-    let bytes: [u8; 8] = bytes.try_into().ok()?;
-    Some((u64::from_be_bytes(bytes) ^ (1 << 63)).cast_signed())
-}
-
 /// Prefix of the chunks of tier `resolution` of `series`.
 pub(crate) fn tier(series: &str, resolution: i64) -> Vec<u8> {
     let mut key = keys::collection(keys::TS_CHUNK, series);
-    key.extend_from_slice(&ordered(resolution));
+    key.extend_from_slice(&keys::ordered(resolution));
     key
 }
 
@@ -133,19 +123,20 @@ pub(crate) fn tier_end(tier: &[u8]) -> Vec<u8> {
 
 pub(crate) fn chunk_key(tier: &[u8], bound: i64) -> Bytes {
     let mut key = tier.to_vec();
-    key.extend_from_slice(&ordered(bound));
+    key.extend_from_slice(&keys::ordered(bound));
     key.into()
 }
 
 /// The upper bound of the chunk at `key` of `tier`.
 pub(crate) fn bound_of(key: &[u8], tier: &[u8]) -> Result<i64> {
-    from_ordered(keys::suffix(key, tier)).ok_or_else(|| corruption("unreadable series chunk key"))
+    keys::from_ordered(keys::suffix(key, tier))
+        .ok_or_else(|| corruption("unreadable series chunk key"))
 }
 
 /// The state record of tier `resolution` of `series`: its downsampling watermark.
 pub(crate) fn state_key(series: &str, resolution: i64) -> Bytes {
     let mut key = keys::collection(keys::TS_STATE, series);
-    key.extend_from_slice(&ordered(resolution));
+    key.extend_from_slice(&keys::ordered(resolution));
     key.into()
 }
 
@@ -176,8 +167,8 @@ pub(crate) fn identity(rest: &[u8]) -> Option<String> {
     let (resolution, bound) = rest.split_at_checked(8)?;
     Some(format!(
         "{}:{}",
-        from_ordered(resolution)?,
-        from_ordered(bound)?
+        keys::from_ordered(resolution)?,
+        keys::from_ordered(bound)?
     ))
 }
 

@@ -136,16 +136,6 @@ pub fn grid_cells_at(collection: &str, lon: f64, lat: f64) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Ordered key bytes of a timestamp.
-fn ordered(value: i64) -> [u8; 8] {
-    (value.cast_unsigned() ^ (1 << 63)).to_be_bytes()
-}
-
-pub fn from_ordered(bytes: &[u8]) -> Option<i64> {
-    let bytes: [u8; 8] = bytes.try_into().ok()?;
-    Some((u64::from_be_bytes(bytes) ^ (1 << 63)).cast_signed())
-}
-
 /// Prefix of the points of `track`.
 pub fn track_prefix(collection: &str, track: &str) -> Vec<u8> {
     let mut key = keys::collection(keys::GEO_POINT, collection);
@@ -156,7 +146,7 @@ pub fn track_prefix(collection: &str, track: &str) -> Vec<u8> {
 
 pub fn point_key(collection: &str, track: &str, timestamp: i64) -> Bytes {
     let mut key = track_prefix(collection, track);
-    key.extend_from_slice(&ordered(timestamp));
+    key.extend_from_slice(&keys::ordered(timestamp));
     key.into()
 }
 
@@ -169,7 +159,7 @@ pub fn cell_prefix(collection: &str, cell: u64) -> Vec<u8> {
 
 fn cell_entry(collection: &str, cell: u64, timestamp: i64, track: &str) -> Bytes {
     let mut key = cell_prefix(collection, cell);
-    key.extend_from_slice(&ordered(timestamp));
+    key.extend_from_slice(&keys::ordered(timestamp));
     key.extend_from_slice(track.as_bytes());
     key.into()
 }
@@ -177,7 +167,10 @@ fn cell_entry(collection: &str, cell: u64, timestamp: i64, track: &str) -> Bytes
 /// Timestamp and track of a point-cell entry, from the part after its cell.
 pub fn cell_entry_parts(rest: &[u8]) -> Option<(i64, &str)> {
     let (timestamp, track) = rest.split_at_checked(8)?;
-    Some((from_ordered(timestamp)?, std::str::from_utf8(track).ok()?))
+    Some((
+        keys::from_ordered(timestamp)?,
+        std::str::from_utf8(track).ok()?,
+    ))
 }
 
 /// Ledger identity of a point (`track\0` timestamp): `track@timestamp`.
@@ -190,7 +183,7 @@ pub fn point_identity(rest: &[u8]) -> Option<String> {
     Some(format!(
         "{}@{}",
         std::str::from_utf8(track).ok()?,
-        from_ordered(timestamp)?
+        keys::from_ordered(timestamp)?
     ))
 }
 
@@ -387,7 +380,7 @@ pub fn delete_track(
     let prefix = track_prefix(collection, track);
     let mut effect = Effect::default();
     for (key, raw) in source.live(&first, &last)? {
-        let timestamp = from_ordered(keys::suffix(&key, &prefix))
+        let timestamp = keys::from_ordered(keys::suffix(&key, &prefix))
             .ok_or_else(|| corruption("unreadable GPS point key"))?;
         let cell = finest_cell(&decode_point(timestamp, &raw)?)?;
         effect.set(cell_entry(collection, cell, timestamp, track), None, false);
