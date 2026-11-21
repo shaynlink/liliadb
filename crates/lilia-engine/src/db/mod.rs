@@ -15,7 +15,7 @@ use bytes::Bytes;
 use lilia_io::{LockGuard, NativeVfs, OpenMode, SyncLevel, Vfs};
 use parking_lot::{Condvar, Mutex, RwLock};
 
-pub use self::read::{Entry, RangeIter, Snapshot, Versioned};
+pub use self::read::{Change, Entry, RangeIter, Snapshot, Versioned};
 use crate::batch::{self, WriteBatch};
 use crate::commit::GroupCommit;
 use crate::compaction::{Retention, RunSink};
@@ -70,8 +70,8 @@ pub(crate) struct Inner {
     pub queue: GroupCommit<WriteBatch, Result<u64>>,
     /// Newest sequence number visible to readers.
     pub visible: AtomicU64,
-    /// Live snapshots: sequence → count.
-    pub snapshots: Mutex<BTreeMap<u64, usize>>,
+    /// What readers keep from compaction.
+    pub pins: Mutex<Pins>,
     pub work: Mutex<WorkState>,
     /// Wakes the flush and compaction threads.
     pub work_ready: Condvar,
@@ -80,6 +80,24 @@ pub(crate) struct Inner {
     /// Asks the next commit group to switch memtables even if the active one is not full.
     pub switch_requested: AtomicBool,
     _lock: Box<dyn LockGuard>,
+}
+
+/// The sequence numbers whose state compactions must keep readable.
+#[derive(Debug, Default)]
+pub(crate) struct Pins {
+    /// Live snapshots: sequence → count.
+    pub snapshots: BTreeMap<u64, usize>,
+    /// With [`Options::retain_history`], the history horizon: every version visible at a later
+    /// sequence is kept.
+    pub history: Option<u64>,
+}
+
+impl Pins {
+    /// Oldest sequence whose state is kept, given the newest visible one.
+    pub fn oldest(&self, visible: u64) -> u64 {
+        let snapshot = self.snapshots.keys().next().copied().unwrap_or(visible);
+        snapshot.min(self.history.unwrap_or(visible)).min(visible)
+    }
 }
 
 impl Inner {
@@ -116,10 +134,12 @@ impl Inner {
         Arc::clone(&self.current.read())
     }
 
-    /// Oldest sequence number some reader may still read at.
+    /// Oldest sequence number some reader may still read at. Read under the pins' lock, so a
+    /// snapshot taken at a past sequence ([`Snapshot::at`]) is either counted here or taken at a
+    /// sequence no older than this.
     pub fn smallest_snapshot(&self) -> u64 {
-        let visible = self.visible.load(Ordering::Acquire);
-        self.snapshots.lock().keys().next().map_or(visible, |&oldest| oldest.min(visible))
+        let pins = self.pins.lock();
+        pins.oldest(self.visible.load(Ordering::Acquire))
     }
 
     fn sync_journal(&self) -> Result<()> {
@@ -217,6 +237,7 @@ impl Db {
             imm: Vec::new(),
             version: Arc::clone(&versions.current),
         };
+        let history = options.retain_history.then_some(0);
         let inner = Arc::new(Inner {
             dir,
             vfs,
@@ -226,7 +247,7 @@ impl Db {
             journal: Mutex::new(JournalWriter::new(journal_file)),
             queue: GroupCommit::default(),
             visible: AtomicU64::new(last_sequence),
-            snapshots: Mutex::new(BTreeMap::new()),
+            pins: Mutex::new(Pins { snapshots: BTreeMap::new(), history }),
             work: Mutex::new(WorkState::default()),
             work_ready: Condvar::new(),
             progress: Condvar::new(),
@@ -300,6 +321,50 @@ impl Db {
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
         Snapshot::new(&self.inner)
+    }
+
+    /// A view of the database as it was after the write of `sequence`. Its state must still be
+    /// kept: `sequence` at or after [`Db::oldest_sequence`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::HistoryUnavailable`] for an older sequence; [`Error::InvalidArgument`] for one
+    /// after the newest visible write.
+    pub fn snapshot_at(&self, sequence: u64) -> Result<Snapshot> {
+        Snapshot::at(&self.inner, sequence)
+    }
+
+    /// Oldest sequence number whose state is still kept: the history horizon
+    /// ([`Options::retain_history`]), or else the oldest live snapshot, or else the newest write.
+    #[must_use]
+    pub fn oldest_sequence(&self) -> u64 {
+        self.inner.smallest_snapshot()
+    }
+
+    /// Moves the history horizon forward to `sequence` (clamped to the newest visible write):
+    /// compactions may then drop the versions only a read before it would see. A horizon never
+    /// moves back.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when the database keeps no history.
+    pub fn set_history_horizon(&self, sequence: u64) -> Result<()> {
+        let mut pins = self.inner.pins.lock();
+        let Some(horizon) = pins.history.as_mut() else {
+            return Err(Error::InvalidArgument("the database keeps no history (Options::retain_history)".into()));
+        };
+        *horizon = (*horizon).max(sequence.min(self.inner.visible.load(Ordering::Acquire)));
+        Ok(())
+    }
+
+    /// The versions of `key` still kept, newest first: every write at or after
+    /// [`Db::oldest_sequence`] and the one that was current then. A deletion has no value.
+    ///
+    /// # Errors
+    ///
+    /// As [`Db::get`].
+    pub fn history(&self, key: &[u8]) -> Result<Vec<Change>> {
+        self.inner.history(key)
     }
 
     /// The value of `key` as `snapshot` sees it.

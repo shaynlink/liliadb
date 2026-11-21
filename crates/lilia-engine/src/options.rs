@@ -67,6 +67,10 @@ pub struct Options {
     /// Background compaction threads (flushes have their own thread).
     pub compaction_threads: usize,
     pub create_if_missing: bool,
+    /// Keep old versions for reads in the past ([`crate::Db::snapshot_at`]): compactions keep
+    /// every version visible at or after the history horizon, which starts at the oldest data and
+    /// only moves forward through [`crate::Db::set_history_horizon`].
+    pub retain_history: bool,
 }
 
 impl Options {
@@ -93,6 +97,7 @@ impl Options {
             max_group_bytes: 4 << 20,
             compaction_threads: background.clamp(1, 4),
             create_if_missing: true,
+            retain_history: false,
         }
     }
 

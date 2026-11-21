@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 
 use super::{Inner, SuperVersion};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::iter::{InternalIterator, MergingIterator};
 use crate::key::{self, Kind};
 use crate::memtable::Found;
@@ -29,6 +29,13 @@ pub struct Entry {
     pub version: u64,
 }
 
+/// One write of a key: the value it stored, or `None` for a deletion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    pub version: u64,
+    pub value: Option<Bytes>,
+}
+
 fn visible(found: Option<Found>) -> Option<Versioned> {
     found.filter(|f| f.kind == Kind::Put).map(|f| Versioned { value: f.value, version: f.sequence })
 }
@@ -38,6 +45,43 @@ impl Inner {
         let current = self.super_version();
         Ok(visible(current.lookup(user, sequence)?))
     }
+
+    pub fn history(&self, user: &[u8]) -> Result<Vec<Change>> {
+        let oldest = self.smallest_snapshot();
+        let visible = self.visible.load(std::sync::atomic::Ordering::Acquire);
+        let source = self.super_version();
+        let mut merged = merged(&source)?;
+        merged.seek(&key::lookup(user, visible))?;
+        let mut changes = Vec::new();
+        while merged.valid() && key::user(merged.key()) == user {
+            let internal = merged.key();
+            let version = key::sequence(internal);
+            let value = (key::kind(internal)? == Kind::Put).then(|| merged.value_bytes());
+            changes.push(Change { version, value });
+            if version <= oldest {
+                break;
+            }
+            merged.next()?;
+        }
+        Ok(changes)
+    }
+}
+
+/// Every memtable and run of `source`, merged in internal key order.
+fn merged(source: &SuperVersion) -> Result<MergingIterator> {
+    let mut children: Vec<Box<dyn InternalIterator>> = Vec::new();
+    for memtable in std::iter::once(&source.mem).chain(&source.imm) {
+        children.push(Box::new(memtable.iter()));
+    }
+    for file in &source.version.levels[0] {
+        children.push(Box::new(file.table()?.iter()));
+    }
+    for level in &source.version.levels[1..] {
+        if !level.is_empty() {
+            children.push(Box::new(LevelIter { files: level.clone(), at: 0, current: None }));
+        }
+    }
+    Ok(MergingIterator::new(children))
 }
 
 /// A fixed point in the history of the database. While it lives, compactions keep every version
@@ -50,12 +94,28 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub(crate) fn new(inner: &Arc<Inner>) -> Self {
-        let mut snapshots = inner.snapshots.lock();
+        let mut pins = inner.pins.lock();
         // Read under the registry lock so the sequence cannot drop below the oldest snapshot
         // that compaction is honouring.
         let sequence = inner.visible.load(std::sync::atomic::Ordering::Acquire);
-        *snapshots.entry(sequence).or_insert(0) += 1;
+        *pins.snapshots.entry(sequence).or_insert(0) += 1;
         Self { inner: Arc::clone(inner), sequence }
+    }
+
+    /// A snapshot at a past `sequence`, if its state is still kept. Checked and registered under
+    /// the registry lock: a compaction either counts it or kept every version it can see.
+    pub(crate) fn at(inner: &Arc<Inner>, sequence: u64) -> Result<Self> {
+        let mut pins = inner.pins.lock();
+        let visible = inner.visible.load(std::sync::atomic::Ordering::Acquire);
+        if sequence > visible {
+            return Err(Error::InvalidArgument(format!("sequence {sequence} is after the newest write, {visible}")));
+        }
+        let oldest = pins.oldest(visible);
+        if sequence < oldest {
+            return Err(Error::HistoryUnavailable { sequence, oldest });
+        }
+        *pins.snapshots.entry(sequence).or_insert(0) += 1;
+        Ok(Self { inner: Arc::clone(inner), sequence })
     }
 
     /// The last sequence number this snapshot sees.
@@ -67,11 +127,11 @@ impl Snapshot {
 
 impl Drop for Snapshot {
     fn drop(&mut self) {
-        let mut snapshots = self.inner.snapshots.lock();
-        if let Some(count) = snapshots.get_mut(&self.sequence) {
+        let mut pins = self.inner.pins.lock();
+        if let Some(count) = pins.snapshots.get_mut(&self.sequence) {
             *count -= 1;
             if *count == 0 {
-                snapshots.remove(&self.sequence);
+                pins.snapshots.remove(&self.sequence);
             }
         }
     }
@@ -163,19 +223,7 @@ impl std::fmt::Debug for RangeIter {
 impl RangeIter {
     pub(crate) fn new(inner: &Inner, sequence: u64, start: Bound<&[u8]>, end: Bound<&[u8]>) -> Result<Self> {
         let source = inner.super_version();
-        let mut children: Vec<Box<dyn InternalIterator>> = Vec::new();
-        for memtable in std::iter::once(&source.mem).chain(&source.imm) {
-            children.push(Box::new(memtable.iter()));
-        }
-        for file in &source.version.levels[0] {
-            children.push(Box::new(file.table()?.iter()));
-        }
-        for level in &source.version.levels[1..] {
-            if !level.is_empty() {
-                children.push(Box::new(LevelIter { files: level.clone(), at: 0, current: None }));
-            }
-        }
-        let mut merged = MergingIterator::new(children);
+        let mut merged = merged(&source)?;
         let mut resolved = None;
         match start {
             Bound::Unbounded => merged.seek_to_first()?,

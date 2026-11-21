@@ -7,6 +7,9 @@
 //!   sequence number of the write that produced it.
 //! - **Reads** never block writes: they see an immutable snapshot of the memtables and sorted
 //!   runs, and [`Snapshot`]s pin a sequence number for repeatable reads and ranges.
+//! - **History**: with [`Options::retain_history`], compactions keep old versions back to a
+//!   horizon the caller moves forward, for reads in the past ([`Db::snapshot_at`]) and the
+//!   versions of a key ([`Db::history`]).
 //! - **Sorted runs** are flushed and compacted in the background, at background priority, into
 //!   leveled files of checksummed 16 KiB blocks with Bloom filters and a shared block cache.
 //! - **Recovery** replays the journals written since the last flush, up to the first damaged
@@ -32,7 +35,7 @@ mod version;
 
 pub use batch::{Expectation, Op, WriteBatch};
 pub use commit::{GroupCommit, Member};
-pub use db::{Db, Entry, RangeIter, Snapshot, Stats, Versioned};
+pub use db::{Change, Db, Entry, RangeIter, Snapshot, Stats, Versioned};
 pub use error::{Error, Result};
 pub use key::MAX_SEQUENCE;
 pub use options::{Durability, Options, LEVELS};

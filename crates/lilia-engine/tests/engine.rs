@@ -6,7 +6,7 @@ use std::ops::Bound;
 use std::sync::Arc;
 
 use common::{key, scan, small_options};
-use lilia_engine::{Db, Durability, Error, WriteBatch};
+use lilia_engine::{Db, Durability, Error, Options, WriteBatch};
 
 #[test]
 fn point_writes_reads_versions_and_conditional_batches() {
@@ -120,6 +120,84 @@ fn snapshots_see_a_fixed_state_across_flushes_and_compactions() {
     drop(snapshot);
     assert_eq!(db.get(&key(0)).unwrap(), None);
     assert_eq!(db.get(&key(1)).unwrap().unwrap(), "after");
+}
+
+/// Writes `rounds` versions of keys 0..100 (the last round deletes the even ones), with enough
+/// filler between rounds that each lands in other runs; returns the sequence after each round.
+fn versioned_rounds(db: &Db, rounds: u64) -> Vec<u64> {
+    let mut after = Vec::new();
+    for round in 0..rounds {
+        for i in 0..100 {
+            if round == rounds - 1 && i % 2 == 0 {
+                db.delete(key(i)).unwrap();
+            } else {
+                db.put(key(i), format!("round {round}")).unwrap();
+            }
+        }
+        after.push(db.last_sequence());
+        for i in 0..400 {
+            db.put(key(10_000 + round * 400 + i), "x".repeat(64)).unwrap();
+        }
+    }
+    db.flush().unwrap();
+    db.wait_for_compactions().unwrap();
+    after
+}
+
+#[test]
+fn history_is_kept_until_its_horizon_moves() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path(), Options { retain_history: true, ..small_options(Durability::Balanced) }).unwrap();
+    assert_eq!(db.oldest_sequence(), 0);
+    let after = versioned_rounds(&db, 6);
+    assert!(db.stats().levels.iter().skip(1).any(|&(runs, _)| runs > 0), "compactions ran");
+
+    for (round, &sequence) in after.iter().enumerate() {
+        let past = db.snapshot_at(sequence).unwrap();
+        let value = db.get_at(&past, &key(1)).unwrap().unwrap();
+        assert_eq!(value.value, format!("round {round}"));
+        let live = db.range_at(&past, Bound::Included(&key(0)), Bound::Excluded(&key(100))).unwrap().count();
+        assert_eq!(live, if round == 5 { 50 } else { 100 });
+    }
+    let history = db.history(&key(0)).unwrap();
+    assert_eq!(history.len(), 6, "every version, newest first");
+    assert_eq!(history[0].value, None, "deleted last");
+    assert_eq!(history[5].value.as_deref(), Some(&b"round 0"[..]));
+    assert!(history.windows(2).all(|w| w[0].version > w[1].version));
+    assert!(matches!(db.snapshot_at(db.last_sequence() + 1), Err(Error::InvalidArgument(_))));
+
+    // Past the horizon, compactions drop what only older reads would see.
+    db.set_history_horizon(after[3]).unwrap();
+    db.set_history_horizon(after[1]).unwrap();
+    assert_eq!(db.oldest_sequence(), after[3], "a horizon never moves back");
+    match db.snapshot_at(after[2]) {
+        Err(Error::HistoryUnavailable { sequence, oldest }) => assert_eq!((sequence, oldest), (after[2], after[3])),
+        other => panic!("expected unavailable history, got {other:?}"),
+    }
+    let at_horizon = db.snapshot_at(after[3]).unwrap();
+    for i in 0..3_000 {
+        db.put(key(20_000 + i), "y".repeat(64)).unwrap();
+    }
+    db.flush().unwrap();
+    db.wait_for_compactions().unwrap();
+    assert_eq!(db.get_at(&at_horizon, &key(1)).unwrap().unwrap().value, "round 3");
+    let kept = db.history(&key(1)).unwrap();
+    assert_eq!(kept.last().unwrap().value.as_deref(), Some(&b"round 3"[..]), "the version current at the horizon is the oldest");
+    assert_eq!(kept.len(), 3);
+}
+
+#[test]
+fn without_history_only_snapshots_keep_the_past() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path(), small_options(Durability::Balanced)).unwrap();
+    let first = db.put("k", "1").unwrap();
+    let pinned = db.snapshot();
+    db.put("k", "2").unwrap();
+    assert_eq!(db.get_at(&db.snapshot_at(first).unwrap(), b"k").unwrap().unwrap().value, "1");
+    drop(pinned);
+    assert!(matches!(db.snapshot_at(first), Err(Error::HistoryUnavailable { .. })));
+    assert!(matches!(db.set_history_horizon(first), Err(Error::InvalidArgument(_))));
+    assert_eq!(db.history(b"k").unwrap().len(), 1, "the current version only");
 }
 
 #[test]

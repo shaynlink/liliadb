@@ -27,6 +27,12 @@ pub enum Error {
     #[error("writes are disabled after an earlier failure: {0}")]
     Poisoned(String),
 
+    /// A snapshot was asked for at a sequence number whose versions compaction may no longer
+    /// keep: older than the history kept ([`crate::Options::retain_history`]) and than every
+    /// live snapshot.
+    #[error("history before sequence {oldest} is not kept; asked for sequence {sequence}")]
+    HistoryUnavailable { sequence: u64, oldest: u64 },
+
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
