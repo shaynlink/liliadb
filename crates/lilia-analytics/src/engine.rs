@@ -1,5 +1,6 @@
 //! Query engine: a `DataFusion` session driven by a dedicated runtime.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -87,10 +88,7 @@ impl AnalyticsEngine {
                 "batch_size and target_partitions must be greater than zero".into(),
             ));
         }
-        let runtime = Builder::new_multi_thread()
-            .worker_threads(options.target_partitions)
-            .thread_name("lilia-analytics")
-            .build()
+        let runtime = runtime(options)
             .map_err(|e| AnalyticsError::Runtime(format!("cannot start runtime: {e}")))?;
         let config = SessionConfig::new()
             .with_batch_size(options.batch_size)
@@ -197,17 +195,37 @@ impl AnalyticsEngine {
             .as_ref()
             .ok_or_else(|| AnalyticsError::Runtime("engine is shutting down".into()))?;
         let sql = sql.to_owned();
+        // One thread: the query runs on it, and no other runtime can be running there.
+        #[cfg(target_arch = "wasm32")]
+        return runtime.block_on(run(&context, &sql, params));
         // The result travels over a channel instead of `block_on`, which would panic
         // when the caller is already inside an async runtime.
+        #[cfg(not(target_arch = "wasm32"))]
         let (sender, receiver) = mpsc::sync_channel(1);
+        #[cfg(not(target_arch = "wasm32"))]
         runtime.spawn(async move {
             // The receiver only disappears if the calling thread is gone.
             let _ = sender.send(run(&context, &sql, params).await);
         });
+        #[cfg(not(target_arch = "wasm32"))]
         receiver
             .recv()
             .map_err(|_| AnalyticsError::Runtime("query task terminated unexpectedly".into()))?
     }
+}
+
+/// The query runtime: `target_partitions` worker threads, or the calling thread on `wasm32`.
+#[cfg(not(target_arch = "wasm32"))]
+fn runtime(options: EngineOptions) -> std::io::Result<Runtime> {
+    Builder::new_multi_thread()
+        .worker_threads(options.target_partitions)
+        .thread_name("lilia-analytics")
+        .build()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn runtime(_options: EngineOptions) -> std::io::Result<Runtime> {
+    Builder::new_current_thread().build()
 }
 
 /// A query parameter as a SQL value.
