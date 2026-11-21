@@ -19,8 +19,29 @@ use crate::memtable::Found;
 use crate::table::Table;
 use crate::options::LEVELS;
 
-/// A sorted run of a version. Its file is deleted once it is obsolete and no version or iterator
-/// still refers to it.
+/// The file of a sorted run, shared by every placement of the run: a run moved to another level
+/// keeps its file, and the versions that still list it at its old level read the same table.
+/// Deleted once obsolete and no version or iterator refers to it at any level.
+#[derive(Debug)]
+struct TableFile {
+    number: u64,
+    size: u64,
+    obsolete: AtomicBool,
+    store: Arc<TableStore>,
+    /// Opened on first use and kept for the file's lifetime.
+    table: OnceLock<Arc<Table>>,
+}
+
+impl Drop for TableFile {
+    fn drop(&mut self) {
+        if self.obsolete.load(AtomicOrdering::Acquire) {
+            // A failed deletion leaves an orphan file; opening the database deletes orphans.
+            drop(self.store.remove(self.number));
+        }
+    }
+}
+
+/// A sorted run of a version: its file at one level.
 #[derive(Debug)]
 pub struct FileMeta {
     pub number: u64,
@@ -29,33 +50,47 @@ pub struct FileMeta {
     pub largest: Vec<u8>,
     /// Taken by a running compaction.
     pub compacting: AtomicBool,
-    obsolete: AtomicBool,
-    store: Arc<TableStore>,
-    /// Opened on first use and kept for the run's lifetime.
-    table: OnceLock<Arc<Table>>,
+    file: Arc<TableFile>,
 }
 
 impl FileMeta {
     pub fn new(file: &NewFile, store: &Arc<TableStore>) -> Self {
+        Self::placed(
+            file,
+            Arc::new(TableFile {
+                number: file.number,
+                size: file.size,
+                obsolete: AtomicBool::new(false),
+                store: Arc::clone(store),
+                table: OnceLock::new(),
+            }),
+        )
+    }
+
+    /// The run of `self` moved to the placement `file` describes, sharing its file.
+    fn moved(&self, file: &NewFile) -> Self {
+        Self::placed(file, Arc::clone(&self.file))
+    }
+
+    fn placed(file: &NewFile, shared: Arc<TableFile>) -> Self {
         Self {
             number: file.number,
             size: file.size,
             smallest: file.smallest.clone(),
             largest: file.largest.clone(),
             compacting: AtomicBool::new(false),
-            obsolete: AtomicBool::new(false),
-            store: Arc::clone(store),
-            table: OnceLock::new(),
+            file: shared,
         }
     }
 
     /// The open table of this run.
     pub fn table(&self) -> Result<&Arc<Table>> {
-        if let Some(table) = self.table.get() {
+        let file = &self.file;
+        if let Some(table) = file.table.get() {
             return Ok(table);
         }
-        let opened = self.store.open(self.number, self.size)?;
-        Ok(self.table.get_or_init(|| opened))
+        let opened = file.store.open(file.number, file.size)?;
+        Ok(file.table.get_or_init(|| opened))
     }
 
     pub fn smallest_user(&self) -> &[u8] {
@@ -71,17 +106,9 @@ impl FileMeta {
         self.smallest_user() <= high && self.largest_user() >= low
     }
 
+    /// Marks the run's file for deletion once nothing refers to it at any level.
     pub fn mark_obsolete(&self) {
-        self.obsolete.store(true, AtomicOrdering::Release);
-    }
-}
-
-impl Drop for FileMeta {
-    fn drop(&mut self) {
-        if self.obsolete.load(AtomicOrdering::Acquire) {
-            // A failed deletion leaves an orphan file; opening the database deletes orphans.
-            drop(self.store.remove(self.number));
-        }
+        self.file.obsolete.store(true, AtomicOrdering::Release);
     }
 }
 
@@ -129,7 +156,13 @@ impl Version {
                 files.iter().filter(|f| !edit.deleted.contains(&(level, f.number))).cloned().collect();
         }
         for file in &edit.added {
-            next.levels[file.level].push(Arc::new(FileMeta::new(file, store)));
+            let moved = edit
+                .deleted
+                .iter()
+                .filter(|&&(_, number)| number == file.number)
+                .find_map(|&(level, number)| self.levels[level].iter().find(|f| f.number == number));
+            let meta = moved.map_or_else(|| FileMeta::new(file, store), |from| from.moved(file));
+            next.levels[file.level].push(Arc::new(meta));
         }
         next.levels[0].sort_by_key(|f| std::cmp::Reverse(f.number));
         for level in &mut next.levels[1..] {
@@ -311,5 +344,47 @@ impl VersionSet {
 
     pub fn manifest_number(&self) -> Option<u64> {
         self.manifest.as_ref().map(|(n, _)| *n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use bytes::Bytes;
+    use lilia_io::MemVfs;
+
+    use super::*;
+    use crate::key::{encode, lookup, Kind};
+    use crate::table::cache::BlockCache;
+    use crate::table::TableBuilder;
+
+    #[test]
+    fn a_moved_run_keeps_its_file_for_the_versions_that_list_it_where_it_was() {
+        let vfs: Arc<dyn Vfs> = Arc::new(MemVfs::new(1));
+        let dir = Path::new("/db");
+        vfs.create_dir_all(dir).unwrap();
+        let path = files::table(dir, 7);
+        let file = vfs.open(&path, OpenMode::CreateNew).unwrap();
+        let mut builder = TableBuilder::new(Arc::clone(&file), 512, 10);
+        let entry = encode(b"k", 1, Kind::Put);
+        builder.add(&entry, b"v").unwrap();
+        let size = builder.finish(SyncLevel::Full).unwrap().size;
+        let cache = Arc::new(BlockCache::new(1 << 20));
+        let store = Arc::new(TableStore::new(Arc::clone(&vfs), dir.to_path_buf(), cache));
+        let at = |level| NewFile { level, number: 7, size, smallest: entry.clone(), largest: entry.clone() };
+
+        let flushed = Version::default().apply(&VersionEdit { added: vec![at(0)], ..VersionEdit::default() }, &store);
+        let moved = flushed.apply(&VersionEdit { added: vec![at(1)], deleted: vec![(0, 7)], ..VersionEdit::default() }, &store);
+        let compacted = moved.apply(&VersionEdit { deleted: vec![(1, 7)], ..VersionEdit::default() }, &store);
+        // As `VersionSet::log_and_apply` marks a run compacted away.
+        moved.levels[1][0].mark_obsolete();
+        drop((moved, compacted));
+
+        // The first version still lists the run at level 0, its table not opened yet.
+        let found = flushed.get(b"k", &lookup(b"k", 5)).unwrap().unwrap();
+        assert_eq!(found.value, Bytes::from_static(b"v"));
+        drop(flushed);
+        assert!(vfs.open(&path, OpenMode::Read).is_err(), "deleted once no version lists it");
     }
 }
