@@ -187,6 +187,21 @@ fn history_is_kept_until_its_horizon_moves() {
 }
 
 #[test]
+fn history_survives_the_replay_of_the_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options { retain_history: true, ..small_options(Durability::Durable) };
+    let db = Db::open(dir.path(), options.clone()).unwrap();
+    let versions: Vec<u64> = (0..5).map(|i| db.put("k", format!("{i}")).unwrap()).collect();
+    db.close().unwrap();
+    let db = Db::open(dir.path(), options).unwrap();
+    for (i, &version) in versions.iter().enumerate() {
+        let past = db.snapshot_at(version).unwrap();
+        assert_eq!(db.get_at(&past, b"k").unwrap().unwrap().value, format!("{i}"));
+    }
+    assert_eq!(db.history(b"k").unwrap().len(), 5);
+}
+
+#[test]
 fn without_history_only_snapshots_keep_the_past() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path(), small_options(Durability::Balanced)).unwrap();

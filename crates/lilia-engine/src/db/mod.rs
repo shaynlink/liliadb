@@ -508,7 +508,9 @@ fn replay(vfs: &Arc<dyn Vfs>, dir: &Path, options: &Options, store: &Arc<TableSt
     iter.seek_to_first()?;
     let mut allocate = || versions.new_file_number();
     let mut sink = RunSink { vfs: vfs.as_ref(), dir, options, sync: options.durability.metadata_sync(), level: 0, allocate: &mut allocate };
-    let added = sink.write(&mut iter, &Retention { smallest_snapshot: last_sequence, tombstones: None })?;
+    // With history, an open keeps every version: the horizon starts at the oldest data.
+    let smallest_snapshot = if options.retain_history { 0 } else { last_sequence };
+    let added = sink.write(&mut iter, &Retention { smallest_snapshot, tombstones: None })?;
     let edit = VersionEdit { added, ..VersionEdit::default() };
     versions.current = Arc::new(versions.current.apply(&edit, store));
     Ok(last_sequence)
