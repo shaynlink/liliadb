@@ -5,7 +5,7 @@
 //!
 //! | tag | key | value |
 //! |-----|-----|-------|
-//! | `0x00` | `schema\0` name, `format`, `next-index` | catalog records |
+//! | `0x00` | `schema\0` name, `ts-policy\0` pattern, `format`, `next-index` | catalog records, series policies |
 //! | `0x01` | namespace `\0` key | key-value record ([`crate::record`]) |
 //! | `0x02` | space `\0` id | JSON document record |
 //! | `0x03` | space `\0` index id (8 bytes) escaped value, id | empty: one secondary index entry |
@@ -18,6 +18,8 @@
 //! | `0x0A` | collection `\0` shard | document and token counts |
 //! | `0x0B` | collection `\0` term | dictionary word count |
 //! | `0x0C` | collection `\0` id | vector ([`crate::vectors`]) |
+//! | `0x0D` | series `\0` resolution, chunk bound (8 bytes each, ordered) | points ([`crate::timeseries`]) |
+//! | `0x0E` | series `\0` resolution (8 bytes, ordered) | downsampling watermark |
 //!
 //! Collection names never contain control characters ([`validate_name`]), so the `\0` after a
 //! name separates collections and keeps them in name order.
@@ -38,10 +40,12 @@ pub const FTS_POSTING: u8 = 0x09;
 pub const FTS_STATS: u8 = 0x0A;
 pub const FTS_DICTIONARY: u8 = 0x0B;
 pub const VECTOR: u8 = 0x0C;
+pub const TS_CHUNK: u8 = 0x0D;
+pub const TS_STATE: u8 = 0x0E;
 
 /// Tags of the keyspaces whose records the ledger attests. Derived keyspaces (secondary
 /// index entries, inbound edge mirrors) are not records of their own.
-pub const RECORD_TAGS: [u8; 7] = [
+pub const RECORD_TAGS: [u8; 8] = [
     KV,
     DOC,
     GRAPH_NODE,
@@ -49,11 +53,13 @@ pub const RECORD_TAGS: [u8; 7] = [
     FTS_DOC,
     FTS_DICTIONARY,
     VECTOR,
+    TS_CHUNK,
 ];
 
 pub const FORMAT: &[u8] = b"\x00format";
 pub const NEXT_INDEX: &[u8] = b"\x00next-index";
 pub const SCHEMA_PREFIX: &[u8] = b"\x00schema\x00";
+pub const SERIES_POLICY_PREFIX: &[u8] = b"\x00ts-policy\x00";
 pub const LEDGER_HEAD: &[u8] = &[LEDGER, b'h'];
 pub const LEDGER_COMMITS: &[u8] = &[LEDGER, b'c'];
 
@@ -135,6 +141,13 @@ pub fn prefix_end(prefix: &[u8]) -> Option<Vec<u8>> {
 pub fn schema(name: &str) -> Bytes {
     let mut out = SCHEMA_PREFIX.to_vec();
     out.extend_from_slice(name.as_bytes());
+    out.into()
+}
+
+/// Time-series lifecycle policy of pattern `pattern`.
+pub fn series_policy(pattern: &str) -> Bytes {
+    let mut out = SERIES_POLICY_PREFIX.to_vec();
+    out.extend_from_slice(pattern.as_bytes());
     out.into()
 }
 

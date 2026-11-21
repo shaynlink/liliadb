@@ -30,6 +30,7 @@ use crate::guard::{Access, Guard};
 use crate::keys::validate_name;
 use crate::read::{self, Item, Items, Scan, Source};
 use crate::record::now_ms;
+use crate::timeseries::TimeSeries;
 use crate::vectors::Vectors;
 use crate::write::overlay;
 
@@ -369,6 +370,13 @@ impl<'db> Transaction<'db> {
     #[must_use]
     pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
         Vectors::new(self, name)
+    }
+
+    /// Time series `name`; its writes are buffered until [`Transaction::commit`] and its reads
+    /// see them.
+    #[must_use]
+    pub fn series(&self, name: &str) -> TimeSeries<'_, Self> {
+        TimeSeries::new(self, name)
     }
 
     /// Commits the transaction's writes if every record it read is unchanged; returns one

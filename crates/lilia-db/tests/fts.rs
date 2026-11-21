@@ -4,7 +4,7 @@
 mod common;
 
 use common::small_options;
-use lilia_db::{Database, LedgerVerifyMode, Policy, SecurityContext};
+use lilia_db::{Batch, Database, FtsWrite, LedgerVerifyMode, Policy, SecurityContext, Write};
 use lilia_engine::Durability;
 use serde_json::json;
 
@@ -193,4 +193,43 @@ fn concurrent_indexers_leave_an_exact_index() {
     let rounds: usize = (0..40).map(|i| f.search(&format!("round{i}"), 100).unwrap().len()).sum();
     assert_eq!(rounds, 20);
     assert_eq!(f.suggest("common", 0, 5).unwrap()[0].doc_count, 20);
+}
+
+#[test]
+fn a_batch_indexes_like_single_writes() {
+    // Documents of one batch share the collection's count shards and, here, their terms: each
+    // write must see the counts the earlier ones left.
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path(), false);
+    let s = db.system();
+    let texts: Vec<String> = (0..200)
+        .map(|i| format!("sensor reading {} value {}", i % 7, i % 13))
+        .collect();
+    let mut batch = Batch::new();
+    for (i, text) in texts.iter().enumerate() {
+        batch.push(Write::Fts(FtsWrite::Index {
+            collection: "batched".into(),
+            doc_id: format!("d{i:03}"),
+            content: text.clone(),
+        }));
+    }
+    s.commit(&batch).unwrap();
+    for (i, text) in texts.iter().enumerate() {
+        s.fts("single").index(&format!("d{i:03}"), text).unwrap();
+    }
+    let ranks = |name: &str| -> Vec<(String, f64)> {
+        s.fts(name)
+            .search("reading 3 value", 50)
+            .unwrap()
+            .into_iter()
+            .map(|h| (h.doc_id, h.rank))
+            .collect()
+    };
+    let (batched, single) = (ranks("batched"), ranks("single"));
+    assert_ne!(single.len(), 0);
+    assert_eq!(batched.len(), single.len());
+    for ((a, x), (b, y)) in batched.iter().zip(&single) {
+        assert_eq!(a, b);
+        assert!((x - y).abs() < 1e-9, "{a}: {x} != {y}");
+    }
 }

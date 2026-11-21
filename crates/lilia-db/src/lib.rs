@@ -12,6 +12,9 @@
 //! - **Row-level security and masking**: every read and write of a [`Session`] passes through
 //!   one guard that applies the policies and masking rules of the collection for the caller's
 //!   [`SecurityContext`] ([`guard`]).
+//! - **Graph, full-text search, vectors, time series**: model handles of a session or
+//!   transaction ([`Graph`], [`Fts`], [`Vectors`], [`TimeSeries`]), whose writes are batch
+//!   writes like any other.
 //! - **Ledger**: an optional tamper-evident history of every record write, a Merkle Mountain
 //!   Range with `O(log n)` appends and proofs ([`ledger`]).
 
@@ -29,6 +32,7 @@ pub mod ledger;
 mod read;
 mod record;
 mod session;
+pub mod timeseries;
 mod txn;
 pub mod vectors;
 mod write;
@@ -43,12 +47,15 @@ pub use guard::Access;
 pub use ledger::mmr::MmrProof;
 pub use ledger::{CommitProof, RecordProof};
 pub use lilia_core::{
-    BinaryDoc, Direction, FtsFuzzyHit, FtsHit, FtsPhoneticHit, FtsSuggestion, GraphEdge, GraphNode,
-    HnswConfig, IndexOptions, JsonEntry, JsonIndexInfo, KvEntry, LedgerCommit,
-    LedgerVerificationReport, LedgerVerifyMode, MaskFunction, MaskingRule, NamedPolicy, Policy,
-    PolicyAction, SecurityContext, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric,
+    BinaryDoc, Direction, DownsampleAggregation, FtsFuzzyHit, FtsHit, FtsPhoneticHit,
+    FtsSuggestion, GraphEdge, GraphNode, HnswConfig, IndexOptions, JsonEntry, JsonIndexInfo,
+    KvEntry, LedgerCommit, LedgerVerificationReport, LedgerVerifyMode, MaskFunction, MaskingRule,
+    NamedPolicy, Policy, PolicyAction, SecurityContext, TimeSeriesLifecyclePolicy, TimeSeriesPoint,
+    TimeSeriesRetentionRule, TimeSeriesRetentionStats, TimeSeriesStats, VectorElementType,
+    VectorHit, VectorIndexInfo, VectorMetric,
 };
 pub use read::Scan;
 pub use session::Session;
+pub use timeseries::{TimeSeries, TimeSeriesWrite};
 pub use txn::Transaction;
 pub use vectors::{Vector, VectorWrite, Vectors};

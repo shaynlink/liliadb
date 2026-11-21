@@ -158,6 +158,11 @@ fn record_identity(key: &[u8]) -> Option<(Model, String, String)> {
             space,
             String::from_utf8(record.to_vec()).ok()?,
         )),
+        keys::TS_CHUNK => Some((
+            Model::TimeSeries,
+            space,
+            crate::timeseries::identity(record)?,
+        )),
         keys::FTS_DOC | keys::FTS_DICTIONARY => {
             let (model, id) = crate::fts::identity(tag, record)?;
             Some((model, space, id))

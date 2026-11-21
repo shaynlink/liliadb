@@ -202,7 +202,7 @@ impl Database {
     }
 
     /// Plans with `plan` and commits, planning again while the plan goes stale.
-    fn run(&self, plan: impl Fn(&Catalog) -> Result<Plan>) -> Result<Vec<Outcome>> {
+    pub(crate) fn run(&self, plan: impl Fn(&Catalog) -> Result<Plan>) -> Result<Vec<Outcome>> {
         loop {
             let catalog = self.catalog.read();
             let mut plan = plan(&catalog)?;

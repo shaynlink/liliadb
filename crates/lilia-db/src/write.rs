@@ -30,6 +30,7 @@ pub enum Model {
     Fts,
     FtsDictionary,
     Vector,
+    TimeSeries,
 }
 
 impl Model {
@@ -42,6 +43,7 @@ impl Model {
             Self::Fts => "fts",
             Self::FtsDictionary => "fts_dictionary",
             Self::Vector => "vector",
+            Self::TimeSeries => "timeseries",
         }
     }
 }
@@ -263,6 +265,61 @@ impl<'a> Planner<'a> {
             .collect())
     }
 
+    /// The first live key in `[start, end)` as the batch has left it so far. A committed record
+    /// found this way is read as [`Planner::current`] reads it, but at the version the seek saw
+    /// and with an expectation on that version: a writer that changes the record after the seek
+    /// (in [`crate::timeseries`], the only one that can move the partition around it) fails the
+    /// plan.
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    pub(crate) fn first_live(&mut self, start: &[u8], end: &[u8]) -> Result<Option<Bytes>> {
+        let mut committed = None;
+        for entry in self.engine.range(
+            std::ops::Bound::Included(start),
+            std::ops::Bound::Excluded(end),
+        )? {
+            let entry = entry?;
+            match self.local.get(&entry.key) {
+                Some(Local { raw: None, .. }) => continue,
+                Some(_) => {}
+                None => {
+                    self.local.insert(
+                        entry.key.clone(),
+                        Local {
+                            raw: Some(entry.value),
+                            version: Some(entry.version),
+                            written: false,
+                        },
+                    );
+                    self.plan
+                        .expected
+                        .entry(entry.key.clone())
+                        .or_insert(Expected {
+                            version: Some(entry.version),
+                            strict: false,
+                        });
+                }
+            }
+            committed = Some(entry.key);
+            break;
+        }
+        let own = self
+            .local
+            .iter()
+            .filter(|(key, local)| {
+                local.raw.is_some() && key.as_ref() >= start && key.as_ref() < end
+            })
+            .map(|(key, _)| key)
+            .min()
+            .cloned();
+        Ok(match (committed, own) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        })
+    }
+
     /// The schema of collection `name`, as the batch is planned under it.
     pub(crate) fn schema(&self, name: &str) -> Option<std::sync::Arc<crate::catalog::Schema>> {
         self.catalog.schema(name)
@@ -282,7 +339,16 @@ impl<'a> Planner<'a> {
         );
     }
 
+    /// Records the write of `value` at `key`, which later reads of the batch see, and returns
+    /// its operation index.
     pub(crate) fn op(&mut self, key: Bytes, value: Option<Bytes>) -> usize {
+        let local = self.local.entry(key.clone()).or_insert(Local {
+            raw: None,
+            version: None,
+            written: false,
+        });
+        local.raw.clone_from(&value);
+        local.written = true;
         self.plan.ops.push((key, value));
         self.plan.ops.len() - 1
     }
@@ -295,14 +361,7 @@ impl<'a> Planner<'a> {
         delta: (Model, &str, String),
     ) -> usize {
         let payload = value.as_deref().map(|v| *blake3::hash(v).as_bytes());
-        let op = self.op(key.clone(), value.clone());
-        let local = self.local.entry(key.clone()).or_insert(Local {
-            raw: None,
-            version: None,
-            written: false,
-        });
-        local.raw = value;
-        local.written = true;
+        let op = self.op(key.clone(), value);
         let (model, space, id) = delta;
         self.plan.deltas.push(Delta {
             model,
@@ -347,6 +406,7 @@ impl<'a> Planner<'a> {
             Write::Graph(write) => self.graph(write),
             Write::Fts(write) => self.fts(write),
             Write::Vector(write) => self.vector(write),
+            Write::TimeSeries(write) => self.series(write),
         }
     }
 
@@ -591,6 +651,7 @@ pub mod overlay {
             Write::Graph(write) => crate::graph::overlay(write, view),
             Write::Fts(write) => crate::fts::overlay(write, view),
             Write::Vector(write) => crate::vectors::overlay(write, view),
+            Write::TimeSeries(write) => crate::timeseries::overlay(write, view),
         }
     }
 }

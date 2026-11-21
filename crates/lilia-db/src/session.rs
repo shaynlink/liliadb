@@ -13,6 +13,7 @@ use crate::guard::{Access, Guard};
 use crate::keys::validate_name;
 use crate::read::{self, Latest, Scan};
 use crate::record::now_ms;
+use crate::timeseries::TimeSeries;
 use crate::txn::Transaction;
 use crate::vectors::Vectors;
 
@@ -224,6 +225,12 @@ impl<'db> Session<'db> {
     #[must_use]
     pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
         Vectors::new(self, name)
+    }
+
+    /// Time series `name`; its writes commit at once.
+    #[must_use]
+    pub fn series(&self, name: &str) -> TimeSeries<'_, Self> {
+        TimeSeries::new(self, name)
     }
 
     /// Starts an optimistic transaction over a snapshot of the database as of now.

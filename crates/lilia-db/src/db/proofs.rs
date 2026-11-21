@@ -6,6 +6,7 @@ use super::Database;
 use crate::error::{Error, Result};
 use crate::keys::{self, validate_name};
 use crate::ledger::{CommitProof, Ledger, RecordProof};
+use crate::read::Latest;
 
 impl Database {
     fn ledger(&self) -> Result<&Ledger> {
@@ -128,6 +129,30 @@ impl Database {
         self.ledger()?;
         validate_name("collection", collection)?;
         Ledger::prove_record(self.engine(), &crate::vectors::vector_key(collection, id))
+    }
+
+    /// Proof that the current version of the chunk holding the point of series `series` at
+    /// `timestamp`, resolution `resolution_ms`, was written by a ledger commit. The delta's id
+    /// is the chunk's `resolution:bound`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`]; [`Error::NotFound`] when there is no point at `timestamp`.
+    pub fn prove_series(
+        &self,
+        series: &str,
+        resolution_ms: i64,
+        timestamp: i64,
+    ) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("series", series)?;
+        crate::timeseries::validate_resolution(resolution_ms)?;
+        let reader = Latest::pinned(self.engine());
+        let key = crate::timeseries::chunk_holding(&reader, series, resolution_ms, timestamp)?
+            .ok_or_else(|| {
+                Error::NotFound(format!("series {series} has no point at {timestamp}"))
+            })?;
+        Ledger::prove_record(self.engine(), &key)
     }
 
     /// Verifies the ledger; see [`Ledger::verify`].
