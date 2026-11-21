@@ -64,7 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - bitemporal entities: values over valid-time intervals recorded at transaction times, a
     permanent audit trail, reads as known now or at any earlier time.
 - **`lilia-db` history**: `Options::history_retention` (a week by default) keeps old versions in the
-  engine; `Session::at_version` / `at_time` read the database as it was, through every model;
+  engine, at no measurable throughput cost; the space they take grows with how often records are
+  overwritten within the window (2.4× the disk after 7 updates per key, in the RFC's measurement); `Session::at_version` / `at_time` read the database as it was, through every model;
   `json_history`, `kv_history` and `json_diff` list and compare the versions of a record.
   `Options::undo_depth` makes commits undoable (`Database::undo`, `redo`, `undo_history`).
   Validated by 22,000 simulated power cuts that now write every model in each batch, then check
