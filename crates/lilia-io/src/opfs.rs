@@ -53,6 +53,14 @@ unsafe impl<T> Sync for Local<T> {}
 #[derive(Debug)]
 struct OpfsSlot(Local<FileSystemSyncAccessHandle>);
 
+impl Drop for OpfsSlot {
+    /// Releases the file: until its handle is closed, no other handle (in this worker or in
+    /// another tab) can open it.
+    fn drop(&mut self) {
+        self.0 .0.close();
+    }
+}
+
 fn at(offset: u64) -> FileSystemReadWriteOptions {
     let options = FileSystemReadWriteOptions::new();
     // reason: OPFS offsets are JavaScript numbers; files stay far below 2^53 bytes.

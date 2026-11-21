@@ -4,3 +4,5 @@ LIBSQLITE3_FLAGS = "-DSQLITE_ENABLE_GEOPOLY"
 
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+# `cargo test --target wasm32-unknown-unknown` runs in a browser (see crates/lilia-db/tests/browser.rs).
+runner = "wasm-bindgen-test-runner"

@@ -25,6 +25,10 @@ uuid.workspace = true
 ## SQL over the data models, on DataFusion ([`sql`]).
 sql = ["dep:lilia-analytics"]
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+js-sys = "0.3"
+wasm-bindgen-test = "0.3"
+
 [dev-dependencies]
 hex.workspace = true
 tempfile = "3.27.0"
