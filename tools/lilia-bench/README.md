@@ -45,6 +45,9 @@ run without results, never silently skipped.
 | `lilia-aes` | LiliaDB, AES-256-GCM value codec | same |
 | `lilia-engine` | v0.2 native engine (`crates/lilia-engine`), `Durability::Durable` | `F_FULLFSYNC` on Apple (`File::sync_data`) |
 | `lilia-engine-balanced` | same, `Durability::Balanced` | `F_BARRIERFSYNC` on Apple |
+| `lilia-db` | v0.2 data models (`crates/lilia-db`) over `lilia-engine`, key-value model, defaults (a week of history, no ledger), `Durability::Durable` | `F_FULLFSYNC` on Apple |
+| `lilia-db-ledger` | same, ledger on | same |
+| `lilia-db-nohistory` | same, no history window | same |
 | `sqlite` | SQLite WAL, `synchronous=FULL` (via `rusqlite`) | `fsync` |
 | `sqlite-fullfsync` | same, plus `fullfsync` and `checkpoint_fullfsync` | `F_FULLFSYNC` on Apple |
 | `redb` | redb, `Durability::Immediate` | `File::sync_data` |

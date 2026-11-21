@@ -9,8 +9,9 @@ use lilia_engine::Durability;
 use super::{std_file_sync, Engine, Result, Session};
 use crate::record::EngineInfo;
 
-/// `lilia-db`: no ledger. `lilia-db-ledger`: every commit appended to the ledger. Both durable.
-pub const IDS: [&str; 2] = ["lilia-db", "lilia-db-ledger"];
+/// `lilia-db`: the defaults (a week of history, no ledger). `lilia-db-ledger`: every commit also
+/// appended to the ledger. `lilia-db-nohistory`: no history window. All durable.
+pub const IDS: [&str; 3] = ["lilia-db", "lilia-db-ledger", "lilia-db-nohistory"];
 
 const NAMESPACE: &str = "bench";
 
@@ -23,6 +24,9 @@ pub struct LiliaDb {
 impl LiliaDb {
     pub fn open(id: &str, dir: &Path) -> Result<Self> {
         let mut options = Options { ledger: id == "lilia-db-ledger", ..Options::default() };
+        if id == "lilia-db-nohistory" {
+            options.history_retention = std::time::Duration::ZERO;
+        }
         options.engine.durability = Durability::Durable;
         let db = Database::open(dir.join("db"), options)?;
         Ok(Self { id: id.to_owned(), db })
@@ -31,10 +35,14 @@ impl LiliaDb {
 
 impl Engine for LiliaDb {
     fn info(&self) -> EngineInfo {
-        let ledger = self.id == "lilia-db-ledger";
+        let name = match self.id.as_str() {
+            "lilia-db-ledger" => "lilia-db (v0.2, Durable, ledger)",
+            "lilia-db-nohistory" => "lilia-db (v0.2, Durable, no history)",
+            _ => "lilia-db (v0.2, Durable)",
+        };
         EngineInfo {
             id: self.id.clone(),
-            name: if ledger { "lilia-db (v0.2, Durable, ledger)" } else { "lilia-db (v0.2, Durable)" }.into(),
+            name: name.into(),
             version: env!("LILIA_BENCH_LILIA_VERSION").split(' ').next().unwrap_or("unknown").to_owned(),
             sync: std_file_sync(),
         }
