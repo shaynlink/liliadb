@@ -17,6 +17,8 @@
 //!   [`Geo`], [`Crdt`], [`Bitemporal`]), whose writes are batch writes like any other.
 //! - **History**: reads in the past within a retention window and revisions of records
 //!   ([`history`]).
+//! - **SQL** (feature `sql`): read-only `DataFusion` queries over tables of the models, through
+//!   the caller's policies ([`Session::sql`]).
 //! - **Ledger**: an optional tamper-evident history of every record write, a Merkle Mountain
 //!   Range with `O(log n)` appends and proofs ([`ledger`]).
 
@@ -39,6 +41,8 @@ mod read;
 mod record;
 mod records;
 mod session;
+#[cfg(feature = "sql")]
+pub mod sql;
 pub mod timeseries;
 mod txn;
 pub mod vectors;

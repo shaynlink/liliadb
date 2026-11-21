@@ -159,6 +159,19 @@ impl<'db> Session<'db> {
         }
     }
 
+    /// This session reading one fixed state: its own if it is in the past, now otherwise.
+    #[cfg(feature = "sql")]
+    pub(crate) fn pinned(&self) -> Self {
+        Self {
+            db: self.db,
+            access: self.access.clone(),
+            past: Some(self.past.clone().unwrap_or_else(|| Past {
+                snapshot: Arc::new(self.db.engine().snapshot()),
+                time_ms: now_ms(),
+            })),
+        }
+    }
+
     /// The time key-value expiry is judged at.
     fn now(&self) -> i64 {
         self.past.as_ref().map_or_else(now_ms, |p| p.time_ms)

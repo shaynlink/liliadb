@@ -11,6 +11,7 @@ description = "LiliaDB data models over the native engine: key-value, JSON docum
 lilia-core = { path = "../lilia-core", default-features = false }
 lilia-engine = { path = "../lilia-engine" }
 lilia-io = { path = "../lilia-io" }
+lilia-analytics = { path = "../lilia-analytics", optional = true }
 blake3.workspace = true
 bytes.workspace = true
 hex.workspace = true
@@ -20,9 +21,17 @@ serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
+[features]
+## SQL over the data models, on DataFusion ([`sql`]).
+sql = ["dep:lilia-analytics"]
+
 [dev-dependencies]
 hex.workspace = true
 tempfile = "3.27.0"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "sql"
+required-features = ["sql"]

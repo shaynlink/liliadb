@@ -2,7 +2,7 @@
 //! transaction times (when the database learned it). A write supersedes what it overlaps without
 //! erasing it, so an entity can be read as it is known now or as it was known at any earlier
 //! time, for good: this audit trail does not depend on the history window
-//! ([`crate::history`]). See [`store`] for the records.
+//! ([`crate::history`]). The `store` module describes the records.
 
 mod handle;
 mod store;

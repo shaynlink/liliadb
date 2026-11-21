@@ -10,6 +10,7 @@ repository.workspace = true
 lilia-core = { path = "../lilia-core" }
 async-trait = "0.1.89"
 datafusion = { workspace = true, features = ["parquet"] }
+datafusion-functions-json.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

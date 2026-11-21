@@ -69,6 +69,7 @@ datafusion = { version = "55.2.0", default-features = false, features = [
     "string_expressions",
     "unicode_expressions",
 ] }
+datafusion-functions-json = "0.55.6"
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 h3o = { version = "0.11", default-features = false }
 hex = "0.4.3"

@@ -177,6 +177,37 @@ impl Source for Latest<'_> {
     }
 }
 
+/// Names of the collections with keys in keyspace `tag`, in order: one seek per collection.
+///
+/// # Errors
+///
+/// Engine errors, a key without a UTF-8 collection name.
+#[cfg(feature = "sql")]
+pub fn collections(source: &impl Source, tag: u8) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    let mut start = vec![tag];
+    let end = [tag.saturating_add(1)];
+    while let Some(item) = source
+        .range(Bound::Included(&start), Bound::Excluded(&end[..]))?
+        .next()
+        .transpose()?
+    {
+        let rest = item.key.get(1..).unwrap_or_default();
+        let split = rest
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or_else(|| corruption("a key without a collection name"))?;
+        let name = std::str::from_utf8(&rest[..split])
+            .map_err(|_| corruption("a collection name is not UTF-8"))?;
+        names.push(name.to_owned());
+        start = keys::prefix_end(&item.key[..split + 2]).unwrap_or_default();
+        if start.is_empty() {
+            break;
+        }
+    }
+    Ok(names)
+}
+
 fn kv_entry(namespace: &str, key: &[u8], item: &Item, now_ms: i64) -> Result<Option<KvEntry>> {
     let record = decode_kv(&item.value)?;
     if record.expired(now_ms) {

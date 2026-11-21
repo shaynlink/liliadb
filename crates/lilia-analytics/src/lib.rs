@@ -22,7 +22,7 @@ pub mod source;
 pub use datafusion::arrow;
 
 pub use cache::{ChunkCache, ChunkKey};
-pub use engine::{AnalyticsEngine, EngineOptions, DEFAULT_BATCH_SIZE};
+pub use engine::{AnalyticsEngine, EngineOptions, QueryTable, DEFAULT_BATCH_SIZE};
 pub use error::{AnalyticsError, Result};
 pub use output::QueryOutput;
 pub use provider::ColumnarTableProvider;

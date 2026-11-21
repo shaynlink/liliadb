@@ -14,7 +14,8 @@ use crate::guard::{Access, Guard};
 use crate::read::{Item, Items, Latest, Source};
 use crate::txn::View;
 
-/// A session or a transaction; see the [module documentation](self).
+/// A session or a transaction: what the model handles read from and write to, the latest state
+/// or a transaction's snapshot under its own writes.
 pub trait Context: sealed::Inner {}
 
 pub(crate) mod sealed {

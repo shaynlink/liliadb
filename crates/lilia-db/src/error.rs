@@ -48,12 +48,23 @@ pub enum Error {
     #[error("a session in the past is read-only")]
     ReadOnly,
 
+    /// A SQL query that does not parse, names unknown columns, writes, or fails to run.
+    #[error("SQL: {0}")]
+    Sql(String),
+
     /// A ledger operation on a database opened without a ledger.
     #[error("the ledger is not enabled for this database")]
     LedgerDisabled,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(feature = "sql")]
+impl From<lilia_analytics::AnalyticsError> for Error {
+    fn from(error: lilia_analytics::AnalyticsError) -> Self {
+        Self::Sql(error.to_string())
+    }
+}
 
 pub(crate) fn corruption(what: impl Into<String>) -> Error {
     Error::Corruption(what.into())

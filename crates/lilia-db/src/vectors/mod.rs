@@ -4,7 +4,7 @@
 //! record. A collection's HNSW configuration is part of its catalog schema; once a collection
 //! has one, every vector written to it must have the index's dimension and be either `f32`
 //! (quantized for an `i8` or bit index) or of the index's element type. The graph itself is kept
-//! in memory ([`index`]); persisting it is the subject of alpha.4.
+//! in memory (the `index` module); persisting it is the subject of alpha.4.
 
 mod admin;
 mod handle;

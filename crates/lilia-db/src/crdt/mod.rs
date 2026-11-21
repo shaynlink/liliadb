@@ -2,7 +2,7 @@
 //! by id in CRDT spaces. Each object can be merged with the state of a remote replica (the
 //! `lilia_core::crdt` types), and its local writes commute with concurrent ones: concurrent
 //! writers of one object only conflict on the same actor's counter totals, the same set
-//! entries or the same document fields. See [`store`] for the records.
+//! entries or the same document fields. The `store` module describes the records.
 
 mod handle;
 mod store;

@@ -38,8 +38,8 @@ use crate::timeseries::TimeSeries;
 use crate::vectors::Vectors;
 use crate::write::overlay;
 
-/// A transaction; see the [module documentation](self). Dropping it without committing
-/// discards its writes.
+/// An optimistic transaction over a snapshot of the database, validated at commit. Dropping it
+/// without committing discards its writes.
 #[derive(Debug)]
 pub struct Transaction<'db> {
     db: &'db Database,

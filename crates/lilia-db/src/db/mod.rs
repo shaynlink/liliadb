@@ -101,6 +101,9 @@ pub struct Database {
     vector_indexes: VectorIndexes,
     history: History,
     undo: Undo,
+    /// The SQL engine, started by the first query.
+    #[cfg(feature = "sql")]
+    analytics: std::sync::OnceLock<lilia_analytics::AnalyticsEngine>,
 }
 
 impl Database {
@@ -148,6 +151,8 @@ impl Database {
             vector_indexes: VectorIndexes::default(),
             history,
             undo,
+            #[cfg(feature = "sql")]
+            analytics: std::sync::OnceLock::new(),
         };
         db.history.trim(&db.engine, now_ms())?;
         db.finish_maintenance()?;
@@ -221,6 +226,21 @@ impl Database {
 
     pub(crate) fn engine(&self) -> &Db {
         &self.engine
+    }
+
+    /// The SQL engine, started on first use.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Sql`] when its runtime cannot start.
+    #[cfg(feature = "sql")]
+    pub(crate) fn analytics(&self) -> Result<&lilia_analytics::AnalyticsEngine> {
+        if let Some(engine) = self.analytics.get() {
+            return Ok(engine);
+        }
+        let engine =
+            lilia_analytics::AnalyticsEngine::new(lilia_analytics::EngineOptions::default())?;
+        Ok(self.analytics.get_or_init(|| engine))
     }
 
     pub(crate) fn schema(&self, name: &str) -> Option<Arc<Schema>> {

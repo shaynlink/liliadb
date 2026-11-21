@@ -1,11 +1,11 @@
 //! Time series: timestamped values per series, at the raw resolution and at the coarser ones
 //! lifecycle policies downsample them to.
 //!
-//! Points live in compressed chunks of up to [`chunk::CHUNK_POINTS`] points (`series\0`
-//! resolution, upper bound of the chunk's timestamps), each a record the ledger attests; see
-//! [`effect`] for how writes keep the chunks of a tier partitioning its timeline. A series holds
+//! Points live in compressed chunks of up to 1,024 points (`series\0`
+//! resolution, upper bound of the chunk's timestamps), each a record the ledger attests; the
+//! `effect` module describes how writes keep the chunks of a tier partitioning its timeline. A series holds
 //! one value per timestamp and resolution: a later write of a timestamp replaces its value.
-//! Lifecycle policies, downsampling and retention are in [`retention`].
+//! Lifecycle policies, downsampling and retention are in the `retention` module.
 
 mod chunk;
 mod effect;

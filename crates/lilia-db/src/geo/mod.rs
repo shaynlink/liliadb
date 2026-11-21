@@ -1,5 +1,5 @@
 //! Geo collections: geofences (polygons found by the points they contain) and GPS tracks
-//! (points by track and time, found by H3 cell). See [`store`] for the keyspaces.
+//! (points by track and time, found by H3 cell). The `store` module describes the keyspaces.
 
 mod handle;
 mod polygon;
