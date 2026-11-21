@@ -164,6 +164,55 @@ impl Database {
         )
     }
 
+    /// Proof that the current totals of `actor` in PN-counter `id` of CRDT space `space` were
+    /// written by a ledger commit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`].
+    pub fn prove_crdt_counter(&self, space: &str, id: &str, actor: &str) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("space", space)?;
+        validate_name("CRDT id", id)?;
+        Ledger::prove_record(self.engine(), &crate::crdt::counter_key(space, id, actor))
+    }
+
+    /// Proof that the current state of the entry of `element` under `tag` in OR-set `id` of
+    /// CRDT space `space` was written by a ledger commit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`].
+    pub fn prove_crdt_set_entry(
+        &self,
+        space: &str,
+        id: &str,
+        element: &str,
+        tag: &str,
+    ) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("space", space)?;
+        validate_name("CRDT id", id)?;
+        Ledger::prove_record(
+            self.engine(),
+            &crate::crdt::entry_key(space, id, element, tag),
+        )
+    }
+
+    /// Proof that the current version of field `path` of LWW document `id` of CRDT space `space`
+    /// was written by a ledger commit.
+    ///
+    /// # Errors
+    ///
+    /// An invalid path; as [`Database::prove_kv`].
+    pub fn prove_crdt_field(&self, space: &str, id: &str, path: &str) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("space", space)?;
+        validate_name("CRDT id", id)?;
+        let path = crate::crdt::normalize_path(path)?;
+        Ledger::prove_record(self.engine(), &crate::crdt::field_key(space, id, &path))
+    }
+
     /// Proof that the current version of the chunk holding the point of series `series` at
     /// `timestamp`, resolution `resolution_ms`, was written by a ledger commit. The delta's id
     /// is the chunk's `resolution:bound`.

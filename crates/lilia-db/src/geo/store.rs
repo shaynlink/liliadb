@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::polygon::{validate_position, Bounds, Polygon};
 use crate::error::{corruption, invalid, Result};
 use crate::keys;
+use crate::records::RecordSource;
 
 /// Finest level of the fence grid: cells of 360 / 2^24 degrees, about 2.4 m.
 const GRID_LEVELS: u8 = 25;
@@ -274,23 +275,6 @@ pub fn decode_point(timestamp: i64, raw: &[u8]) -> Result<GpsPoint> {
     })
 }
 
-/// Where a geo write reads.
-pub trait GeoSource {
-    /// The record at `key`.
-    ///
-    /// # Errors
-    ///
-    /// Engine errors.
-    fn read(&mut self, key: &Bytes) -> Result<Option<Bytes>>;
-
-    /// Live records with keys in `[start, end)`.
-    ///
-    /// # Errors
-    ///
-    /// Engine errors.
-    fn live(&mut self, start: &[u8], end: &[u8]) -> Result<Vec<(Bytes, Bytes)>>;
-}
-
 /// One record or index entry a write changes.
 #[derive(Debug)]
 pub struct Change {
@@ -314,7 +298,7 @@ impl Effect {
 }
 
 pub fn put_fence(
-    source: &mut impl GeoSource,
+    source: &mut impl RecordSource,
     collection: &str,
     id: &str,
     fence: &Fence,
@@ -337,7 +321,7 @@ pub fn put_fence(
     Ok(effect)
 }
 
-pub fn remove_fence(source: &mut impl GeoSource, collection: &str, id: &str) -> Result<Effect> {
+pub fn remove_fence(source: &mut impl RecordSource, collection: &str, id: &str) -> Result<Effect> {
     let key = fence_key(collection, id);
     let mut effect = Effect::default();
     let Some(raw) = source.read(&key)? else {
@@ -357,7 +341,7 @@ fn finest_cell(point: &GpsPoint) -> Result<u64> {
 
 /// Stores `points` (each validated) in `track`, the last of several with one timestamp winning.
 pub fn record(
-    source: &mut impl GeoSource,
+    source: &mut impl RecordSource,
     collection: &str,
     track: &str,
     points: &[GpsPoint],
@@ -391,7 +375,7 @@ pub fn record(
 
 /// Deletes the points of `track` with timestamps in `[start, end]`.
 pub fn delete_track(
-    source: &mut impl GeoSource,
+    source: &mut impl RecordSource,
     collection: &str,
     track: &str,
     start: i64,

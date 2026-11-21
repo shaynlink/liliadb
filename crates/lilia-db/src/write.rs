@@ -33,6 +33,9 @@ pub enum Model {
     TimeSeries,
     GeoFence,
     GeoPoint,
+    CrdtCounter,
+    CrdtSet,
+    CrdtDoc,
 }
 
 impl Model {
@@ -48,6 +51,9 @@ impl Model {
             Self::TimeSeries => "timeseries",
             Self::GeoFence => "geo_fence",
             Self::GeoPoint => "geo_point",
+            Self::CrdtCounter => "crdt_counter",
+            Self::CrdtSet => "crdt_set",
+            Self::CrdtDoc => "crdt_doc",
         }
     }
 }
@@ -412,6 +418,7 @@ impl<'a> Planner<'a> {
             Write::Vector(write) => self.vector(write),
             Write::TimeSeries(write) => self.series(write),
             Write::Geo(write) => self.geo(write),
+            Write::Crdt(write) => self.crdt(write),
         }
     }
 
@@ -658,6 +665,7 @@ pub mod overlay {
             Write::Vector(write) => crate::vectors::overlay(write, view),
             Write::TimeSeries(write) => crate::timeseries::overlay(write, view),
             Write::Geo(write) => crate::geo::overlay(write, view),
+            Write::Crdt(write) => crate::crdt::overlay(write, view),
         }
     }
 }

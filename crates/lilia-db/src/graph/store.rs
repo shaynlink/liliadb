@@ -20,8 +20,6 @@ struct StoredNode {
 
 pub(super) const NODE_FORMAT: u8 = 1;
 pub(super) const EDGE_FORMAT: u8 = 1;
-/// Separates the parts of an edge id in ledger deltas; names never contain control characters.
-const EDGE_ID_SEPARATOR: char = '\u{1f}';
 
 pub(crate) fn node_key(graph: &str, id: &str) -> Bytes {
     let mut key = keys::collection(keys::GRAPH_NODE, graph);
@@ -59,7 +57,7 @@ pub(super) fn split_edge(rest: &[u8]) -> Result<(String, String)> {
 
 /// Ledger id of an edge.
 pub(super) fn edge_id(source: &str, kind: &str, target: &str) -> String {
-    format!("{source}{EDGE_ID_SEPARATOR}{kind}{EDGE_ID_SEPARATOR}{target}")
+    format!("{source}{sep}{kind}{sep}{target}", sep = keys::ID_SEPARATOR)
 }
 
 /// Ledger id of the record at `rest` (an outbound edge key after `graph\0`).

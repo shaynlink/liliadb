@@ -24,6 +24,9 @@
 //! | `0x10` | collection `\0` grid level, x, y, fence id | empty: fence grid entry |
 //! | `0x11` | collection `\0` track `\0` timestamp (ordered) | GPS point |
 //! | `0x12` | collection `\0` H3 cell, timestamp, track | empty: point cell entry |
+//! | `0x13` | space `\0` counter id `\0` actor | PN-counter totals of one actor ([`crate::crdt`]) |
+//! | `0x14` | space `\0` set id `\0` element (escaped), tag | OR-set entry: live or tombstoned |
+//! | `0x15` | space `\0` document id `\0` path | LWW document field |
 //!
 //! Collection names never contain control characters ([`validate_name`]), so the `\0` after a
 //! name separates collections and keeps them in name order.
@@ -50,10 +53,13 @@ pub const GEO_FENCE: u8 = 0x0F;
 pub const GEO_GRID: u8 = 0x10;
 pub const GEO_POINT: u8 = 0x11;
 pub const GEO_CELL: u8 = 0x12;
+pub const CRDT_COUNTER: u8 = 0x13;
+pub const CRDT_SET: u8 = 0x14;
+pub const CRDT_FIELD: u8 = 0x15;
 
 /// Tags of the keyspaces whose records the ledger attests. Derived keyspaces (secondary
 /// index entries, inbound edge mirrors) are not records of their own.
-pub const RECORD_TAGS: [u8; 10] = [
+pub const RECORD_TAGS: [u8; 13] = [
     KV,
     DOC,
     GRAPH_NODE,
@@ -64,7 +70,14 @@ pub const RECORD_TAGS: [u8; 10] = [
     TS_CHUNK,
     GEO_FENCE,
     GEO_POINT,
+    CRDT_COUNTER,
+    CRDT_SET,
+    CRDT_FIELD,
 ];
+
+/// Separates the parts of a ledger id made of several names (an edge, a CRDT entry): a
+/// control character, which names never contain.
+pub const ID_SEPARATOR: char = '\u{1f}';
 
 pub const FORMAT: &[u8] = b"\x00format";
 pub const NEXT_INDEX: &[u8] = b"\x00next-index";
@@ -119,14 +132,41 @@ pub fn index(space: &str, index: u64) -> Vec<u8> {
 /// terminated by `00 01`, so values keep their byte order and no value is a prefix of another.
 pub fn index_value(space: &str, index_id: u64, value: &str) -> Vec<u8> {
     let mut out = index(space, index_id);
-    for &byte in value.as_bytes() {
+    push_escaped(&mut out, value.as_bytes());
+    out
+}
+
+/// Appends `value` escaped (`00` becomes `00 FF`) and terminated by `00 01`: escaped values
+/// keep their byte order, and none is a prefix of another.
+pub fn push_escaped(out: &mut Vec<u8>, value: &[u8]) {
+    for &byte in value {
         out.push(byte);
         if byte == 0 {
             out.push(0xFF);
         }
     }
     out.extend_from_slice(&[0, 1]);
-    out
+}
+
+/// The value escaped at the start of `bytes` by [`push_escaped`], and the bytes after it.
+pub fn split_escaped(bytes: &[u8]) -> Option<(Vec<u8>, &[u8])> {
+    let mut value = Vec::new();
+    let mut i = 0;
+    loop {
+        match *bytes.get(i)? {
+            0 => match *bytes.get(i + 1)? {
+                0xFF => value.push(0),
+                1 => return Some((value, &bytes[i + 2..])),
+                _ => return None,
+            },
+            byte => {
+                value.push(byte);
+                i += 1;
+                continue;
+            }
+        }
+        i += 2;
+    }
 }
 
 pub fn index_entry(space: &str, index_id: u64, value: &str, id: &str) -> Bytes {
@@ -225,6 +265,15 @@ mod tests {
         }
         let entry = index_entry("s", 1, "a\0b", "id-7");
         assert_eq!(suffix(&entry, &index_value("s", 1, "a\0b")), b"id-7");
+        for value in values {
+            let mut escaped = Vec::new();
+            push_escaped(&mut escaped, value.as_bytes());
+            escaped.extend_from_slice(b"rest");
+            let (found, rest) = split_escaped(&escaped).unwrap();
+            assert_eq!((found.as_slice(), rest), (value.as_bytes(), &b"rest"[..]));
+        }
+        assert_eq!(split_escaped(b"ab"), None, "unterminated");
+        assert_eq!(split_escaped(&[b'a', 0, 7]), None, "bad escape");
     }
 
     #[test]

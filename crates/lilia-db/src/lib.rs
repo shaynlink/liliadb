@@ -12,15 +12,16 @@
 //! - **Row-level security and masking**: every read and write of a [`Session`] passes through
 //!   one guard that applies the policies and masking rules of the collection for the caller's
 //!   [`SecurityContext`] ([`guard`]).
-//! - **Graph, full-text search, vectors, time series, geo**: model handles of a session or
-//!   transaction ([`Graph`], [`Fts`], [`Vectors`], [`TimeSeries`], [`Geo`]), whose writes are
-//!   batch writes like any other.
+//! - **Graph, full-text search, vectors, time series, geo, CRDTs**: model handles of a session
+//!   or transaction ([`Graph`], [`Fts`], [`Vectors`], [`TimeSeries`], [`Geo`], [`Crdt`]), whose
+//!   writes are batch writes like any other.
 //! - **Ledger**: an optional tamper-evident history of every record write, a Merkle Mountain
 //!   Range with `O(log n)` appends and proofs ([`ledger`]).
 
 mod batch;
 mod catalog;
 mod context;
+pub mod crdt;
 mod db;
 mod error;
 pub mod find;
@@ -32,6 +33,7 @@ mod keys;
 pub mod ledger;
 mod read;
 mod record;
+mod records;
 mod session;
 pub mod timeseries;
 mod txn;
@@ -40,6 +42,7 @@ mod write;
 
 pub use batch::{Batch, Outcome, Write};
 pub use context::Context;
+pub use crdt::{Crdt, CrdtCounter, CrdtDoc, CrdtSet, CrdtWrite};
 pub use db::{Database, Options};
 pub use error::{Error, Result};
 pub use fts::{Fts, FtsWrite};

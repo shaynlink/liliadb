@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::batch::{Outcome, Write};
 use crate::context::{sealed, Context, Reader};
+use crate::crdt::Crdt;
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::fts::Fts;
@@ -371,6 +372,13 @@ impl<'db> Transaction<'db> {
     #[must_use]
     pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
         Vectors::new(self, name)
+    }
+
+    /// CRDT space `name`; its writes are buffered until [`Transaction::commit`] and its reads
+    /// see them.
+    #[must_use]
+    pub fn crdt(&self, name: &str) -> Crdt<'_, Self> {
+        Crdt::new(self, name)
     }
 
     /// Geo collection `name`; its writes are buffered until [`Transaction::commit`] and its

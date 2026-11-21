@@ -5,9 +5,6 @@ mod handle;
 mod polygon;
 mod store;
 
-use std::ops::Bound;
-
-use bytes::Bytes;
 use lilia_core::GpsPoint;
 
 pub use handle::{Geo, TrackPoint};
@@ -15,10 +12,10 @@ pub use polygon::Polygon;
 pub use store::Fence;
 pub(crate) use store::{fence_key, point_key};
 
-use self::store::{Effect, GeoSource};
+use self::store::Effect;
 use crate::error::{corruption, invalid, Result};
 use crate::keys::{self, validate_name};
-use crate::read::Source;
+use crate::records::RecordSource;
 use crate::txn::View;
 use crate::write::overlay::Changes;
 use crate::write::{Model, Planner};
@@ -83,7 +80,7 @@ impl GeoWrite {
         }
     }
 
-    fn effect(&self, source: &mut impl GeoSource) -> Result<Effect> {
+    fn effect(&self, source: &mut impl RecordSource) -> Result<Effect> {
         match self {
             Self::PutFence {
                 collection,
@@ -115,25 +112,6 @@ pub(crate) fn identity(tag: u8, rest: &[u8]) -> Option<(Model, String)> {
     }
 }
 
-impl GeoSource for Planner<'_> {
-    fn read(&mut self, key: &Bytes) -> Result<Option<Bytes>> {
-        self.current(key)
-    }
-
-    /// Each record found is read again with an expectation: a deletion removes the index entry
-    /// of the version it expects. A record added to the range concurrently is as if added after
-    /// the deletion.
-    fn live(&mut self, start: &[u8], end: &[u8]) -> Result<Vec<(Bytes, Bytes)>> {
-        let mut found = Vec::new();
-        for (key, _) in self.live_range(start, end)? {
-            if let Some(value) = self.current(&key)? {
-                found.push((key, value));
-            }
-        }
-        Ok(found)
-    }
-}
-
 impl Planner<'_> {
     /// Plans one geo write.
     ///
@@ -162,22 +140,6 @@ impl Planner<'_> {
     }
 }
 
-/// A transaction's view as a geo source.
-struct ViewSource<'v, 't>(&'v View<'t>);
-
-impl GeoSource for ViewSource<'_, '_> {
-    fn read(&mut self, key: &Bytes) -> Result<Option<Bytes>> {
-        Ok(self.0.peek(key)?.map(|item| item.value))
-    }
-
-    fn live(&mut self, start: &[u8], end: &[u8]) -> Result<Vec<(Bytes, Bytes)>> {
-        self.0
-            .range(Bound::Included(start), Bound::Excluded(end))?
-            .map(|item| item.map(|item| (item.key, item.value)))
-            .collect()
-    }
-}
-
 /// The records a geo write changes in a transaction's view; see [`crate::write::overlay`].
 ///
 /// # Errors
@@ -185,7 +147,7 @@ impl GeoSource for ViewSource<'_, '_> {
 /// As [`Planner::geo`].
 pub(crate) fn overlay(write: &GeoWrite, view: &View<'_>) -> Result<(Changes, bool)> {
     write.validate()?;
-    let effect = write.effect(&mut ViewSource(view))?;
+    let effect = write.effect(&mut &*view)?;
     Ok((
         effect
             .changes

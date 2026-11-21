@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::batch::{Batch, Outcome, Write};
 use crate::context::{sealed, Context, Reader};
+use crate::crdt::Crdt;
 use crate::db::Database;
 use crate::error::{corruption, Error, Result};
 use crate::fts::Fts;
@@ -226,6 +227,12 @@ impl<'db> Session<'db> {
     #[must_use]
     pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
         Vectors::new(self, name)
+    }
+
+    /// CRDT space `name`; its writes commit at once.
+    #[must_use]
+    pub fn crdt(&self, name: &str) -> Crdt<'_, Self> {
+        Crdt::new(self, name)
     }
 
     /// Geo collection `name`; its writes commit at once.
