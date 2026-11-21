@@ -4167,6 +4167,7 @@ dependencies = [
  "h3o",
  "hex",
  "jieba-rs",
+ "js-sys",
  "lilia-zk",
  "miniz_oxide 0.8.9",
  "num-bigint 0.4.8",
@@ -4300,8 +4301,12 @@ dependencies = [
 name = "lilia-io"
 version = "0.1.0-alpha.9"
 dependencies = [
+ "js-sys",
  "libc",
  "tempfile",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "windows-sys 0.61.2",
 ]
 

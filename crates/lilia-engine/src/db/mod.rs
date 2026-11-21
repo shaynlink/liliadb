@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bytes::Bytes;
-use lilia_io::{LockGuard, NativeVfs, OpenMode, SyncLevel, Vfs};
+use lilia_io::{LockGuard, OpenMode, SyncLevel, Vfs};
 use parking_lot::{Condvar, Mutex, RwLock};
 
 pub use self::read::{Change, Entry, RangeIter, Snapshot, Versioned};
@@ -178,8 +178,9 @@ impl Db {
     ///
     /// Invalid options, I/O errors, another handle holding the directory lock, or stored data
     /// that fails its checksums ([`Error::Corruption`]).
+    #[cfg(any(unix, windows))]
     pub fn open(path: impl AsRef<Path>, options: Options) -> Result<Self> {
-        Self::open_with(Arc::new(NativeVfs), path, options)
+        Self::open_with(Arc::new(lilia_io::NativeVfs), path, options)
     }
 
     /// Opens the database in `path` on `vfs`.

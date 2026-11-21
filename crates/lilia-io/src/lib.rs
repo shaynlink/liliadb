@@ -7,7 +7,9 @@
 //!   platform ([`SyncLevel`]);
 //! - [`MemVfs`]: an in-memory file system that models what survives a power cut (synced data,
 //!   synced directory entries, an optional torn tail of unsynced writes) and can inject I/O
-//!   errors, so crash recovery can be tested deterministically.
+//!   errors, so crash recovery can be tested deterministically;
+//! - [`PoolVfs`]: a file system over a fixed pool of storage [`Slot`]s, for platforms whose files
+//!   can only be opened asynchronously (the browser's origin private file system).
 //!
 //! [`HardwareProfile`] describes the machine the engine runs on, and [`qos`] lowers the priority
 //! of the engine's own background threads. This crate is the only one of the engine stack that
@@ -18,13 +20,23 @@
 // per function beyond that.
 #![allow(clippy::missing_errors_doc)]
 
+mod clock;
 mod hardware;
 mod mem;
+#[cfg(any(unix, windows))]
 mod native;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod opfs;
+pub mod pool;
 pub mod qos;
 mod vfs;
 
+pub use clock::now_ms;
 pub use hardware::HardwareProfile;
 pub use mem::{CrashOptions, MemVfs};
+#[cfg(any(unix, windows))]
 pub use native::NativeVfs;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use opfs::OpfsPool;
+pub use pool::{MemSlot, PoolVfs, Slot};
 pub use vfs::{File, LockGuard, OpenMode, SyncLevel, Vfs};

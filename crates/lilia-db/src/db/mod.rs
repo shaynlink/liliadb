@@ -14,7 +14,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use lilia_core::{LedgerVerifyMode, SecurityContext};
 use lilia_engine::Db;
-use lilia_io::{HardwareProfile, NativeVfs, Vfs};
+use lilia_io::{HardwareProfile, Vfs};
 use parking_lot::{Mutex, RwLock};
 
 use crate::batch::{Outcome, Write};
@@ -113,8 +113,9 @@ impl Database {
     ///
     /// Engine errors, an unsupported layout, a ledger that cannot be opened or fails
     /// verification.
+    #[cfg(any(unix, windows))]
     pub fn open(path: impl AsRef<Path>, options: Options) -> Result<Self> {
-        Self::open_with(Arc::new(NativeVfs), path, options)
+        Self::open_with(Arc::new(lilia_io::NativeVfs), path, options)
     }
 
     /// Opens the database in `path` on `vfs`.

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use common::{key, scan, small_options, Rng};
 use lilia_engine::{Db, Durability, Error, Options, WriteBatch};
-use lilia_io::{MemVfs, Vfs};
+use lilia_io::{MemSlot, MemVfs, PoolVfs, Slot, Vfs};
 
 type Model = BTreeMap<Vec<u8>, (Vec<u8>, u64)>;
 
@@ -26,11 +26,29 @@ fn check_range(db: &Db, model: &Model, rng: &mut Rng) {
     assert_eq!(got, expected, "range {start:?}..{end:?}");
 }
 
-fn run(seed: u64, operations: u64, background_threads: bool) {
-    let vfs = MemVfs::new(seed);
-    let vfs: Arc<dyn Vfs> = Arc::new(vfs);
+/// Where the oracle's database lives.
+enum Store {
+    Mem,
+    /// A pool of in-memory slots, reopened from their headers at every reopen of the database.
+    Pool(Vec<Arc<dyn Slot>>),
+}
+
+impl Store {
+    fn pool(slots: usize) -> Self {
+        Self::Pool((0..slots).map(|_| Arc::new(MemSlot::default()) as Arc<dyn Slot>).collect())
+    }
+}
+
+fn run(seed: u64, operations: u64, background_threads: bool, store: &Store) {
+    let mem: Arc<dyn Vfs> = Arc::new(MemVfs::new(seed));
+    let vfs = || -> Arc<dyn Vfs> {
+        match store {
+            Store::Mem => Arc::clone(&mem),
+            Store::Pool(slots) => Arc::new(PoolVfs::new(slots.clone()).unwrap()),
+        }
+    };
     let options = Options { background_threads, ..small_options(Durability::Durable) };
-    let mut db = Db::open_with(Arc::clone(&vfs), "/oracle", options.clone()).unwrap();
+    let mut db = Db::open_with(vfs(), "/oracle", options.clone()).unwrap();
     let mut rng = Rng(seed);
     let mut model = Model::new();
     let mut snapshots = Vec::new();
@@ -102,7 +120,7 @@ fn run(seed: u64, operations: u64, background_threads: bool) {
             _ => {
                 snapshots.clear();
                 db.close().unwrap();
-                db = Db::open_with(Arc::clone(&vfs), "/oracle", options.clone()).unwrap();
+                db = Db::open_with(vfs(), "/oracle", options.clone()).unwrap();
             }
         }
     }
@@ -114,13 +132,20 @@ fn run(seed: u64, operations: u64, background_threads: bool) {
 #[test]
 fn random_operations_match_the_model() {
     for seed in 1..=6 {
-        run(seed, 4_000, true);
+        run(seed, 4_000, true, &Store::Mem);
+    }
+}
+
+#[test]
+fn a_slot_pool_reopened_from_its_headers_holds_the_database() {
+    for seed in 1..=6 {
+        run(seed, 4_000, false, &Store::pool(256));
     }
 }
 
 #[test]
 fn without_background_threads_writers_flush_and_compact_themselves() {
     for seed in 1..=6 {
-        run(seed, 4_000, false);
+        run(seed, 4_000, false, &Store::Mem);
     }
 }

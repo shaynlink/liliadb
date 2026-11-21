@@ -81,9 +81,7 @@ pub fn decode_doc(raw: &[u8]) -> Result<BinaryDoc> {
 
 /// Milliseconds since the Unix epoch, the clock of expiries and ledger commits.
 pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+    lilia_io::now_ms()
 }
 
 #[cfg(test)]
