@@ -25,6 +25,7 @@
 mod batch;
 pub mod bitemporal;
 mod catalog;
+pub mod compose;
 mod context;
 pub mod crdt;
 mod db;
@@ -46,13 +47,17 @@ pub mod sql;
 pub mod timeseries;
 mod txn;
 pub mod vectors;
+pub mod wire;
 mod write;
 
 pub use batch::{Batch, Outcome, Write};
 pub use bitemporal::{Bitemporal, BitemporalWrite};
 pub use context::Context;
 pub use crdt::{Crdt, CrdtCounter, CrdtDoc, CrdtSet, CrdtWrite};
-pub use db::{Database, Options, UndoStep, DEFAULT_HISTORY_RETENTION};
+pub use db::{
+    Database, IntegrityReport, LevelStats, Options, StorageStats, UndoStep,
+    DEFAULT_HISTORY_RETENTION,
+};
 pub use error::{Error, Result};
 pub use fts::{Fts, FtsWrite};
 pub use geo::{Fence, Geo, GeoWrite, Polygon, TrackPoint};

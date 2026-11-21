@@ -44,6 +44,10 @@ pub enum Error {
     #[error("history unavailable: {0}")]
     HistoryUnavailable(String),
 
+    /// An operation of the v0.1 API that v0.2 does not have.
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+
     /// A write through a session in the past ([`crate::Session::at_version`]).
     #[error("a session in the past is read-only")]
     ReadOnly,
@@ -58,6 +62,39 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<Error> for lilia_core::LiliaError {
+    /// The error code each error carries across the bindings; conflicts are retryable.
+    fn from(error: Error) -> Self {
+        use lilia_core::ErrorCode;
+        let code = match &error {
+            Error::Engine(engine) => match engine {
+                lilia_engine::Error::Io(io) if io.kind() == std::io::ErrorKind::StorageFull => {
+                    ErrorCode::DiskFull
+                }
+                lilia_engine::Error::Io(_) => ErrorCode::Io,
+                lilia_engine::Error::Corruption(_) => ErrorCode::Corrupt,
+                lilia_engine::Error::Conflict { .. }
+                | lilia_engine::Error::SequenceMoved { .. } => ErrorCode::Conflict,
+                lilia_engine::Error::Poisoned(_) => ErrorCode::Storage,
+                lilia_engine::Error::HistoryUnavailable { .. } => ErrorCode::NotFound,
+                lilia_engine::Error::InvalidArgument(_) => ErrorCode::InvalidInput,
+                lilia_engine::Error::Closed => ErrorCode::Closed,
+            },
+            Error::Conflict { .. } => ErrorCode::Conflict,
+            Error::Denied(_) => ErrorCode::Unauthorized,
+            Error::InvalidArgument(_)
+            | Error::Document(_)
+            | Error::Expression { .. }
+            | Error::Sql(_)
+            | Error::ReadOnly => ErrorCode::InvalidInput,
+            Error::Corruption(_) => ErrorCode::Corrupt,
+            Error::NotFound(_) | Error::HistoryUnavailable(_) => ErrorCode::NotFound,
+            Error::LedgerDisabled | Error::Unsupported(_) => ErrorCode::Unsupported,
+        };
+        Self::new(code, error.to_string(), code == ErrorCode::Conflict)
+    }
+}
 
 #[cfg(feature = "sql")]
 impl From<lilia_analytics::AnalyticsError> for Error {

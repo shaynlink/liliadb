@@ -1,5 +1,6 @@
 //! A database in the browser: on the origin private file system, in a dedicated worker, without
-//! background threads, with SQL. Run with a C compiler that targets wasm32 (for DataFusion's zstd):
+//! background threads, with SQL. Run with a C compiler that targets wasm32 (for the zstd of
+//! `DataFusion`):
 //!
 //! ```text
 //! CC_wasm32_unknown_unknown=clang cargo test -p lilia-db --features sql \

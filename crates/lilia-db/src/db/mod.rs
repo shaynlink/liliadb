@@ -1,6 +1,7 @@
 //! The database: opening, the commit loop, maintenance. Catalog administration is in
 //! [`schema`], the ledger in [`proofs`].
 
+mod health;
 mod proofs;
 mod schema;
 mod undo;
@@ -30,6 +31,7 @@ use crate::session::Session;
 use crate::vectors::VectorIndexes;
 use crate::write::{Plan, Planner};
 
+pub use self::health::{IntegrityReport, LevelStats, StorageStats};
 use self::undo::Undo;
 pub use self::undo::UndoStep;
 
