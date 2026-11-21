@@ -131,6 +131,39 @@ impl Database {
         Ledger::prove_record(self.engine(), &crate::vectors::vector_key(collection, id))
     }
 
+    /// Proof that the current version of fence `id` of geo collection `collection` was written
+    /// by a ledger commit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`].
+    pub fn prove_fence(&self, collection: &str, id: &str) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("collection", collection)?;
+        Ledger::prove_record(self.engine(), &crate::geo::fence_key(collection, id))
+    }
+
+    /// Proof that the current version of the point of `track` at `timestamp` in geo collection
+    /// `collection` was written by a ledger commit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`].
+    pub fn prove_gps_point(
+        &self,
+        collection: &str,
+        track: &str,
+        timestamp: i64,
+    ) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("collection", collection)?;
+        validate_name("track", track)?;
+        Ledger::prove_record(
+            self.engine(),
+            &crate::geo::point_key(collection, track, timestamp),
+        )
+    }
+
     /// Proof that the current version of the chunk holding the point of series `series` at
     /// `timestamp`, resolution `resolution_ms`, was written by a ledger commit. The delta's id
     /// is the chunk's `resolution:bound`.

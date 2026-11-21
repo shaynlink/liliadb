@@ -3,6 +3,7 @@
 use lilia_core::BinaryDoc;
 
 use crate::fts::FtsWrite;
+use crate::geo::GeoWrite;
 use crate::graph::GraphWrite;
 use crate::timeseries::TimeSeriesWrite;
 use crate::vectors::VectorWrite;
@@ -44,6 +45,7 @@ pub enum Write {
     Fts(FtsWrite),
     Vector(VectorWrite),
     TimeSeries(TimeSeriesWrite),
+    Geo(GeoWrite),
 }
 
 /// Writes applied atomically, all of them or none, in order: a later write of a record sees the

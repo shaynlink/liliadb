@@ -31,6 +31,8 @@ pub enum Model {
     FtsDictionary,
     Vector,
     TimeSeries,
+    GeoFence,
+    GeoPoint,
 }
 
 impl Model {
@@ -44,6 +46,8 @@ impl Model {
             Self::FtsDictionary => "fts_dictionary",
             Self::Vector => "vector",
             Self::TimeSeries => "timeseries",
+            Self::GeoFence => "geo_fence",
+            Self::GeoPoint => "geo_point",
         }
     }
 }
@@ -407,6 +411,7 @@ impl<'a> Planner<'a> {
             Write::Fts(write) => self.fts(write),
             Write::Vector(write) => self.vector(write),
             Write::TimeSeries(write) => self.series(write),
+            Write::Geo(write) => self.geo(write),
         }
     }
 
@@ -652,6 +657,7 @@ pub mod overlay {
             Write::Fts(write) => crate::fts::overlay(write, view),
             Write::Vector(write) => crate::vectors::overlay(write, view),
             Write::TimeSeries(write) => crate::timeseries::overlay(write, view),
+            Write::Geo(write) => crate::geo::overlay(write, view),
         }
     }
 }

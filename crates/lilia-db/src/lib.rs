@@ -12,9 +12,9 @@
 //! - **Row-level security and masking**: every read and write of a [`Session`] passes through
 //!   one guard that applies the policies and masking rules of the collection for the caller's
 //!   [`SecurityContext`] ([`guard`]).
-//! - **Graph, full-text search, vectors, time series**: model handles of a session or
-//!   transaction ([`Graph`], [`Fts`], [`Vectors`], [`TimeSeries`]), whose writes are batch
-//!   writes like any other.
+//! - **Graph, full-text search, vectors, time series, geo**: model handles of a session or
+//!   transaction ([`Graph`], [`Fts`], [`Vectors`], [`TimeSeries`], [`Geo`]), whose writes are
+//!   batch writes like any other.
 //! - **Ledger**: an optional tamper-evident history of every record write, a Merkle Mountain
 //!   Range with `O(log n)` appends and proofs ([`ledger`]).
 
@@ -25,6 +25,7 @@ mod db;
 mod error;
 pub mod find;
 pub mod fts;
+pub mod geo;
 pub mod graph;
 pub mod guard;
 mod keys;
@@ -42,12 +43,13 @@ pub use context::Context;
 pub use db::{Database, Options};
 pub use error::{Error, Result};
 pub use fts::{Fts, FtsWrite};
+pub use geo::{Fence, Geo, GeoWrite, Polygon, TrackPoint};
 pub use graph::{Graph, GraphWrite};
 pub use guard::Access;
 pub use ledger::mmr::MmrProof;
 pub use ledger::{CommitProof, RecordProof};
 pub use lilia_core::{
-    BinaryDoc, Direction, DownsampleAggregation, FtsFuzzyHit, FtsHit, FtsPhoneticHit,
+    BinaryDoc, Direction, GeofenceMatch, GpsPoint, DownsampleAggregation, FtsFuzzyHit, FtsHit, FtsPhoneticHit,
     FtsSuggestion, GraphEdge, GraphNode, HnswConfig, IndexOptions, JsonEntry, JsonIndexInfo,
     KvEntry, LedgerCommit, LedgerVerificationReport, LedgerVerifyMode, MaskFunction, MaskingRule,
     NamedPolicy, Policy, PolicyAction, SecurityContext, TimeSeriesLifecyclePolicy, TimeSeriesPoint,

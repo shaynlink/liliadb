@@ -8,6 +8,7 @@ use crate::context::{sealed, Context, Reader};
 use crate::db::Database;
 use crate::error::{corruption, Error, Result};
 use crate::fts::Fts;
+use crate::geo::Geo;
 use crate::graph::Graph;
 use crate::guard::{Access, Guard};
 use crate::keys::validate_name;
@@ -225,6 +226,12 @@ impl<'db> Session<'db> {
     #[must_use]
     pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
         Vectors::new(self, name)
+    }
+
+    /// Geo collection `name`; its writes commit at once.
+    #[must_use]
+    pub fn geo(&self, name: &str) -> Geo<'_, Self> {
+        Geo::new(self, name)
     }
 
     /// Time series `name`; its writes commit at once.

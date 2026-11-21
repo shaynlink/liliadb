@@ -25,6 +25,7 @@ use crate::context::{sealed, Context, Reader};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::fts::Fts;
+use crate::geo::Geo;
 use crate::graph::Graph;
 use crate::guard::{Access, Guard};
 use crate::keys::validate_name;
@@ -370,6 +371,13 @@ impl<'db> Transaction<'db> {
     #[must_use]
     pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
         Vectors::new(self, name)
+    }
+
+    /// Geo collection `name`; its writes are buffered until [`Transaction::commit`] and its
+    /// reads see them.
+    #[must_use]
+    pub fn geo(&self, name: &str) -> Geo<'_, Self> {
+        Geo::new(self, name)
     }
 
     /// Time series `name`; its writes are buffered until [`Transaction::commit`] and its reads

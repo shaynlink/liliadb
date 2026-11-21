@@ -20,6 +20,10 @@
 //! | `0x0C` | collection `\0` id | vector ([`crate::vectors`]) |
 //! | `0x0D` | series `\0` resolution, chunk bound (8 bytes each, ordered) | points ([`crate::timeseries`]) |
 //! | `0x0E` | series `\0` resolution (8 bytes, ordered) | downsampling watermark |
+//! | `0x0F` | collection `\0` fence id | geofence ([`crate::geo`]) |
+//! | `0x10` | collection `\0` grid level, x, y, fence id | empty: fence grid entry |
+//! | `0x11` | collection `\0` track `\0` timestamp (ordered) | GPS point |
+//! | `0x12` | collection `\0` H3 cell, timestamp, track | empty: point cell entry |
 //!
 //! Collection names never contain control characters ([`validate_name`]), so the `\0` after a
 //! name separates collections and keeps them in name order.
@@ -42,10 +46,14 @@ pub const FTS_DICTIONARY: u8 = 0x0B;
 pub const VECTOR: u8 = 0x0C;
 pub const TS_CHUNK: u8 = 0x0D;
 pub const TS_STATE: u8 = 0x0E;
+pub const GEO_FENCE: u8 = 0x0F;
+pub const GEO_GRID: u8 = 0x10;
+pub const GEO_POINT: u8 = 0x11;
+pub const GEO_CELL: u8 = 0x12;
 
 /// Tags of the keyspaces whose records the ledger attests. Derived keyspaces (secondary
 /// index entries, inbound edge mirrors) are not records of their own.
-pub const RECORD_TAGS: [u8; 8] = [
+pub const RECORD_TAGS: [u8; 10] = [
     KV,
     DOC,
     GRAPH_NODE,
@@ -54,6 +62,8 @@ pub const RECORD_TAGS: [u8; 8] = [
     FTS_DICTIONARY,
     VECTOR,
     TS_CHUNK,
+    GEO_FENCE,
+    GEO_POINT,
 ];
 
 pub const FORMAT: &[u8] = b"\x00format";
