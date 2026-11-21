@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, access } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 
@@ -20,23 +19,20 @@ const candidateDaemon = [
 
 const daemonBinary = process.env.LILIA_DAEMON_BIN ?? candidateDaemon;
 
-async function waitUntilReady(tokenFile: string, endpoint: string, daemon: ChildProcess): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
+/** Waits until the daemon of `path` accepts a client. */
+async function waitUntilReady(path: string, endpoint: string, tokenFile: string, daemon: ChildProcess): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
     if (daemon.exitCode !== null) throw new Error(`daemon exited with ${daemon.exitCode}`);
     try {
-      await access(tokenFile);
-      await new Promise<void>((resolve, reject) => {
-        const socket = connect(endpoint);
-        socket.once("connect", () => { socket.destroy(); resolve(); });
-        socket.once("error", (error) => { socket.destroy(); reject(error); });
-      });
+      const probe = await Database.open({ path, mode: "daemon", endpoint, tokenFile });
+      await probe.close();
       return;
-    } catch {
+    } catch (error) {
+      if (Date.now() > deadline) throw error;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
-  throw new Error("daemon startup timed out");
 }
 
 runTest("Deno: daemon client connects over Unix domain socket IPC", async () => {
@@ -57,7 +53,7 @@ runTest("Deno: daemon client connects over Unix domain socket IPC", async () => 
   );
 
   try {
-    await waitUntilReady(tokenFile, endpoint, daemonProc);
+    await waitUntilReady(dbPath, endpoint, tokenFile, daemonProc);
 
     const db = await Database.open({
       path: dbPath,

@@ -13,18 +13,13 @@ clap.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 serde_json.workspace = true
-ed25519-dalek.workspace = true
 hex.workspace = true
 lilia-core = { path = "../../crates/lilia-core" }
-lilia-shm = { path = "../../crates/lilia-shm" }
-lilia-storage-sqlite = { path = "../../crates/lilia-storage-sqlite" }
-lilia-graph = { path = "../../crates/lilia-graph" }
-lilia-plugin-api = { path = "../../crates/lilia-plugin-api" }
+lilia-db = { path = "../../crates/lilia-db" }
 lilia-protocol = { path = "../../crates/lilia-protocol" }
 rand.workspace = true
 subtle = "2.6.1"
 tokio.workspace = true
-futures-util = "0.3"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true

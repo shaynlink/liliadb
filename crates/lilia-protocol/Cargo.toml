@@ -7,7 +7,10 @@ license.workspace = true
 
 [dependencies]
 lilia-core = { path = "../lilia-core" }
+lilia-db = { path = "../lilia-db", features = ["sql"] }
+lilia-graph = { path = "../lilia-graph" }
 rkyv = { workspace = true }
+rmp-serde = { workspace = true }
 serde.workspace = true
 serde_bytes.workspace = true
 serde_json.workspace = true
@@ -16,8 +19,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true }
-rmp-serde = { workspace = true }
 serde_json.workspace = true
+tempfile = "3.27.0"
 
 [[bench]]
 name = "protocol_framing"

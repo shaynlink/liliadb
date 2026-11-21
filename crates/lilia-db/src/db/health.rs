@@ -3,20 +3,43 @@
 use std::ops::Bound;
 
 use lilia_core::{LedgerVerificationReport, LedgerVerifyMode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::Database;
 use crate::error::Result;
 
 /// The sorted runs of one level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct LevelStats {
     pub runs: usize,
     pub bytes: u64,
 }
 
 /// The shape of the storage.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct StorageStats {
     /// Level 0 first.
     pub levels: Vec<LevelStats>,

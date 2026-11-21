@@ -1,5 +1,4 @@
-use lilia_core::{GraphNode, Result};
-use lilia_storage_sqlite::Database;
+use lilia_core::GraphNode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,12 +52,4 @@ impl UnifiedNode {
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
-}
-
-pub fn resolve_node_document(db: &Database, node: &GraphNode) -> Result<Option<serde_json::Value>> {
-    let Some(space) = node.doc_space.as_deref() else {
-        return Ok(None);
-    };
-    let doc_id = node.doc_id.as_deref().unwrap_or(&node.id);
-    Ok(db.json_get(space, doc_id)?.map(|entry| entry.value()))
 }

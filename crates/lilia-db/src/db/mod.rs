@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use lilia_core::{LedgerVerifyMode, SecurityContext};
+use lilia_core::{LedgerVerifyMode, ResourceProfile, SecurityContext};
 use lilia_engine::Db;
 use lilia_io::{HardwareProfile, Vfs};
 use parking_lot::{Mutex, RwLock};
@@ -75,6 +75,25 @@ impl Options {
             history_retention: DEFAULT_HISTORY_RETENTION,
             undo_depth: 0,
         }
+    }
+
+    /// Engine buffers for a class of device, sized from this machine: `Server` gives the engine
+    /// the whole machine to size from, `Mobile` a quarter of its memory and one compaction
+    /// thread, `Constrained` a sixteenth of its memory and one compaction thread.
+    #[must_use]
+    pub fn for_profile(profile: ResourceProfile) -> Self {
+        let mut hardware = HardwareProfile::probe();
+        let share = match profile {
+            ResourceProfile::Server => 1,
+            ResourceProfile::Mobile => 4,
+            ResourceProfile::Constrained => 16,
+        };
+        hardware.memory_bytes /= share;
+        let mut options = Self::for_hardware(&hardware);
+        if share > 1 {
+            options.engine.compaction_threads = 1;
+        }
+        options
     }
 }
 

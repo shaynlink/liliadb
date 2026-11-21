@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use lilia_protocol::{
-    read_frame, write_frame, Operation, Request, Response, ResponseValue, PROTOCOL_MAJOR,
+    Codec, Operation, Request, Response, ResponseValue, PROTOCOL_MAJOR,
     PROTOCOL_MINOR,
 };
 use serde_json::{json, Value};
@@ -154,17 +154,19 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let id = Uuid::new_v4().to_string();
-    write_frame(
-        &mut stream,
-        &Request {
-            id: id.clone(),
-            token,
-            deadline_ms: Some(5_000),
-            operation,
-        },
-    )
-    .await?;
-    let response: Response = read_frame(&mut stream).await?;
+    Codec::Rkyv.announce(&mut stream).await?;
+    Codec::Rkyv
+        .write_request(
+            &mut stream,
+            &Request {
+                id: id.clone(),
+                token,
+                deadline_ms: Some(5_000),
+                operation,
+            },
+        )
+        .await?;
+    let response: Response = Codec::Rkyv.read_response(&mut stream).await?;
     if response.id != id {
         anyhow::bail!("daemon response id mismatch");
     }

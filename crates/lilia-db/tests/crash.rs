@@ -25,8 +25,8 @@ use std::time::Duration;
 use common::{small_options, Rng};
 use lilia_core::{BitemporalInterval, GpsPoint, TimeSeriesPoint};
 use lilia_db::{
-    Batch, BitemporalWrite, CrdtWrite, Database, FtsWrite, GeoWrite, GraphWrite, IndexOptions, LedgerVerifyMode, Options, Scan,
-    TimeSeriesWrite, Vector, VectorWrite, Write,
+    Batch, BitemporalWrite, CrdtWrite, Database, FtsWrite, GeoWrite, GraphWrite, IndexOptions,
+    LedgerVerifyMode, Options, Scan, TimeSeriesWrite, Vector, VectorWrite, Write,
 };
 use lilia_engine::Durability;
 use lilia_io::{CrashOptions, MemVfs, Vfs};
@@ -56,59 +56,121 @@ const VALID: BitemporalInterval = BitemporalInterval { from: 0, to: 100 };
 /// The writes of batch `b` to the models other than documents and key-value records.
 fn model_writes(rng: &mut Rng, b: u64, batch: &mut Batch, state: &mut State) {
     let node = format!("n{}", rng.below(12));
-    batch.push(Write::Graph(GraphWrite::SetNode { graph: "g".into(), id: node.clone(), kind: "k".into(), metadata: json!({"b": b}), document: None }));
+    batch.push(Write::Graph(GraphWrite::SetNode {
+        graph: "g".into(),
+        id: node.clone(),
+        kind: "k".into(),
+        metadata: json!({"b": b}),
+        document: None,
+    }));
     state.nodes.insert(node.clone(), b);
     let target = format!("n{}", rng.below(12));
-    batch.push(Write::Graph(GraphWrite::AddEdge { graph: "g".into(), source: node.clone(), target: target.clone(), kind: "link".into(), weight: 1.0 }));
+    batch.push(Write::Graph(GraphWrite::AddEdge {
+        graph: "g".into(),
+        source: node.clone(),
+        target: target.clone(),
+        kind: "link".into(),
+        weight: 1.0,
+    }));
     state.edges.insert((node, target));
     if rng.below(4) == 0 {
         let gone = format!("n{}", rng.below(12));
-        batch.push(Write::Graph(GraphWrite::DeleteNode { graph: "g".into(), id: gone.clone() }));
+        batch.push(Write::Graph(GraphWrite::DeleteNode {
+            graph: "g".into(),
+            id: gone.clone(),
+        }));
         state.nodes.remove(&gone);
         state.edges.retain(|(s, t)| *s != gone && *t != gone);
     }
 
     let text = format!("t{}", rng.below(8));
     let word = rng.below(5);
-    batch.push(Write::Fts(FtsWrite::Index { collection: "f".into(), doc_id: text.clone(), content: format!("w{word} shared") }));
+    batch.push(Write::Fts(FtsWrite::Index {
+        collection: "f".into(),
+        doc_id: text.clone(),
+        content: format!("w{word} shared"),
+    }));
     state.texts.insert(text, word);
     if rng.below(4) == 0 {
         let gone = format!("t{}", rng.below(8));
-        batch.push(Write::Fts(FtsWrite::Delete { collection: "f".into(), doc_id: gone.clone() }));
+        batch.push(Write::Fts(FtsWrite::Delete {
+            collection: "f".into(),
+            doc_id: gone.clone(),
+        }));
         state.texts.remove(&gone);
     }
 
     let id = format!("v{}", rng.below(8));
     #[allow(clippy::cast_precision_loss)] // reason: batch numbers stay far below 2^24
     let vector = Vector::from_f32(&[b as f32, 1.0]).unwrap();
-    batch.push(Write::Vector(VectorWrite::Set { collection: "vec".into(), id: id.clone(), vector: vector.clone() }));
+    batch.push(Write::Vector(VectorWrite::Set {
+        collection: "vec".into(),
+        id: id.clone(),
+        vector: vector.clone(),
+    }));
     state.vectors.insert(id, vector);
 
     let time = i64::try_from(rng.below(500)).unwrap();
     #[allow(clippy::cast_precision_loss)] // reason: batch numbers stay far below 2^53
-    let point = TimeSeriesPoint { timestamp: time, value: b as f64 };
-    batch.push(Write::TimeSeries(TimeSeriesWrite::Append { series: "s".into(), resolution_ms: 0, points: vec![point] }));
+    let point = TimeSeriesPoint {
+        timestamp: time,
+        value: b as f64,
+    };
+    batch.push(Write::TimeSeries(TimeSeriesWrite::Append {
+        series: "s".into(),
+        resolution_ms: 0,
+        points: vec![point],
+    }));
     state.points.insert(time, b);
 
     let at = i64::try_from(rng.below(200)).unwrap();
     #[allow(clippy::cast_precision_loss)] // reason: below 80
     let latitude = (b % 80) as f64;
-    let gps = GpsPoint { timestamp: at, latitude, longitude: 0.0, altitude: None, speed: None, accuracy: None, h3_index: None };
-    batch.push(Write::Geo(GeoWrite::Record { collection: "geo".into(), track: "trk".into(), points: vec![gps] }));
+    let gps = GpsPoint {
+        timestamp: at,
+        latitude,
+        longitude: 0.0,
+        altitude: None,
+        speed: None,
+        accuracy: None,
+        h3_index: None,
+    };
+    batch.push(Write::Geo(GeoWrite::Record {
+        collection: "geo".into(),
+        track: "trk".into(),
+        points: vec![gps],
+    }));
     state.track.insert(at, b % 80);
 
-    batch.push(Write::Crdt(CrdtWrite::Count { space: "c".into(), id: "hits".into(), actor: format!("a{}", b % 3), increment: 1, decrement: 0 }));
+    batch.push(Write::Crdt(CrdtWrite::Count {
+        space: "c".into(),
+        id: "hits".into(),
+        actor: format!("a{}", b % 3),
+        increment: 1,
+        decrement: 0,
+    }));
     state.counter += 1;
     let element = format!("e{}", rng.below(6));
     if rng.below(3) == 0 {
-        batch.push(Write::Crdt(CrdtWrite::SetRemove { space: "c".into(), id: "set".into(), element: element.clone(), timestamp_ms: i64::try_from(b).unwrap() }));
+        batch.push(Write::Crdt(CrdtWrite::SetRemove {
+            space: "c".into(),
+            id: "set".into(),
+            element: element.clone(),
+            timestamp_ms: i64::try_from(b).unwrap(),
+        }));
         state.elements.remove(&element);
     } else {
         batch.push(Write::Crdt(CrdtWrite::set_add("c", "set", "w", &element)));
         state.elements.insert(element);
     }
 
-    batch.push(Write::Bitemporal(BitemporalWrite::Put { space: "bt".into(), id: "x".into(), value: json!(b), valid: VALID, recorded_at: Some(recorded(b)) }));
+    batch.push(Write::Bitemporal(BitemporalWrite::Put {
+        space: "bt".into(),
+        id: "x".into(),
+        value: json!(b),
+        valid: VALID,
+        recorded_at: Some(recorded(b)),
+    }));
     state.fact = Some(b);
 }
 
@@ -154,25 +216,75 @@ fn read_state(db: &Database) -> State {
             texts.insert(hit.doc_id, word);
         }
     }
-    assert_eq!(s.fts("f").search("shared", 100).unwrap().len(), texts.len(), "every document holds the shared word");
+    assert_eq!(
+        s.fts("f").search("shared", 100).unwrap().len(),
+        texts.len(),
+        "every document holds the shared word"
+    );
     let as_batch = |value: f64| {
         assert!(value.fract() == 0.0 && value >= 0.0);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // reason: whole and non-negative
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // reason: whole and non-negative
         let batch = value as u64;
         batch
     };
     State {
-        docs: s.json_scan("items", &Scan::all()).unwrap().into_iter().map(|e| (e.id.clone(), e.to_json_value())).collect(),
-        kv: s.kv_scan("meta", &Scan::all()).unwrap().into_iter().map(|e| (e.key, e.value)).collect(),
-        nodes: s.graph("g").nodes(None, &Scan::all()).unwrap().into_iter().map(|n| (n.id, n.metadata["b"].as_u64().unwrap())).collect(),
-        edges: s.graph("g").edges(None, None, Some("link"), None).unwrap().into_iter().map(|e| (e.source, e.target)).collect(),
+        docs: s
+            .json_scan("items", &Scan::all())
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.id.clone(), e.to_json_value()))
+            .collect(),
+        kv: s
+            .kv_scan("meta", &Scan::all())
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.key, e.value))
+            .collect(),
+        nodes: s
+            .graph("g")
+            .nodes(None, &Scan::all())
+            .unwrap()
+            .into_iter()
+            .map(|n| (n.id, n.metadata["b"].as_u64().unwrap()))
+            .collect(),
+        edges: s
+            .graph("g")
+            .edges(None, None, Some("link"), None)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.source, e.target))
+            .collect(),
         texts,
-        vectors: (0..8).filter_map(|i| s.vectors("vec").get(&format!("v{i}")).unwrap().map(|v| (format!("v{i}"), v))).collect(),
-        points: s.series("s").range(i64::MIN, i64::MAX).unwrap().into_iter().map(|p| (p.timestamp, as_batch(p.value))).collect(),
-        track: s.geo("geo").track("trk", i64::MIN, i64::MAX).unwrap().into_iter().map(|p| (p.timestamp, as_batch(p.latitude))).collect(),
+        vectors: (0..8)
+            .filter_map(|i| {
+                s.vectors("vec")
+                    .get(&format!("v{i}"))
+                    .unwrap()
+                    .map(|v| (format!("v{i}"), v))
+            })
+            .collect(),
+        points: s
+            .series("s")
+            .range(i64::MIN, i64::MAX)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.timestamp, as_batch(p.value)))
+            .collect(),
+        track: s
+            .geo("geo")
+            .track("trk", i64::MIN, i64::MAX)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.timestamp, as_batch(p.latitude)))
+            .collect(),
         counter: s.crdt("c").counter("hits").value().unwrap(),
         elements: s.crdt("c").set("set").elements().unwrap(),
-        fact: s.bitemporal("bt").get("x", 50).unwrap().map(|e| e.value.as_u64().unwrap()),
+        fact: s
+            .bitemporal("bt")
+            .get("x", 50)
+            .unwrap()
+            .map(|e| e.value.as_u64().unwrap()),
     }
 }
 
@@ -182,10 +294,21 @@ fn check_audit(db: &Database, applied: usize, seed: u64) {
     let facts = db.system();
     let facts = facts.bitemporal("bt");
     for b in 0..applied as u64 {
-        let known = facts.get_as_of("x", recorded(b), 50).unwrap().map(|e| e.value.as_u64().unwrap());
-        assert_eq!(known, Some(b), "seed {seed}: the fact as known after batch {b}");
+        let known = facts
+            .get_as_of("x", recorded(b), 50)
+            .unwrap()
+            .map(|e| e.value.as_u64().unwrap());
+        assert_eq!(
+            known,
+            Some(b),
+            "seed {seed}: the fact as known after batch {b}"
+        );
     }
-    assert_eq!(facts.history("x").unwrap().len(), applied, "seed {seed}: one slice per applied batch");
+    assert_eq!(
+        facts.history("x").unwrap().len(),
+        applied,
+        "seed {seed}: one slice per applied batch"
+    );
 }
 
 /// Every index of `items` answers like a filtered scan.
@@ -194,17 +317,35 @@ fn check_indexes(db: &Database, state: &State, seed: u64) {
     for color in COLORS {
         let mut query = Map::new();
         query.insert("color".into(), json!(color));
-        let found: Vec<String> = s.json_find("items", &query, &Scan::all()).unwrap().into_iter().map(|e| e.id).collect();
-        let expected: Vec<String> = state.docs.iter().filter(|(_, d)| d["color"] == color).map(|(id, _)| id.clone()).collect();
+        let found: Vec<String> = s
+            .json_find("items", &query, &Scan::all())
+            .unwrap()
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        let expected: Vec<String> = state
+            .docs
+            .iter()
+            .filter(|(_, d)| d["color"] == color)
+            .map(|(id, _)| id.clone())
+            .collect();
         assert_eq!(found, expected, "seed {seed}: color {color}");
         for size in 0..3 {
             let mut alone = Map::new();
             alone.insert("size".into(), json!(size));
             let found = s.json_find("items", &alone, &Scan::all()).unwrap().len();
-            assert_eq!(found, state.docs.values().filter(|d| d["size"] == size).count(), "seed {seed}: size {size}");
+            assert_eq!(
+                found,
+                state.docs.values().filter(|d| d["size"] == size).count(),
+                "seed {seed}: size {size}"
+            );
             query.insert("size".into(), json!(size));
             let found = s.json_find("items", &query, &Scan::all()).unwrap().len();
-            let expected = state.docs.values().filter(|d| d["color"] == color && d["size"] == size).count();
+            let expected = state
+                .docs
+                .values()
+                .filter(|d| d["color"] == color && d["size"] == size)
+                .count();
             assert_eq!(found, expected, "seed {seed}: color {color}, size {size}");
         }
     }
@@ -212,7 +353,10 @@ fn check_indexes(db: &Database, state: &State, seed: u64) {
 
 fn iteration(seed: u64) {
     let mut rng = Rng(seed);
-    let options = Options { undo_depth: 4, ..small_options(Durability::Durable, true) };
+    let options = Options {
+        undo_depth: 4,
+        ..small_options(Durability::Durable, true)
+    };
     let memvfs = MemVfs::new(seed);
     let vfs: Arc<dyn Vfs> = Arc::new(memvfs.clone());
     let count = 30 + usize::try_from(rng.below(150)).unwrap();
@@ -220,7 +364,8 @@ fn iteration(seed: u64) {
 
     let preload = usize::try_from(rng.below(30)).unwrap();
     let db = Database::open_with(Arc::clone(&vfs), "/db", options.clone()).unwrap();
-    db.create_index("items", "by_color", "$.color", &IndexOptions::default()).unwrap();
+    db.create_index("items", "by_color", "$.color", &IndexOptions::default())
+        .unwrap();
     for batch in &batches[..preload] {
         db.system().commit(batch).unwrap();
     }
@@ -262,15 +407,28 @@ fn iteration(seed: u64) {
     drop(db);
 
     memvfs.set_fault_ppm(0);
-    memvfs.restart(if rng.below(2) == 0 { CrashOptions::TORN } else { CrashOptions::CLEAN });
+    memvfs.restart(if rng.below(2) == 0 {
+        CrashOptions::TORN
+    } else {
+        CrashOptions::CLEAN
+    });
     let db = Database::open_with(Arc::clone(&vfs), "/db", options.clone())
         .unwrap_or_else(|e| panic!("seed {seed}: reopening after the crash failed: {e}"));
     let recovered = read_state(&db);
     let applied = [acknowledged, acknowledged + 1]
         .into_iter()
         .find(|&n| states.get(n) == Some(&recovered))
-        .unwrap_or_else(|| panic!("seed {seed}: recovered state matches neither {acknowledged} nor {} batches", acknowledged + 1));
-    assert_eq!(db.ledger_len().unwrap(), applied as u64, "seed {seed}: one ledger commit per applied batch");
+        .unwrap_or_else(|| {
+            panic!(
+                "seed {seed}: recovered state matches neither {acknowledged} nor {} batches",
+                acknowledged + 1
+            )
+        });
+    assert_eq!(
+        db.ledger_len().unwrap(),
+        applied as u64,
+        "seed {seed}: one ledger commit per applied batch"
+    );
     let report = db.verify_ledger(LedgerVerifyMode::Strict).unwrap();
     assert!(report.is_valid, "seed {seed}: {report:?}");
     check_indexes(&db, &recovered, seed);
@@ -278,24 +436,46 @@ fn iteration(seed: u64) {
 
     // Undo the last batch, unless an index build cleared its entry, then redo it.
     if db.undo().unwrap().is_some() {
-        assert_eq!(read_state(&db), states[applied - 1], "seed {seed}: undoing batch {applied}");
+        assert_eq!(
+            read_state(&db),
+            states[applied - 1],
+            "seed {seed}: undoing batch {applied}"
+        );
         check_indexes(&db, &states[applied - 1], seed);
         assert!(db.redo().unwrap().is_some());
-        assert_eq!(read_state(&db), states[applied], "seed {seed}: redoing batch {applied}");
+        assert_eq!(
+            read_state(&db),
+            states[applied],
+            "seed {seed}: redoing batch {applied}"
+        );
         let report = db.verify_ledger(LedgerVerifyMode::Strict).unwrap();
-        assert!(report.is_valid, "seed {seed}: after undo and redo: {report:?}");
+        assert!(
+            report.is_valid,
+            "seed {seed}: after undo and redo: {report:?}"
+        );
     }
 
     // The recovered database keeps working.
-    db.system().json_put("items", "after", &json!({"color": "red", "size": 0})).unwrap();
-    assert!(db.prove_doc("items", "after").unwrap().verify(&db.ledger_root().unwrap()));
+    db.system()
+        .json_put("items", "after", &json!({"color": "red", "size": 0}))
+        .unwrap();
+    assert!(db
+        .prove_doc("items", "after")
+        .unwrap()
+        .verify(&db.ledger_root().unwrap()));
     db.close().unwrap();
 }
 
 #[test]
 fn recovered_records_ledger_and_indexes_agree_after_a_power_cut() {
-    let iterations: u64 = std::env::var("LILIA_CRASH_ITERATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
-    let base: u64 = std::env::var("LILIA_CRASH_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let iterations: u64 = std::env::var("LILIA_CRASH_ITERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200);
+    let base: u64 = std::env::var("LILIA_CRASH_SEED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     for seed in base..base + iterations {
         iteration(seed);
     }

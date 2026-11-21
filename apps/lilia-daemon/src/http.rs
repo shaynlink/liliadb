@@ -1,28 +1,45 @@
-use std::path::PathBuf;
+//! The loopback HTTP gateway: JSON routes over the operations of the protocol, each run by
+//! [`lilia_protocol::execute`] like an IPC request.
+
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::Next;
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use futures_util::stream::Stream;
 use lilia_core::{
-    BatchOperation, Direction, ErrorCode, LiliaError, VectorElementType, VectorMetric,
+    BatchOperation, ErrorCode, JsonEntry, KvEntry, LiliaError, VectorElementType, VectorMetric,
 };
-use lilia_storage_sqlite::Database;
+use lilia_db::{Database, Vector};
+use lilia_protocol::{names, Operation, ResponseValue, StoredVector};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 use tokio::sync::Notify;
+
+/// Most operations one batch request may carry.
+const MAX_BATCH_OPERATIONS: usize = 10_000;
 
 #[derive(Clone)]
 pub struct HttpState {
     pub database: Arc<Database>,
     pub token: String,
     pub shutdown: Arc<Notify>,
+}
+
+type Failure = (StatusCode, Json<Value>);
+type HttpResult = Result<Json<Value>, Failure>;
+
+/// The inner value of a response of the expected variant; a failure otherwise.
+macro_rules! answer {
+    ($value:expr, $variant:path) => {
+        match $value {
+            $variant(inner) => inner,
+            other => return Err(unexpected(&other)),
+        }
+    };
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,6 +178,8 @@ pub struct GraphEdgeRequest {
     pub target: String,
     #[serde(default = "default_edge_kind")]
     pub kind: String,
+    #[serde(default)]
+    pub weight: Option<f64>,
 }
 
 fn default_edge_kind() -> String {
@@ -228,6 +247,7 @@ pub struct FtsPhoneticRequest {
     pub limit: Option<u32>,
 }
 
+/// A write of a batch request; keys, values and vectors in readable forms.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HttpBatchOperation {
@@ -306,7 +326,6 @@ pub enum HttpBatchOperation {
     VectorSet {
         collection: String,
         id: String,
-        dim: u32,
         #[serde(default)]
         element_type: Option<VectorElementType>,
         vector: Vec<f32>,
@@ -369,7 +388,6 @@ pub enum HttpBatchOperation {
 pub struct VectorSetRequest {
     pub collection: String,
     pub id: String,
-    pub dim: u32,
     #[serde(default)]
     pub element_type: Option<VectorElementType>,
     pub vector: Vec<f32>,
@@ -386,8 +404,6 @@ pub struct VectorSearchRequest {
     pub collection: String,
     pub vector: Vec<f32>,
     #[serde(default)]
-    pub dim: Option<u32>,
-    #[serde(default)]
     pub element_type: Option<VectorElementType>,
     #[serde(default)]
     pub metric: Option<VectorMetric>,
@@ -402,8 +418,6 @@ pub struct HybridSearchRequest {
     pub fts_query: Option<String>,
     #[serde(default)]
     pub vector: Option<Vec<f32>>,
-    #[serde(default)]
-    pub dim: Option<u32>,
     #[serde(default)]
     pub element_type: Option<VectorElementType>,
     #[serde(default)]
@@ -430,13 +444,8 @@ pub struct SqlRequest {
     pub params: Vec<Value>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct BackupRequest {
-    pub destination: String,
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn map_error(error: LiliaError) -> (StatusCode, Json<Value>) {
+#[allow(clippy::needless_pass_by_value)] // reason: `map_err` hands the error over by value.
+fn map_error(error: LiliaError) -> Failure {
     let status = match error.code {
         ErrorCode::InvalidInput => StatusCode::BAD_REQUEST,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
@@ -454,31 +463,47 @@ fn map_error(error: LiliaError) -> (StatusCode, Json<Value>) {
     )
 }
 
-fn decode_bytes(input: &str, encoding: Option<&str>, field: &str) -> lilia_core::Result<Vec<u8>> {
+fn unexpected(value: &ResponseValue) -> Failure {
+    map_error(LiliaError::new(
+        ErrorCode::Storage,
+        format!("unexpected response: {}", value.name()),
+        false,
+    ))
+}
+
+/// Runs `operation` on a blocking worker.
+async fn run(state: &HttpState, operation: Operation) -> Result<ResponseValue, Failure> {
+    crate::run_blocking(Arc::clone(&state.database), operation, None)
+        .await
+        .map_err(map_error)
+}
+
+/// Commits `operations`; their results in order.
+async fn commit(
+    state: &HttpState,
+    operations: Vec<BatchOperation>,
+) -> Result<Vec<lilia_core::MutationResult>, Failure> {
+    Ok(answer!(
+        run(state, Operation::Batch { operations }).await?,
+        ResponseValue::Mutations
+    ))
+}
+
+fn invalid(message: String) -> Failure {
+    map_error(LiliaError::new(ErrorCode::InvalidInput, message, false))
+}
+
+fn decode_bytes(input: &str, encoding: Option<&str>, field: &str) -> Result<Vec<u8>, Failure> {
     use base64::Engine;
     match encoding.unwrap_or("text") {
         "text" => Ok(input.as_bytes().to_vec()),
-        "hex" => hex::decode(input).map_err(|e| {
-            LiliaError::new(
-                ErrorCode::InvalidInput,
-                format!("invalid {field} hex encoding: {e}"),
-                false,
-            )
-        }),
+        "hex" => {
+            hex::decode(input).map_err(|e| invalid(format!("invalid {field} hex encoding: {e}")))
+        }
         "base64" => base64::engine::general_purpose::STANDARD
             .decode(input)
-            .map_err(|e| {
-                LiliaError::new(
-                    ErrorCode::InvalidInput,
-                    format!("invalid {field} base64 encoding: {e}"),
-                    false,
-                )
-            }),
-        other => Err(LiliaError::new(
-            ErrorCode::InvalidInput,
-            format!("unsupported encoding: {other}"),
-            false,
-        )),
+            .map_err(|e| invalid(format!("invalid {field} base64 encoding: {e}"))),
+        other => Err(invalid(format!("unsupported encoding: {other}"))),
     }
 }
 
@@ -494,34 +519,73 @@ fn encode_bytes(bytes: &[u8], encoding: Option<&str>) -> Value {
     }
 }
 
+/// `values` as a vector of `element_type` (`f32` by default, quantized otherwise): its
+/// dimension, element type and bytes.
+fn vector_bytes(
+    values: &[f32],
+    element_type: Option<VectorElementType>,
+) -> Result<(u32, VectorElementType, Vec<u8>), Failure> {
+    let element_type = element_type.unwrap_or(VectorElementType::Float32);
+    let vector = Vector::from_f32(values)
+        .map_err(|e| map_error(e.into()))?
+        .convert(element_type)
+        .ok_or_else(|| invalid(format!("no conversion of f32 to {element_type:?}")))?;
+    Ok((vector.dim(), element_type, vector.data().to_vec()))
+}
+
+fn kv_json(entry: &KvEntry, encoding: Option<&str>) -> Value {
+    json!({
+        "namespace": entry.namespace,
+        "key": encode_bytes(&entry.key, encoding),
+        "value": encode_bytes(&entry.value, encoding),
+        "version": entry.version.to_string(),
+        "expires_at_ms": entry.expires_at_ms
+    })
+}
+
+fn document_json(document: &JsonEntry) -> Value {
+    json!({
+        "space": document.space,
+        "id": document.id,
+        "value": document.value(),
+        "version": document.version.to_string()
+    })
+}
+
+fn documents_json(documents: &[JsonEntry]) -> Json<Value> {
+    let formatted: Vec<Value> = documents.iter().map(document_json).collect();
+    Json(json!({
+        "ok": true,
+        "documents": formatted,
+        "count": formatted.len()
+    }))
+}
+
+fn written(results: &[lilia_core::MutationResult]) -> Json<Value> {
+    Json(json!({
+        "ok": true,
+        "version": results.first().and_then(|r| r.version).map(|v| v.to_string())
+    }))
+}
+
+fn deleted(results: &[lilia_core::MutationResult]) -> Json<Value> {
+    Json(json!({
+        "ok": true,
+        "deleted": results.first().is_some_and(|r| r.deleted)
+    }))
+}
+
 async fn auth_middleware(
     State(state): State<HttpState>,
     request: axum::extract::Request,
     next: Next,
-) -> Result<Response, (StatusCode, Json<Value>)> {
-    let auth_header = request
+) -> Result<Response, Failure> {
+    let authenticated = request
         .headers()
         .get(header::AUTHORIZATION)
-        .and_then(|val| val.to_str().ok());
-
-    let authenticated = if let Some(header_val) = auth_header {
-        if let Some(token) = header_val.strip_prefix("Bearer ") {
-            token.as_bytes().ct_eq(state.token.as_bytes()).into()
-        } else {
-            false
-        }
-    } else if let Some(query) = request.uri().query() {
-        query.split('&').any(|pair| {
-            if let Some((k, v)) = pair.split_once('=') {
-                k == "token" && v.as_bytes().ct_eq(state.token.as_bytes()).into()
-            } else {
-                false
-            }
-        })
-    } else {
-        false
-    };
-
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token.as_bytes().ct_eq(state.token.as_bytes()).into());
     if !authenticated {
         return Err((
             StatusCode::UNAUTHORIZED,
@@ -535,11 +599,9 @@ async fn auth_middleware(
             })),
         ));
     }
-
     Ok(next.run(request).await)
 }
 
-// Health check endpoint (public, unauthenticated)
 async fn health_handler() -> impl IntoResponse {
     Json(json!({
         "ok": true,
@@ -548,152 +610,67 @@ async fn health_handler() -> impl IntoResponse {
     }))
 }
 
-// KV Handlers
 async fn kv_get_handler(
     State(state): State<HttpState>,
     Json(payload): Json<KvGetRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let key = decode_bytes(&payload.key, payload.encoding.as_deref(), "key").map_err(map_error)?;
-    let db = state.database.clone();
-    let entry = tokio::task::spawn_blocking(move || db.kv_get(&payload.namespace, &key))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    match entry {
-        Some(e) => {
-            let val = encode_bytes(&e.value, payload.encoding.as_deref());
-            let k = encode_bytes(&e.key, payload.encoding.as_deref());
-            Ok(Json(json!({
-                "ok": true,
-                "entry": {
-                    "namespace": e.namespace,
-                    "key": k,
-                    "value": val,
-                    "version": e.version.to_string(),
-                    "expires_at_ms": e.expires_at_ms
-                }
-            })))
-        }
-        None => Ok(Json(json!({
-            "ok": true,
-            "entry": null
-        }))),
-    }
+) -> HttpResult {
+    let encoding = payload.encoding.as_deref();
+    let key = decode_bytes(&payload.key, encoding, "key")?;
+    let operation = Operation::KvGet {
+        namespace: payload.namespace.clone(),
+        key,
+    };
+    let entry = answer!(run(&state, operation).await?, ResponseValue::Kv);
+    Ok(Json(json!({
+        "ok": true,
+        "entry": entry.map(|e| kv_json(&e, encoding))
+    })))
 }
 
 async fn kv_set_handler(
     State(state): State<HttpState>,
     Json(payload): Json<KvSetRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let key = decode_bytes(&payload.key, payload.encoding.as_deref(), "key").map_err(map_error)?;
-    let value =
-        decode_bytes(&payload.value, payload.encoding.as_deref(), "value").map_err(map_error)?;
-    let db = state.database.clone();
-    let op = BatchOperation::KvSet {
+) -> HttpResult {
+    let encoding = payload.encoding.as_deref();
+    let operation = BatchOperation::KvSet {
+        key: decode_bytes(&payload.key, encoding, "key")?,
+        value: decode_bytes(&payload.value, encoding, "value")?,
         namespace: payload.namespace,
-        key,
-        value,
         if_version: payload.if_version,
         expires_at_ms: payload.expires_at_ms,
     };
-
-    let results = tokio::task::spawn_blocking(move || db.batch(&[op]))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    let version = results
-        .first()
-        .and_then(|r| r.version)
-        .map(|v| v.to_string());
-    Ok(Json(json!({
-        "ok": true,
-        "version": version
-    })))
+    Ok(written(&commit(&state, vec![operation]).await?))
 }
 
 async fn kv_delete_handler(
     State(state): State<HttpState>,
     Json(payload): Json<KvDeleteRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let key = decode_bytes(&payload.key, payload.encoding.as_deref(), "key").map_err(map_error)?;
-    let db = state.database.clone();
-    let op = BatchOperation::KvDelete {
+) -> HttpResult {
+    let operation = BatchOperation::KvDelete {
+        key: decode_bytes(&payload.key, payload.encoding.as_deref(), "key")?,
         namespace: payload.namespace,
-        key,
         if_version: payload.if_version,
     };
-
-    let results = tokio::task::spawn_blocking(move || db.batch(&[op]))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    let deleted = results.first().is_some_and(|r| r.deleted);
-    Ok(Json(json!({
-        "ok": true,
-        "deleted": deleted
-    })))
+    Ok(deleted(&commit(&state, vec![operation]).await?))
 }
 
 async fn kv_scan_handler(
     State(state): State<HttpState>,
     Json(payload): Json<KvScanRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> HttpResult {
+    let encoding = payload.encoding.as_deref();
     let after = payload
         .after
         .as_deref()
-        .map(|a| decode_bytes(a, payload.encoding.as_deref(), "after"))
-        .transpose()
-        .map_err(map_error)?;
-    let limit = payload.limit.unwrap_or(100);
-    let db = state.database.clone();
-
-    let entries = tokio::task::spawn_blocking(move || {
-        db.kv_scan(&payload.namespace, after.as_deref(), limit)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
-    let formatted: Vec<Value> = entries
-        .iter()
-        .map(|e| {
-            json!({
-                "namespace": e.namespace,
-                "key": encode_bytes(&e.key, payload.encoding.as_deref()),
-                "value": encode_bytes(&e.value, payload.encoding.as_deref()),
-                "version": e.version.to_string(),
-                "expires_at_ms": e.expires_at_ms
-            })
-        })
-        .collect();
-
+        .map(|after| decode_bytes(after, encoding, "after"))
+        .transpose()?;
+    let operation = Operation::KvScan {
+        namespace: payload.namespace.clone(),
+        after,
+        limit: payload.limit.unwrap_or(100),
+    };
+    let entries = answer!(run(&state, operation).await?, ResponseValue::KvPage);
+    let formatted: Vec<Value> = entries.iter().map(|e| kv_json(e, encoding)).collect();
     Ok(Json(json!({
         "ok": true,
         "entries": formatted,
@@ -701,619 +678,375 @@ async fn kv_scan_handler(
     })))
 }
 
-// JSON Handlers
+async fn json_get(
+    state: &HttpState,
+    space: String,
+    id: String,
+) -> Result<Option<JsonEntry>, Failure> {
+    Ok(answer!(
+        run(state, Operation::JsonGet { space, id }).await?,
+        ResponseValue::Json
+    ))
+}
+
 async fn json_get_path_handler(
     State(state): State<HttpState>,
     Path((space, id)): Path<(String, String)>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let doc = tokio::task::spawn_blocking(move || db.json_get(&space, &id))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    match doc {
-        Some(doc) => Ok(Json(json!({
+) -> HttpResult {
+    match json_get(&state, space, id).await? {
+        Some(document) => Ok(Json(json!({
             "ok": true,
-            "document": {
-                "space": doc.space,
-                "id": doc.id,
-                "value": doc.value(),
-                "version": doc.version.to_string()
-            }
+            "document": document_json(&document)
         }))),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "ok": false,
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": "document not found",
-                    "retryable": false
-                }
-            })),
-        )),
+        None => Err(map_error(LiliaError::new(
+            ErrorCode::NotFound,
+            "document not found",
+            false,
+        ))),
     }
 }
 
 async fn json_get_post_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonGetRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let doc = tokio::task::spawn_blocking(move || db.json_get(&payload.space, &payload.id))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    match doc {
-        Some(doc) => Ok(Json(json!({
-            "ok": true,
-            "document": {
-                "space": doc.space,
-                "id": doc.id,
-                "value": doc.value(),
-                "version": doc.version.to_string()
-            }
-        }))),
-        None => Ok(Json(json!({
-            "ok": true,
-            "document": null
-        }))),
-    }
+) -> HttpResult {
+    let document = json_get(&state, payload.space, payload.id).await?;
+    Ok(Json(json!({
+        "ok": true,
+        "document": document.as_ref().map(document_json)
+    })))
 }
 
 async fn json_put_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonPutRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let op = BatchOperation::JsonPut {
+) -> HttpResult {
+    let operation = BatchOperation::JsonPut {
         space: payload.space,
         id: payload.id,
         value: payload.value,
         if_version: payload.if_version,
     };
-
-    let results = tokio::task::spawn_blocking(move || db.batch(&[op]))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    let version = results
-        .first()
-        .and_then(|r| r.version)
-        .map(|v| v.to_string());
-    Ok(Json(json!({
-        "ok": true,
-        "version": version
-    })))
+    Ok(written(&commit(&state, vec![operation]).await?))
 }
 
 async fn json_delete_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonDeleteRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let op = BatchOperation::JsonDelete {
+) -> HttpResult {
+    let operation = BatchOperation::JsonDelete {
         space: payload.space,
         id: payload.id,
         if_version: payload.if_version,
     };
-
-    let results = tokio::task::spawn_blocking(move || db.batch(&[op]))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    let deleted = results.first().is_some_and(|r| r.deleted);
-    Ok(Json(json!({
-        "ok": true,
-        "deleted": deleted
-    })))
+    Ok(deleted(&commit(&state, vec![operation]).await?))
 }
 
 async fn json_scan_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonScanRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let limit = payload.limit.unwrap_or(100);
-    let db = state.database.clone();
-
-    let docs = tokio::task::spawn_blocking(move || {
-        db.json_scan(&payload.space, payload.after.as_deref(), limit)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
-    let formatted: Vec<Value> = docs
-        .iter()
-        .map(|d| {
-            json!({
-                "space": d.space,
-                "id": d.id,
-                "value": d.value(),
-                "version": d.version.to_string()
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({
-        "ok": true,
-        "documents": formatted,
-        "count": formatted.len()
-    })))
+) -> HttpResult {
+    let operation = Operation::JsonScan {
+        space: payload.space,
+        after: payload.after,
+        limit: payload.limit.unwrap_or(100),
+    };
+    let documents = answer!(run(&state, operation).await?, ResponseValue::JsonPage);
+    Ok(documents_json(&documents))
 }
 
 async fn json_create_index_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonCreateIndexRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    tokio::task::spawn_blocking(move || {
-        let options = lilia_core::IndexOptions {
-            filter: payload.filter,
-        };
-        db.create_json_index_with_options(&payload.space, &payload.name, &payload.path, options)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::JsonCreateIndex {
+        space: payload.space,
+        name: payload.name,
+        path: payload.path,
+        filter: payload.filter,
+    };
+    run(&state, operation).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn json_drop_index_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonDropIndexRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let deleted =
-        tokio::task::spawn_blocking(move || db.drop_json_index(&payload.space, &payload.name))
-            .await
-            .map_err(|_| {
-                map_error(LiliaError::new(
-                    ErrorCode::Storage,
-                    "worker task failed",
-                    false,
-                ))
-            })?
-            .map_err(map_error)?;
-
-    Ok(Json(json!({ "ok": true, "deleted": deleted })))
+) -> HttpResult {
+    let operation = Operation::JsonDropIndex {
+        space: payload.space,
+        name: payload.name,
+    };
+    let dropped = answer!(run(&state, operation).await?, ResponseValue::Bool);
+    Ok(Json(json!({ "ok": true, "deleted": dropped })))
 }
 
 async fn json_list_indexes_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonListIndexesRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let indexes = tokio::task::spawn_blocking(move || db.list_json_indexes(&payload.space))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::JsonListIndexes {
+        space: payload.space,
+    };
+    let indexes = answer!(run(&state, operation).await?, ResponseValue::JsonIndexes);
     let formatted: Vec<Value> = indexes
         .into_iter()
-        .map(|idx| {
+        .map(|index| {
             json!({
-                "space": idx.space,
-                "index_name": idx.index_name,
-                "json_path": idx.json_path
+                "space": index.space,
+                "index_name": index.index_name,
+                "json_path": index.json_path
             })
         })
         .collect();
-
     Ok(Json(json!({ "ok": true, "indexes": formatted })))
 }
 
 async fn json_scan_by_index_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonScanByIndexRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let limit = payload.limit.unwrap_or(100);
-    let db = state.database.clone();
-    let docs = tokio::task::spawn_blocking(move || {
-        db.json_scan_by_index(
-            &payload.space,
-            &payload.index_name,
-            &payload.value,
-            payload.after.as_deref(),
-            limit,
-        )
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
-    let formatted: Vec<Value> = docs
-        .iter()
-        .map(|d| {
-            json!({
-                "space": d.space,
-                "id": d.id,
-                "value": d.value(),
-                "version": d.version.to_string()
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({
-        "ok": true,
-        "documents": formatted,
-        "count": formatted.len()
-    })))
+) -> HttpResult {
+    let operation = Operation::JsonScanByIndex {
+        space: payload.space,
+        index_name: payload.index_name,
+        value: payload.value,
+        after: payload.after,
+        limit: payload.limit.unwrap_or(100),
+    };
+    let documents = answer!(run(&state, operation).await?, ResponseValue::JsonPage);
+    Ok(documents_json(&documents))
 }
 
 async fn json_find_handler(
     State(state): State<HttpState>,
     Json(payload): Json<JsonFindRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let limit = payload.limit.unwrap_or(100);
-    let db = state.database.clone();
-    let docs = tokio::task::spawn_blocking(move || {
-        db.json_find(
-            &payload.space,
-            &payload.query,
-            payload.after.as_deref(),
-            limit,
-        )
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
-    let formatted: Vec<Value> = docs
-        .iter()
-        .map(|d| {
-            json!({
-                "space": d.space,
-                "id": d.id,
-                "value": d.value(),
-                "version": d.version.to_string()
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({
-        "ok": true,
-        "documents": formatted,
-        "count": formatted.len()
-    })))
+) -> HttpResult {
+    let operation = Operation::JsonFind {
+        space: payload.space,
+        query: Value::Object(payload.query),
+        after: payload.after,
+        limit: payload.limit.unwrap_or(100),
+    };
+    let documents = answer!(run(&state, operation).await?, ResponseValue::JsonPage);
+    Ok(documents_json(&documents))
 }
 
-// Batch Handler
+/// The protocol form of a batch write.
+// reason: one arm per write, each moving its fields into the protocol form.
 #[allow(clippy::too_many_lines)]
-async fn batch_handler(
-    State(state): State<HttpState>,
-    Json(payload): Json<BatchRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    const MAX_BATCH_OPERATIONS: usize = 10_000;
-    if payload.operations.len() > MAX_BATCH_OPERATIONS {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "ok": false,
-                "error": format!("Batch operations count ({}) exceeds maximum limit of {MAX_BATCH_OPERATIONS}", payload.operations.len())
-            })),
-        ));
-    }
-    let mut ops = Vec::new();
-    for op in payload.operations {
-        match op {
-            HttpBatchOperation::KvSet {
-                namespace,
-                key,
-                value,
-                if_version,
-                expires_at_ms,
-                encoding,
-            } => {
-                let key_bytes =
-                    decode_bytes(&key, encoding.as_deref(), "key").map_err(map_error)?;
-                let value_bytes =
-                    decode_bytes(&value, encoding.as_deref(), "value").map_err(map_error)?;
-                ops.push(BatchOperation::KvSet {
-                    namespace,
-                    key: key_bytes,
-                    value: value_bytes,
-                    if_version,
-                    expires_at_ms,
-                });
-            }
-            HttpBatchOperation::KvDelete {
-                namespace,
-                key,
-                if_version,
-                encoding,
-            } => {
-                let key_bytes =
-                    decode_bytes(&key, encoding.as_deref(), "key").map_err(map_error)?;
-                ops.push(BatchOperation::KvDelete {
-                    namespace,
-                    key: key_bytes,
-                    if_version,
-                });
-            }
-            HttpBatchOperation::JsonPut {
-                space,
-                id,
-                value,
-                if_version,
-            } => {
-                ops.push(BatchOperation::JsonPut {
-                    space,
-                    id,
-                    value,
-                    if_version,
-                });
-            }
-            HttpBatchOperation::JsonDelete {
-                space,
-                id,
-                if_version,
-            } => {
-                ops.push(BatchOperation::JsonDelete {
-                    space,
-                    id,
-                    if_version,
-                });
-            }
-            HttpBatchOperation::GraphSetNode {
-                graph,
-                id,
-                kind,
-                metadata,
-                doc_space,
-                doc_id,
-            } => {
-                ops.push(BatchOperation::GraphSetNode {
-                    graph,
-                    id,
-                    kind,
-                    metadata: metadata.unwrap_or_else(|| json!({})),
-                    doc_space,
-                    doc_id,
-                });
-            }
-            HttpBatchOperation::GraphDeleteNode { graph, id } => {
-                ops.push(BatchOperation::GraphDeleteNode { graph, id });
-            }
-            HttpBatchOperation::GraphAddEdge {
-                graph,
-                source,
-                target,
-                kind,
-                weight,
-            } => {
-                ops.push(BatchOperation::GraphAddEdge {
-                    graph,
-                    source,
-                    target,
-                    kind,
-                    weight: weight.unwrap_or(1.0),
-                });
-            }
-            HttpBatchOperation::GraphRemoveEdge {
-                graph,
-                source,
-                target,
-                kind,
-            } => {
-                ops.push(BatchOperation::GraphRemoveEdge {
-                    graph,
-                    source,
-                    target,
-                    kind,
-                });
-            }
-            HttpBatchOperation::FtsIndex {
-                collection,
-                doc_id,
-                content,
-            } => {
-                ops.push(BatchOperation::FtsIndex {
-                    collection,
-                    doc_id,
-                    content,
-                });
-            }
-            HttpBatchOperation::FtsDelete { collection, doc_id } => {
-                ops.push(BatchOperation::FtsDelete { collection, doc_id });
-            }
-            HttpBatchOperation::VectorSet {
+fn batch_operation(operation: HttpBatchOperation) -> Result<BatchOperation, Failure> {
+    Ok(match operation {
+        HttpBatchOperation::KvSet {
+            namespace,
+            key,
+            value,
+            if_version,
+            expires_at_ms,
+            encoding,
+        } => BatchOperation::KvSet {
+            namespace,
+            key: decode_bytes(&key, encoding.as_deref(), "key")?,
+            value: decode_bytes(&value, encoding.as_deref(), "value")?,
+            if_version,
+            expires_at_ms,
+        },
+        HttpBatchOperation::KvDelete {
+            namespace,
+            key,
+            if_version,
+            encoding,
+        } => BatchOperation::KvDelete {
+            namespace,
+            key: decode_bytes(&key, encoding.as_deref(), "key")?,
+            if_version,
+        },
+        HttpBatchOperation::JsonPut {
+            space,
+            id,
+            value,
+            if_version,
+        } => BatchOperation::JsonPut {
+            space,
+            id,
+            value,
+            if_version,
+        },
+        HttpBatchOperation::JsonDelete {
+            space,
+            id,
+            if_version,
+        } => BatchOperation::JsonDelete {
+            space,
+            id,
+            if_version,
+        },
+        HttpBatchOperation::GraphSetNode {
+            graph,
+            id,
+            kind,
+            metadata,
+            doc_space,
+            doc_id,
+        } => BatchOperation::GraphSetNode {
+            graph,
+            id,
+            kind,
+            metadata: metadata.unwrap_or_else(|| json!({})),
+            doc_space,
+            doc_id,
+        },
+        HttpBatchOperation::GraphDeleteNode { graph, id } => {
+            BatchOperation::GraphDeleteNode { graph, id }
+        }
+        HttpBatchOperation::GraphAddEdge {
+            graph,
+            source,
+            target,
+            kind,
+            weight,
+        } => BatchOperation::GraphAddEdge {
+            graph,
+            source,
+            target,
+            kind,
+            weight: weight.unwrap_or(1.0),
+        },
+        HttpBatchOperation::GraphRemoveEdge {
+            graph,
+            source,
+            target,
+            kind,
+        } => BatchOperation::GraphRemoveEdge {
+            graph,
+            source,
+            target,
+            kind,
+        },
+        HttpBatchOperation::FtsIndex {
+            collection,
+            doc_id,
+            content,
+        } => BatchOperation::FtsIndex {
+            collection,
+            doc_id,
+            content,
+        },
+        HttpBatchOperation::FtsDelete { collection, doc_id } => {
+            BatchOperation::FtsDelete { collection, doc_id }
+        }
+        HttpBatchOperation::VectorSet {
+            collection,
+            id,
+            element_type,
+            vector,
+        } => {
+            let (dim, element_type, vector) = vector_bytes(&vector, element_type)?;
+            BatchOperation::VectorSet {
                 collection,
                 id,
                 dim,
                 element_type,
                 vector,
-            } => {
-                let elem_type = element_type.unwrap_or(VectorElementType::Float32);
-                let bytes = match elem_type {
-                    VectorElementType::Float32 => {
-                        let mut b = Vec::with_capacity(vector.len() * 4);
-                        for f in vector {
-                            b.extend_from_slice(&f.to_le_bytes());
-                        }
-                        b
-                    }
-                    VectorElementType::Int8 => {
-                        let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&vector);
-                        q.into_iter().map(i8::cast_unsigned).collect()
-                    }
-                    VectorElementType::Bit => {
-                        lilia_core::quantization::quantize_f32_to_bits(&vector)
-                    }
-                };
-                ops.push(BatchOperation::VectorSet {
-                    collection,
-                    id,
-                    dim,
-                    element_type: elem_type,
-                    vector: bytes,
-                });
-            }
-            HttpBatchOperation::VectorDelete { collection, id } => {
-                ops.push(BatchOperation::VectorDelete { collection, id });
-            }
-            HttpBatchOperation::CrdtPnCounterIncrement {
-                space,
-                id,
-                actor_id,
-                amount,
-            } => {
-                ops.push(BatchOperation::CrdtPnCounterIncrement {
-                    space,
-                    id,
-                    actor_id,
-                    amount,
-                });
-            }
-            HttpBatchOperation::CrdtPnCounterDecrement {
-                space,
-                id,
-                actor_id,
-                amount,
-            } => {
-                ops.push(BatchOperation::CrdtPnCounterDecrement {
-                    space,
-                    id,
-                    actor_id,
-                    amount,
-                });
-            }
-            HttpBatchOperation::CrdtOrSetAdd {
-                space,
-                id,
-                actor_id,
-                element,
-            } => {
-                ops.push(BatchOperation::CrdtOrSetAdd {
-                    space,
-                    id,
-                    actor_id,
-                    element,
-                });
-            }
-            HttpBatchOperation::CrdtOrSetRemove {
-                space,
-                id,
-                element,
-                timestamp_ms,
-            } => {
-                ops.push(BatchOperation::CrdtOrSetRemove {
-                    space,
-                    id,
-                    element,
-                    timestamp_ms,
-                });
-            }
-            HttpBatchOperation::CrdtJsonSetField {
-                space,
-                id,
-                actor_id,
-                path,
-                value,
-                timestamp_ms,
-            } => {
-                ops.push(BatchOperation::CrdtJsonSetField {
-                    space,
-                    id,
-                    actor_id,
-                    path,
-                    value,
-                    timestamp_ms,
-                });
-            }
-            HttpBatchOperation::CrdtJsonDeleteField {
-                space,
-                id,
-                actor_id,
-                path,
-                timestamp_ms,
-            } => {
-                ops.push(BatchOperation::CrdtJsonDeleteField {
-                    space,
-                    id,
-                    actor_id,
-                    path,
-                    timestamp_ms,
-                });
-            }
-            HttpBatchOperation::CrdtJsonMerge { space, id, state } => {
-                ops.push(BatchOperation::CrdtJsonMerge { space, id, state });
             }
         }
+        HttpBatchOperation::VectorDelete { collection, id } => {
+            BatchOperation::VectorDelete { collection, id }
+        }
+        HttpBatchOperation::CrdtPnCounterIncrement {
+            space,
+            id,
+            actor_id,
+            amount,
+        } => BatchOperation::CrdtPnCounterIncrement {
+            space,
+            id,
+            actor_id,
+            amount,
+        },
+        HttpBatchOperation::CrdtPnCounterDecrement {
+            space,
+            id,
+            actor_id,
+            amount,
+        } => BatchOperation::CrdtPnCounterDecrement {
+            space,
+            id,
+            actor_id,
+            amount,
+        },
+        HttpBatchOperation::CrdtOrSetAdd {
+            space,
+            id,
+            actor_id,
+            element,
+        } => BatchOperation::CrdtOrSetAdd {
+            space,
+            id,
+            actor_id,
+            element,
+        },
+        HttpBatchOperation::CrdtOrSetRemove {
+            space,
+            id,
+            element,
+            timestamp_ms,
+        } => BatchOperation::CrdtOrSetRemove {
+            space,
+            id,
+            element,
+            timestamp_ms,
+        },
+        HttpBatchOperation::CrdtJsonSetField {
+            space,
+            id,
+            actor_id,
+            path,
+            value,
+            timestamp_ms,
+        } => BatchOperation::CrdtJsonSetField {
+            space,
+            id,
+            actor_id,
+            path,
+            value,
+            timestamp_ms,
+        },
+        HttpBatchOperation::CrdtJsonDeleteField {
+            space,
+            id,
+            actor_id,
+            path,
+            timestamp_ms,
+        } => BatchOperation::CrdtJsonDeleteField {
+            space,
+            id,
+            actor_id,
+            path,
+            timestamp_ms,
+        },
+        HttpBatchOperation::CrdtJsonMerge { space, id, state } => {
+            BatchOperation::CrdtJsonMerge { space, id, state }
+        }
+    })
+}
+
+async fn batch_handler(
+    State(state): State<HttpState>,
+    Json(payload): Json<BatchRequest>,
+) -> HttpResult {
+    if payload.operations.len() > MAX_BATCH_OPERATIONS {
+        return Err(invalid(format!(
+            "a batch holds at most {MAX_BATCH_OPERATIONS} operations, not {}",
+            payload.operations.len()
+        )));
     }
-
-    let db = state.database.clone();
-    let results = tokio::task::spawn_blocking(move || db.batch(&ops))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    let formatted: Vec<Value> = results
+    let operations = payload
+        .operations
+        .into_iter()
+        .map(batch_operation)
+        .collect::<Result<Vec<_>, _>>()?;
+    let formatted: Vec<Value> = commit(&state, operations)
+        .await?
         .into_iter()
         .map(|r| {
             json!({
@@ -1322,30 +1055,21 @@ async fn batch_handler(
             })
         })
         .collect();
-
     Ok(Json(json!({
         "ok": true,
         "results": formatted
     })))
 }
 
-// SQL Handler
 async fn sql_handler(
     State(state): State<HttpState>,
     Json(payload): Json<SqlRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let result = tokio::task::spawn_blocking(move || db.sql_query(&payload.query, &payload.params))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::SqlQuery {
+        sql: payload.query,
+        params: payload.params,
+    };
+    let result = answer!(run(&state, operation).await?, ResponseValue::Sql);
     Ok(Json(json!({
         "ok": true,
         "columns": result.columns,
@@ -1354,460 +1078,238 @@ async fn sql_handler(
     })))
 }
 
-fn parse_direction(dir: Option<&str>) -> Direction {
-    match dir {
-        Some("incoming" | "inbound") => Direction::Inbound,
-        Some("both") => Direction::Both,
-        _ => Direction::Outbound,
-    }
-}
-
-// Graph Handlers
 async fn graph_node_handler(
     State(state): State<HttpState>,
     Json(payload): Json<GraphNodeRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let meta = payload.metadata.unwrap_or_else(|| json!({}));
-    tokio::task::spawn_blocking(move || {
-        db.graph_set_node(&payload.graph, &payload.id, &payload.kind, &meta)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = BatchOperation::GraphSetNode {
+        graph: payload.graph,
+        id: payload.id,
+        kind: payload.kind,
+        metadata: payload.metadata.unwrap_or_else(|| json!({})),
+        doc_space: None,
+        doc_id: None,
+    };
+    commit(&state, vec![operation]).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn graph_edge_handler(
     State(state): State<HttpState>,
     Json(payload): Json<GraphEdgeRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    tokio::task::spawn_blocking(move || {
-        db.graph_add_edge(
-            &payload.graph,
-            &payload.source,
-            &payload.target,
-            &payload.kind,
-        )
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = BatchOperation::GraphAddEdge {
+        graph: payload.graph,
+        source: payload.source,
+        target: payload.target,
+        kind: payload.kind,
+        weight: payload.weight.unwrap_or(1.0),
+    };
+    commit(&state, vec![operation]).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn graph_neighbors_handler(
     State(state): State<HttpState>,
     Json(payload): Json<GraphNeighborsRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let direction = parse_direction(payload.direction.as_deref());
-    let neighbors = tokio::task::spawn_blocking(move || {
-        db.graph_neighbors(
-            &payload.graph,
-            &payload.node,
-            direction,
-            payload.kind.as_deref(),
-        )
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::GraphNeighbors {
+        graph: payload.graph,
+        node: payload.node,
+        direction: names::direction(payload.direction.as_deref()).map_err(map_error)?,
+        kind: payload.kind,
+    };
+    let neighbors = answer!(run(&state, operation).await?, ResponseValue::Ids);
     Ok(Json(json!({ "ok": true, "neighbors": neighbors })))
 }
 
 async fn graph_reachability_handler(
     State(state): State<HttpState>,
     Json(payload): Json<GraphReachabilityRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let direction = parse_direction(payload.direction.as_deref());
-    let reachable = tokio::task::spawn_blocking(move || {
-        db.graph_reachability(&payload.graph, &payload.start_nodes, direction)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::GraphReachability {
+        graph: payload.graph,
+        start_nodes: payload.start_nodes,
+        direction: names::direction(payload.direction.as_deref()).map_err(map_error)?,
+    };
+    let reachable = answer!(run(&state, operation).await?, ResponseValue::Ids);
     Ok(Json(json!({ "ok": true, "reachable": reachable })))
 }
 
-// FTS Handlers
 async fn fts_index_handler(
     State(state): State<HttpState>,
     Json(payload): Json<FtsIndexRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    tokio::task::spawn_blocking(move || {
-        db.fts_index(&payload.collection, &payload.doc_id, &payload.content)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = BatchOperation::FtsIndex {
+        collection: payload.collection,
+        doc_id: payload.doc_id,
+        content: payload.content,
+    };
+    commit(&state, vec![operation]).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn fts_search_handler(
     State(state): State<HttpState>,
     Json(payload): Json<FtsSearchRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let limit = payload.limit.unwrap_or(10);
-    let hits = tokio::task::spawn_blocking(move || {
-        db.fts_search(&payload.collection, &payload.query, limit)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::FtsSearch {
+        collection: payload.collection,
+        query: payload.query,
+        limit: payload.limit.unwrap_or(10),
+    };
+    let hits = answer!(run(&state, operation).await?, ResponseValue::FtsHits);
     Ok(Json(json!({ "ok": true, "hits": hits })))
 }
 
 async fn fts_suggest_handler(
     State(state): State<HttpState>,
     Json(payload): Json<FtsSuggestRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let limit = payload.limit.unwrap_or(10);
-    let max_distance = payload.max_distance.unwrap_or(1);
-    let suggestions = tokio::task::spawn_blocking(move || {
-        db.fts_suggest(&payload.collection, &payload.prefix, max_distance, limit)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::FtsSuggest {
+        collection: payload.collection,
+        prefix: payload.prefix,
+        max_distance: payload.max_distance.unwrap_or(1),
+        limit: payload.limit.unwrap_or(10),
+    };
+    let suggestions = answer!(run(&state, operation).await?, ResponseValue::FtsSuggestions);
     Ok(Json(json!({ "ok": true, "suggestions": suggestions })))
 }
 
 async fn fts_fuzzy_search_handler(
     State(state): State<HttpState>,
     Json(payload): Json<FtsFuzzySearchRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let limit = payload.limit.unwrap_or(10);
-    let max_distance = payload.max_distance.unwrap_or(1);
-    let hits = tokio::task::spawn_blocking(move || {
-        db.fts_fuzzy_search(&payload.collection, &payload.query, max_distance, limit)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::FtsFuzzySearch {
+        collection: payload.collection,
+        query: payload.query,
+        max_distance: payload.max_distance.unwrap_or(1),
+        limit: payload.limit.unwrap_or(10),
+    };
+    let hits = answer!(run(&state, operation).await?, ResponseValue::FtsFuzzyHits);
     Ok(Json(json!({ "ok": true, "hits": hits })))
 }
 
 async fn fts_phonetic_handler(
     State(state): State<HttpState>,
     Json(payload): Json<FtsPhoneticRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let limit = payload.limit.unwrap_or(10);
-    let hits = tokio::task::spawn_blocking(move || {
-        db.fts_phonetic_search(&payload.collection, &payload.query, limit)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let operation = Operation::FtsPhoneticSearch {
+        collection: payload.collection,
+        query: payload.query,
+        limit: payload.limit.unwrap_or(10),
+    };
+    let hits = answer!(
+        run(&state, operation).await?,
+        ResponseValue::FtsPhoneticHits
+    );
     Ok(Json(json!({ "ok": true, "hits": hits })))
 }
 
-// Vector & Hybrid Handlers
 async fn vector_set_handler(
     State(state): State<HttpState>,
     Json(payload): Json<VectorSetRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let elem_type = payload.element_type.unwrap_or(VectorElementType::Float32);
-    let bytes = match elem_type {
-        VectorElementType::Float32 => {
-            let mut b = Vec::with_capacity(payload.vector.len() * 4);
-            for f in payload.vector {
-                b.extend_from_slice(&f.to_le_bytes());
-            }
-            b
-        }
-        VectorElementType::Int8 => {
-            let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&payload.vector);
-            q.into_iter().map(i8::cast_unsigned).collect()
-        }
-        VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(&payload.vector),
+) -> HttpResult {
+    let (dim, element_type, vector) = vector_bytes(&payload.vector, payload.element_type)?;
+    let operation = BatchOperation::VectorSet {
+        collection: payload.collection,
+        id: payload.id,
+        dim,
+        element_type,
+        vector,
     };
-    tokio::task::spawn_blocking(move || {
-        db.vector_set(
-            &payload.collection,
-            &payload.id,
-            payload.dim,
-            elem_type,
-            &bytes,
-        )
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+    commit(&state, vec![operation]).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn vector_get_handler(
     State(state): State<HttpState>,
     Json(payload): Json<VectorGetRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let res = tokio::task::spawn_blocking(move || db.vector_get(&payload.collection, &payload.id))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    match res {
-        Some((dim, elem_type, bytes)) => {
-            let floats: Vec<f32> = match elem_type {
-                VectorElementType::Float32 => bytes
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect(),
-                VectorElementType::Int8 => {
-                    bytes.iter().map(|&x| f32::from(x.cast_signed())).collect()
-                }
-                VectorElementType::Bit => bytes.iter().map(|&x| f32::from(x)).collect(),
-            };
-            Ok(Json(json!({
-                "ok": true,
-                "found": true,
-                "dim": dim,
-                "element_type": elem_type,
-                "vector": floats
-            })))
-        }
-        None => Ok(Json(json!({ "ok": true, "found": false }))),
-    }
+) -> HttpResult {
+    let operation = Operation::VectorGet {
+        collection: payload.collection,
+        id: payload.id,
+    };
+    let Some(StoredVector {
+        dim,
+        element_type,
+        data: bytes,
+    }) = answer!(run(&state, operation).await?, ResponseValue::Vector)
+    else {
+        return Ok(Json(json!({ "ok": true, "found": false })));
+    };
+    let values: Vec<f32> = match element_type {
+        VectorElementType::Float32 => bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
+            .collect(),
+        VectorElementType::Int8 => bytes.iter().map(|&x| f32::from(x.cast_signed())).collect(),
+        VectorElementType::Bit => bytes.iter().map(|&x| f32::from(x)).collect(),
+    };
+    Ok(Json(json!({
+        "ok": true,
+        "found": true,
+        "dim": dim,
+        "element_type": element_type,
+        "vector": values
+    })))
 }
 
 async fn vector_search_handler(
     State(state): State<HttpState>,
     Json(payload): Json<VectorSearchRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let limit = payload.limit.unwrap_or(10);
-    let elem_type = payload.element_type.unwrap_or(VectorElementType::Float32);
-    let metric = payload.metric.unwrap_or(VectorMetric::Cosine);
-    let dim = payload
-        .dim
-        .unwrap_or(u32::try_from(payload.vector.len()).unwrap_or(u32::MAX));
-    let bytes = match elem_type {
-        VectorElementType::Float32 => {
-            let mut b = Vec::with_capacity(payload.vector.len() * 4);
-            for f in payload.vector {
-                b.extend_from_slice(&f.to_le_bytes());
-            }
-            b
-        }
-        VectorElementType::Int8 => {
-            let (q, _) = lilia_core::quantization::quantize_f32_to_i8(&payload.vector);
-            q.into_iter().map(i8::cast_unsigned).collect()
-        }
-        VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(&payload.vector),
+) -> HttpResult {
+    let (dim, element_type, vector) = vector_bytes(&payload.vector, payload.element_type)?;
+    let operation = Operation::VectorSearch {
+        collection: payload.collection,
+        vector,
+        dim,
+        element_type,
+        metric: payload.metric.unwrap_or(VectorMetric::Cosine),
+        limit: payload.limit.unwrap_or(10),
     };
-
-    let hits = tokio::task::spawn_blocking(move || {
-        db.vector_search(&payload.collection, &bytes, dim, elem_type, metric, limit)
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+    let hits = answer!(run(&state, operation).await?, ResponseValue::VectorHits);
     Ok(Json(json!({ "ok": true, "hits": hits })))
 }
 
 async fn hybrid_search_handler(
     State(state): State<HttpState>,
     Json(payload): Json<HybridSearchRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let limit = payload.limit.unwrap_or(10);
-    let rrf_k = payload.rrf_k.unwrap_or(60);
-    let fts_weight = payload.fts_weight.unwrap_or(1.0);
-    let vector_weight = payload.vector_weight.unwrap_or(1.0);
-
-    let hits = tokio::task::spawn_blocking(move || {
-        let vec_data = if let Some(ref v) = payload.vector {
-            let elem_type = payload.element_type.unwrap_or(VectorElementType::Float32);
-            let metric = payload.metric.unwrap_or(VectorMetric::Cosine);
-            let dim = payload
-                .dim
-                .unwrap_or(u32::try_from(v.len()).unwrap_or(u32::MAX));
-            let bytes = match elem_type {
-                VectorElementType::Float32 => {
-                    let mut b = Vec::with_capacity(v.len() * 4);
-                    for f in v {
-                        b.extend_from_slice(&f.to_le_bytes());
-                    }
-                    b
-                }
-                VectorElementType::Int8 => {
-                    let (q, _) = lilia_core::quantization::quantize_f32_to_i8(v);
-                    q.into_iter().map(i8::cast_unsigned).collect()
-                }
-                VectorElementType::Bit => lilia_core::quantization::quantize_f32_to_bits(v),
-            };
-            Some((bytes, dim, elem_type, metric))
-        } else {
-            None
-        };
-
-        let vec_ref = vec_data
-            .as_ref()
-            .map(|(b, d, et, m)| (b.as_slice(), *d, *et, *m));
-
-        db.hybrid_search(
-            &payload.collection,
-            payload.fts_query.as_deref(),
-            vec_ref,
-            rrf_k,
-            fts_weight,
-            vector_weight,
-            limit,
-        )
-    })
-    .await
-    .map_err(|_| {
-        map_error(LiliaError::new(
-            ErrorCode::Storage,
-            "worker task failed",
-            false,
-        ))
-    })?
-    .map_err(map_error)?;
-
+) -> HttpResult {
+    let query = payload
+        .vector
+        .as_deref()
+        .map(|values| vector_bytes(values, payload.element_type))
+        .transpose()?;
+    let operation = Operation::HybridSearch {
+        collection: payload.collection,
+        fts_query: payload.fts_query,
+        dim: query.as_ref().map(|(dim, _, _)| *dim),
+        element_type: query.as_ref().map(|(_, element_type, _)| *element_type),
+        vector: query.map(|(_, _, bytes)| bytes),
+        metric: payload.metric,
+        rrf_k: payload.rrf_k.unwrap_or(60),
+        fts_weight: payload.fts_weight.unwrap_or(1.0),
+        vector_weight: payload.vector_weight.unwrap_or(1.0),
+        limit: payload.limit.unwrap_or(10),
+    };
+    let hits = answer!(run(&state, operation).await?, ResponseValue::HybridHits);
     Ok(Json(json!({ "ok": true, "hits": hits })))
 }
 
-// Doctor Handler
-async fn doctor_handler(
-    State(state): State<HttpState>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let integrity = tokio::task::spawn_blocking(move || db.integrity_check())
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
+async fn doctor_handler(State(state): State<HttpState>) -> HttpResult {
+    let integrity = answer!(
+        run(&state, Operation::IntegrityCheck).await?,
+        ResponseValue::Bool
+    );
     Ok(Json(json!({
         "ok": integrity,
         "integrity": integrity
     })))
 }
 
-// Backup Handler
-async fn backup_handler(
-    State(state): State<HttpState>,
-    Json(payload): Json<BackupRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db = state.database.clone();
-    let dest = PathBuf::from(payload.destination);
-    tokio::task::spawn_blocking(move || db.backup(&dest))
-        .await
-        .map_err(|_| {
-            map_error(LiliaError::new(
-                ErrorCode::Storage,
-                "worker task failed",
-                false,
-            ))
-        })?
-        .map_err(map_error)?;
-
-    Ok(Json(json!({
-        "ok": true
-    })))
-}
-
-// Shutdown Handler
 async fn shutdown_handler(State(state): State<HttpState>) -> impl IntoResponse {
     state.shutdown.notify_one();
     Json(json!({
@@ -1816,54 +1318,13 @@ async fn shutdown_handler(State(state): State<HttpState>) -> impl IntoResponse {
     }))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct WatchParams {
-    #[serde(default)]
-    pub namespace: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub token: Option<String>,
-}
-
-async fn watch_handler(
-    State(state): State<HttpState>,
-    Query(params): Query<WatchParams>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let rx = state.database.subscribe();
-    let filter = params.namespace;
-    let stream = futures_util::stream::unfold(rx, move |mut rx| {
-        let filter = filter.clone();
-        async move {
-            loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if event.matches_filter(filter.as_deref()) {
-                            if let Ok(json_str) = serde_json::to_string(&event) {
-                                let sse_event = Event::default().event("mutation").data(json_str);
-                                return Some((Ok(sse_event), rx));
-                            }
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
-                }
-            }
-        }
-    });
-
-    Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
 pub fn router(state: HttpState) -> Router {
     let public_routes = Router::new().route("/health", get(health_handler));
-
     let protected_routes = Router::new()
-        // KV
         .route("/v1/kv/get", post(kv_get_handler))
         .route("/v1/kv/set", post(kv_set_handler))
         .route("/v1/kv/delete", post(kv_delete_handler))
         .route("/v1/kv/scan", post(kv_scan_handler))
-        // JSON
         .route("/v1/json/{space}/{id}", get(json_get_path_handler))
         .route("/v1/json/get", post(json_get_post_handler))
         .route("/v1/json/put", post(json_put_handler))
@@ -1874,37 +1335,27 @@ pub fn router(state: HttpState) -> Router {
         .route("/v1/json/indexes/list", post(json_list_indexes_handler))
         .route("/v1/json/scan_by_index", post(json_scan_by_index_handler))
         .route("/v1/json/find", post(json_find_handler))
-        // Graph
         .route("/v1/graph/node", post(graph_node_handler))
         .route("/v1/graph/edge", post(graph_edge_handler))
         .route("/v1/graph/neighbors", post(graph_neighbors_handler))
         .route("/v1/graph/reachability", post(graph_reachability_handler))
-        // FTS
         .route("/v1/fts/index", post(fts_index_handler))
         .route("/v1/fts/search", post(fts_search_handler))
         .route("/v1/fts/suggest", post(fts_suggest_handler))
         .route("/v1/fts/fuzzy-search", post(fts_fuzzy_search_handler))
         .route("/v1/fts/phonetic", post(fts_phonetic_handler))
-        // Vector & Hybrid
         .route("/v1/vector/set", post(vector_set_handler))
         .route("/v1/vector/get", post(vector_get_handler))
         .route("/v1/vector/search", post(vector_search_handler))
         .route("/v1/hybrid/search", post(hybrid_search_handler))
-        // Batch
         .route("/v1/batch", post(batch_handler))
-        // SQL
         .route("/v1/sql", post(sql_handler))
-        // Doctor & Backup
         .route("/v1/doctor", get(doctor_handler))
-        .route("/v1/backup", post(backup_handler))
         .route("/v1/shutdown", post(shutdown_handler))
-        // Watch (SSE Live CDC Events)
-        .route("/v1/watch", get(watch_handler))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ));
-
     public_routes.merge(protected_routes).with_state(state)
 }
 
@@ -1913,23 +1364,15 @@ pub async fn serve_http(
     database: Arc<Database>,
     token: String,
     shutdown: Arc<Notify>,
-) -> anyhow::Result<()> {
+) -> std::io::Result<()> {
     let state = HttpState {
         database,
         token,
-        shutdown: shutdown.clone(),
+        shutdown: Arc::clone(&shutdown),
     };
-    let app = router(state);
-
-    let shutdown_signal = async move {
-        shutdown.notified().await;
-    };
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
-
-    Ok(())
+    axum::serve(listener, router(state))
+        .with_graceful_shutdown(async move { shutdown.notified().await })
+        .await
 }
 
 #[cfg(test)]

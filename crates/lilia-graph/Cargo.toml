@@ -8,12 +8,14 @@ repository.workspace = true
 
 [dependencies]
 lilia-core = { path = "../lilia-core" }
-lilia-storage-sqlite = { path = "../lilia-storage-sqlite" }
+lilia-db = { path = "../lilia-db" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+lilia-engine = { path = "../lilia-engine" }
+lilia-io = { path = "../lilia-io" }
 tempfile = "3.27.0"
 
 [lints]

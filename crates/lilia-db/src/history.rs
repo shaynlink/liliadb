@@ -23,6 +23,7 @@ use bytes::Bytes;
 use lilia_core::{JsonEntry, KvEntry};
 use lilia_engine::{Db, WriteBatch};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 
 use crate::db::MAINTENANCE_CHUNK;
 use crate::error::{Error, Result};
@@ -35,7 +36,10 @@ use crate::write::Plan;
 const TRIM_INTERVAL_MS: i64 = 1_000;
 
 /// One version of a document: `doc` is `None` where the document was deleted.
-#[derive(Debug, Clone)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct JsonRevision {
     pub version: u64,
     pub doc: Option<JsonEntry>,

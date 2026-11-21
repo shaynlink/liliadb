@@ -4,6 +4,37 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 
 ---
 
+## [Unreleased] - v0.2 (lilia-db)
+
+### Changed
+- The SDK runs on the native `lilia-db` engine instead of SQLite. `path` is a directory.
+  Versions are engine sequences: they grow with every write, not per record from 1.
+- One client for both modes: every call is a protocol operation, sent to the native addon
+  (`execute`) or to the daemon. Daemon connections speak MessagePack after an `LMP1`
+  preface, so daemon mode works again with the `rkyv` daemon.
+- `db.sync` has every call of the asynchronous API, not only KV, JSON, batches and SQL.
+- SQL is DataFusion and read-only: parameters are `$1`, `$2`...; JSON is read with
+  `value->>'field'` and `json_get_*`. Every JSON space is also a table.
+- `json.find` matches indexes: every key of the query names an index of the space.
+- Open options: `durability`, `profile`, `ledger`, `historyRetentionMs`, `undoDepth`.
+- `json.history` returns `{ version, document? }`; `undo`, `redo` and `undoHistory` return
+  `{ version, keys }`; `storageStats` describes the engine's levels and memtables;
+  `crdt.set.prune` returns whether anything was pruned; `crdt.json.merge` returns a
+  `MutationResult`; `timeseries.applyRetention({ nowMs })` applies every policy.
+
+### Added
+- `fts.suggest`, `fts.fuzzySearch`, `fts.phoneticSearch`, `fts.loadDictionary`.
+
+### Removed
+- Retired with SQLite: `watch` and CDC events, `liveQuery`, materialized views, HLC writes
+  and conflicts, dictionary training, automatic embeddings (`searchText`,
+  `waitForEmbeddings`, `setAutoEmbed`), content-addressed blobs, sharding, `backup`,
+  `checkpointStats`, `sql.execute`, and the SQLite open options (`busyTimeoutMs`,
+  `writerQueueCapacity`, `readPoolSize`, `checkpointPolicy`, `jsonOptions`,
+  `timeseriesOptions`, `casOptions`, `sharding`, `nodeId`, `maxDriftMs`, `encryptionKey`).
+
+---
+
 ## [0.1.0-alpha.9] - 2026-11-20
 
 ### Added

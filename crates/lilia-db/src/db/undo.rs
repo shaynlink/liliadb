@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use bytes::Bytes;
 use lilia_engine::Db;
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 
 use super::Database;
 use crate::error::{corruption, invalid, Error, Result};
@@ -34,7 +35,18 @@ const REDO: u8 = b'r';
 const TRIM_INTERVAL_MS: i64 = 1_000;
 
 /// A commit that can be undone or redone.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct UndoStep {
     /// The version of the commit's first write.
     pub version: u64,

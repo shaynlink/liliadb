@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, access } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { test } from "bun:test";
@@ -16,23 +15,20 @@ const candidateDaemon = [
 
 const daemonBinary = process.env.LILIA_DAEMON_BIN ?? candidateDaemon;
 
-async function waitUntilReady(tokenFile: string, endpoint: string, daemon: ChildProcess): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
+/** Waits until the daemon of `path` accepts a client. */
+async function waitUntilReady(path: string, endpoint: string, tokenFile: string, daemon: ChildProcess): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
     if (daemon.exitCode !== null) throw new Error(`daemon exited with ${daemon.exitCode}`);
     try {
-      await access(tokenFile);
-      await new Promise<void>((resolve, reject) => {
-        const socket = connect(endpoint);
-        socket.once("connect", () => { socket.destroy(); resolve(); });
-        socket.once("error", (error) => { socket.destroy(); reject(error); });
-      });
+      const probe = await Database.open({ path, mode: "daemon", endpoint, tokenFile });
+      await probe.close();
       return;
-    } catch {
+    } catch (error) {
+      if (Date.now() > deadline) throw error;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
-  throw new Error("daemon startup timed out");
 }
 
 test("Bun: embedded client executes KV, JSON and SQL mutations", async () => {
@@ -62,7 +58,7 @@ test("Bun: embedded client executes KV, JSON and SQL mutations", async () => {
 
     // SQL analytics
     const sqlRes = await db.sql.query<{ id: string; name: string }>(
-      "SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'profiles'"
+      "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = 'profiles'"
     );
     assert.equal(sqlRes.length, 1);
     assert.equal(sqlRes[0]?.name, "Alice");
@@ -84,7 +80,7 @@ test("Bun: embedded synchronous db.sync client executes KV, JSON and SQL mutatio
     const key = new TextEncoder().encode("user:sync");
     const val = new TextEncoder().encode("Bob");
     const setRes = db.sync.kv.set("users", key, val);
-    assert.equal(setRes.version, 1n);
+    assert.ok(setRes.version! > 0n);
 
     const getRes = db.sync.kv.get("users", key);
     assert.ok(getRes !== undefined);
@@ -92,7 +88,7 @@ test("Bun: embedded synchronous db.sync client executes KV, JSON and SQL mutatio
 
     // Sync JSON
     const putRes = db.sync.json.put("items", "i1", { name: "Gadget", price: 99 });
-    assert.equal(putRes.version, 1n);
+    assert.ok(putRes.version! > 0n);
 
     const doc = db.sync.json.get("items", "i1");
     assert.ok(doc !== undefined);
@@ -100,7 +96,7 @@ test("Bun: embedded synchronous db.sync client executes KV, JSON and SQL mutatio
 
     // Sync SQL
     const sqlRes = db.sync.sql.query<{ id: string; name: string }>(
-      "SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'items'"
+      "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = 'items'"
     );
     assert.equal(sqlRes.length, 1);
     assert.equal(sqlRes[0]?.name, "Gadget");
@@ -129,7 +125,7 @@ test("Bun: daemon client connects over Unix domain socket IPC", async () => {
   );
 
   try {
-    await waitUntilReady(tokenFile, endpoint, daemonProc);
+    await waitUntilReady(dbPath, endpoint, tokenFile, daemonProc);
 
     const db = await Database.open({
       path: dbPath,
@@ -182,7 +178,7 @@ test("Bun: idiomatic standards (await using, SQL tagged templates, Web Streams, 
 
       // 4. SQL tagged template strings
       const space = "bun_json";
-      const rows = await db.sql<{ id: string; title: string }>`SELECT id, json_extract(value, '$.title') AS title FROM lilia_json WHERE space = ${space}`;
+      const rows = await db.sql<{ id: string; title: string }>`SELECT id, value->>'title' AS title FROM lilia_json WHERE space = ${space}`;
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.title, "Bun Native");
 

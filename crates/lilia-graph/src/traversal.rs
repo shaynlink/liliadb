@@ -2,18 +2,19 @@ use std::collections::HashSet;
 
 use lilia_core::{Direction, GraphNode, Result};
 
-use crate::unified::{resolve_node_document, UnifiedNode};
+use crate::unified::UnifiedNode;
 use crate::GraphStore;
+use lilia_db::Context;
 
 #[derive(Debug)]
-pub struct GraphTraversal<'a> {
-    store: &'a GraphStore<'a>,
+pub struct GraphTraversal<'a, C: Context> {
+    store: &'a GraphStore<'a, C>,
     current: Vec<String>,
     paths: Option<Vec<Vec<String>>>,
 }
 
-impl<'a> GraphTraversal<'a> {
-    pub(crate) fn new(store: &'a GraphStore<'a>, start_nodes: Vec<String>) -> Self {
+impl<'a, C: Context> GraphTraversal<'a, C> {
+    pub(crate) fn new(store: &'a GraphStore<'a, C>, start_nodes: Vec<String>) -> Self {
         Self {
             store,
             current: start_nodes,
@@ -157,9 +158,11 @@ impl<'a> GraphTraversal<'a> {
     where
         F: Fn(&serde_json::Value) -> bool,
     {
-        let database = self.store.database();
+        let store = self.store;
         self.retain(|node| {
-            Ok(resolve_node_document(database, node)?.is_some_and(|doc| predicate(&doc)))
+            Ok(store
+                .node_document(node)?
+                .is_some_and(|doc| predicate(&doc)))
         })
     }
 
@@ -203,7 +206,7 @@ impl<'a> GraphTraversal<'a> {
         let mut docs = Vec::with_capacity(self.current.len());
         for id in &self.current {
             if let Some(node) = self.store.get_node(id)? {
-                if let Some(doc) = resolve_node_document(self.store.database(), &node)? {
+                if let Some(doc) = self.store.node_document(&node)? {
                     docs.push(doc);
                 }
             }
@@ -215,7 +218,7 @@ impl<'a> GraphTraversal<'a> {
         let mut unified = Vec::with_capacity(self.current.len());
         for id in &self.current {
             if let Some(node) = self.store.get_node(id)? {
-                let doc = resolve_node_document(self.store.database(), &node)?;
+                let doc = self.store.node_document(&node)?;
                 unified.push(UnifiedNode::new(node, doc));
             }
         }

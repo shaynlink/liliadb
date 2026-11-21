@@ -5,10 +5,11 @@ use lilia_core::{GraphNode, Result};
 use super::ast::{CmpOp, CypherQuery, FieldRef, NodePattern, WhereExpr};
 use super::result::CypherResult;
 use crate::snapshot::GraphView;
-use crate::unified::{resolve_node_document, UnifiedNode};
+use crate::unified::UnifiedNode;
 use crate::GraphStore;
+use lilia_db::Context;
 
-pub fn execute(store: &GraphStore<'_>, query: &CypherQuery) -> Result<CypherResult> {
+pub fn execute<C: Context>(store: &GraphStore<'_, C>, query: &CypherQuery) -> Result<CypherResult> {
     let view = GraphView::from_store(store, None)?;
     let mut matches = Vec::new();
 
@@ -80,12 +81,12 @@ pub fn execute(store: &GraphStore<'_>, query: &CypherQuery) -> Result<CypherResu
     Ok(CypherResult { columns, rows })
 }
 
-fn find_node_candidates(
-    store: &GraphStore<'_>,
+fn find_node_candidates<C: Context>(
+    store: &GraphStore<'_, C>,
     _view: &GraphView,
     pattern: &NodePattern,
 ) -> Result<Vec<GraphNode>> {
-    let nodes = store.list_nodes(pattern.label.as_deref(), u32::MAX)?;
+    let nodes = store.list_nodes(pattern.label.as_deref(), None)?;
     let mut filtered = Vec::new();
 
     for node in nodes {
@@ -100,7 +101,7 @@ fn find_node_candidates(
                 }
             } else if node.metadata.get(k) != Some(v) {
                 // Also check linked document
-                if let Some(doc) = resolve_node_document(store.database(), &node)? {
+                if let Some(doc) = store.node_document(&node)? {
                     if doc.get(k) != Some(v) {
                         matches = false;
                         break;
@@ -119,8 +120,8 @@ fn find_node_candidates(
     Ok(filtered)
 }
 
-fn match_chain(
-    store: &GraphStore<'_>,
+fn match_chain<C: Context>(
+    store: &GraphStore<'_, C>,
     pattern: &super::ast::PatternChain,
     node_idx: usize,
     current_node_id: &str,
@@ -162,7 +163,7 @@ fn match_chain(
                         }
                     }
                 } else if next_node.metadata.get(k) != Some(v) {
-                    if let Some(doc) = resolve_node_document(store.database(), &next_node)? {
+                    if let Some(doc) = store.node_document(&next_node)? {
                         if doc.get(k) != Some(v) {
                             props_match = false;
                             break;
@@ -189,8 +190,8 @@ fn match_chain(
     Ok(())
 }
 
-fn eval_where(
-    store: &GraphStore<'_>,
+fn eval_where<C: Context>(
+    store: &GraphStore<'_, C>,
     binding: &HashMap<String, GraphNode>,
     expr: &WhereExpr,
 ) -> Result<bool> {
@@ -208,8 +209,8 @@ fn eval_where(
     }
 }
 
-fn extract_value(
-    store: &GraphStore<'_>,
+fn extract_value<C: Context>(
+    store: &GraphStore<'_, C>,
     binding: &HashMap<String, GraphNode>,
     target: &FieldRef,
 ) -> Result<serde_json::Value> {
@@ -217,7 +218,7 @@ fn extract_value(
         return Ok(serde_json::Value::Null);
     };
 
-    let doc = resolve_node_document(store.database(), node)?;
+    let doc = store.node_document(node)?;
     let unified = UnifiedNode::new(node.clone(), doc);
 
     if let Some(ref field) = target.field {

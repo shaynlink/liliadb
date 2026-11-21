@@ -3,104 +3,22 @@ export type DatabaseMode = "embedded" | "daemon";
 export type Durability = "durable" | "balanced" | "performance";
 export type ResourceProfile = "server" | "mobile" | "constrained";
 
-export interface CheckpointPolicy {
-  walBytes?: number;
-  intervalMs?: number;
-}
-
-export interface JsonOptions {
-  binaryStorage?: boolean;
-  autoTrainDict?: boolean;
-  dictSampleThreshold?: number;
-  dictTargetSizeBytes?: number;
-  disabledAutoTrainSpaces?: string[];
-}
-
-export interface TimeSeriesOptions {
-  autoRetention?: boolean;
-  retentionIntervalMs?: number;
-}
-
-export interface CasOptions {
-  enabled?: boolean;
-  thresholdBytes?: number;
-  hashAlgorithm?: "sha256" | "blake3";
-  blobsDir?: string;
-  autoPurgeOnCheckpoint?: boolean;
-}
-
-export type ShardGranularity = "monthly" | "daily" | "yearly";
-
-export type ShardStatus = "active" | "warm" | "cold" | "detached";
-
-export interface ShardingOptions {
-  granularity?: ShardGranularity;
-  autoRollover?: boolean;
-  maxAttachedShards?: number;
-  shardsDir?: string;
-  zstdLevel?: number;
-  autoArchiveOldest?: boolean;
-}
-
-export interface ShardInfo {
-  shardId: string;
-  status: ShardStatus;
-  periodStartMs: number;
-  periodEndMs: number;
-  filePath: string;
-  isCompressed: boolean;
-  uncompressedBytes: number;
-  compressedBytes: number;
-  checksum?: string;
-  createdAtMs: number;
-  archivedAtMs?: number;
-}
-
-export interface ShardArchiveResult {
-  shardId: string;
-  archivePath: string;
-  originalSizeBytes: number;
-  compressedSizeBytes: number;
-  compressionRatio: number;
-  checksum: string;
-  durationMs: number;
-  archivedAtMs: number;
-}
-
-export interface BlobDescriptor {
-  $blob: string;
-  hash: string;
-  sizeBytes: number;
-  mimeType?: string;
-}
-
-export interface BlobGcStats {
-  orphansPurged: number;
-  bytesReclaimed: number;
-}
-
 export interface OpenOptions {
+  /** Directory of the database (embedded); created if missing. */
   path: string;
   mode?: DatabaseMode;
   durability?: Durability;
   profile?: ResourceProfile;
-  plugins?: readonly ("kv" | "json")[];
+  /** Keep a tamper-evident ledger of every record write; a database that keeps one must always be opened with it. */
+  ledger?: boolean;
+  /** How long old versions stay readable, in milliseconds; a week by default, 0 keeps none. */
+  historyRetentionMs?: number;
+  /** Commits `undo` can undo; none by default. Needs a history retention. */
+  undoDepth?: number;
+  /** Socket (or named pipe) of the daemon; `<path>.sock` by default. */
   endpoint?: string;
+  /** File holding the daemon's token; `<path>.token` by default. */
   tokenFile?: string;
-  busyTimeoutMs?: number;
-  writerQueueCapacity?: number;
-  readPoolSize?: number;
-  mmapSizeBytes?: number;
-  cacheSizeKib?: number;
-  undoLogCapacity?: number;
-  checkpointPolicy?: CheckpointPolicy;
-  jsonOptions?: JsonOptions;
-  timeseriesOptions?: TimeSeriesOptions;
-  casOptions?: CasOptions;
-  sharding?: ShardingOptions;
-  nodeId?: string;
-  maxDriftMs?: number;
-  encryptionKey?: string;
   signal?: AbortSignal;
 }
 
@@ -129,62 +47,6 @@ export interface CreateIndexOptions {
   name?: string;
   path?: string;
   filter?: string;
-}
-
-export interface JsonRevisionInfo {
-  space: string;
-  id: string;
-  version: bigint;
-  timestampMs: number;
-  isDeletion: boolean;
-  isKeyframe: boolean;
-  patch?: JsonValue;
-}
-
-export interface DictStats {
-  space: string;
-  dictId: number;
-  sampleCount: number;
-  dictSize: number;
-  createdAtMs: number;
-}
-
-export type ConflictResolutionStrategy = "last_write_wins" | "three_way_merge" | "manual";
-export type CausalRelation = "ancestor" | "descendant" | "identical" | "concurrent";
-
-export interface HlcRecord {
-  model: string;
-  space: string;
-  id: string;
-  hlc: string;
-  parentHlc?: string;
-  nodeId: string;
-  updatedAtMs: number;
-}
-
-export interface HlcMutationOutcome {
-  hlc: string;
-  version: bigint;
-  causalRelation: CausalRelation;
-  conflictDetected: boolean;
-  conflictId?: number;
-  resolvedBy?: ConflictResolutionStrategy;
-}
-
-export interface ConflictRecord {
-  id?: number;
-  model: string;
-  space: string;
-  docId: string;
-  baseHlc?: string;
-  oursHlc: string;
-  theirsHlc: string;
-  oursValue: JsonValue;
-  theirsValue: JsonValue;
-  resolvedValue?: JsonValue;
-  resolutionStrategy: ConflictResolutionStrategy;
-  status: string;
-  detectedAtMs: number;
 }
 
 export interface KvGetOptions {
@@ -217,13 +79,6 @@ export interface JsonPutOptions {
   signal?: AbortSignal;
 }
 
-export interface JsonPutHlcOptions {
-  hlc?: string;
-  parentHlc?: string;
-  strategy?: ConflictResolutionStrategy;
-  signal?: AbortSignal;
-}
-
 export interface JsonDeleteOptions {
   ifVersion?: bigint;
   signal?: AbortSignal;
@@ -247,20 +102,10 @@ export interface JsonFindOptions {
   signal?: AbortSignal;
 }
 
-export interface JsonTrainDictionaryOptions {
-  sampleCount?: number;
-  dictSize?: number;
-  signal?: AbortSignal;
-}
-
 export interface ScanStreamOptions<T = string | Uint8Array> {
   after?: T;
   limit?: number;
   batchSize?: number;
-  signal?: AbortSignal;
-}
-
-export interface WatchOptions {
   signal?: AbortSignal;
 }
 
@@ -370,6 +215,30 @@ export interface GraphFindCyclesOptions {
   signal?: AbortSignal;
 }
 
+export interface FtsSuggestion {
+  term: string;
+  distance: number;
+  docCount: number;
+  exactPrefix: boolean;
+}
+
+export interface FtsFuzzyHit extends FtsHit {
+  editDistance: number;
+  matchedTerms: string[];
+}
+
+export interface FtsPhoneticHit extends FtsHit {
+  matchedTerms: string[];
+  phoneticCodes: string[];
+}
+
+export interface FtsSearchOptions {
+  limit?: number;
+  /** Most edits between a query term and a matching term; 1 by default. */
+  maxDistance?: number;
+  signal?: AbortSignal;
+}
+
 export interface FtsHit {
   collection: string;
   docId: string;
@@ -413,18 +282,6 @@ export interface VectorHit {
   collection: string;
   id: string;
   distance: number;
-}
-
-export interface AutoEmbedConfig {
-  sourceField: string;
-  targetField?: string;
-  model: "all-minilm-l6-v2" | "minilm-l6";
-}
-
-export interface EmbedStatus {
-  pending: number;
-  failed: number;
-  lastError?: string;
 }
 
 export interface HybridHit {
@@ -526,46 +383,11 @@ export interface LwwJsonDocumentState {
   fields: Record<string, CrdtLwwField>;
 }
 
-export interface UndoResult {
-  id: number;
-  summary: string;
-  timestampMs: number;
-}
-
-export interface RedoResult {
-  id: number;
-  summary: string;
-  timestampMs: number;
-}
-
-export interface UndoEntry {
-  id: number;
-  timestampMs: number;
-  summary: string;
-  undone: boolean;
-}
-
-export interface CheckpointStats {
-  attempts: number;
-  incomplete: number;
-  logFrames: number;
-  checkpointedFrames: number;
-  lastError?: string;
-}
-
-export interface TableStorageStat {
-  name: string;
-  pageCount: number;
-  payloadBytes: number;
-  unusedBytes: number;
-}
-
 export type BatchOperation =
   | { model: "kv_set"; namespace: string; key: Uint8Array; value: Uint8Array; ifVersion?: bigint; expiresAtMs?: number }
   | { model: "kv_delete"; namespace: string; key: Uint8Array; ifVersion?: bigint }
   | { model: "json_put"; space: string; id: string; value: JsonValue; ifVersion?: bigint }
   | { model: "json_put_raw"; space: string; id: string; data: Uint8Array; ifVersion?: bigint }
-  | { model: "json_put_hlc"; space: string; id: string; value: JsonValue; hlc?: string; parentHlc?: string; strategy?: ConflictResolutionStrategy }
   | { model: "json_delete"; space: string; id: string; ifVersion?: bigint }
   | { model: "graph_set_node"; graph: string; id: string; kind: string; metadata?: JsonValue; docSpace?: string; docId?: string }
   | { model: "graph_delete_node"; graph: string; id: string }
@@ -583,54 +405,42 @@ export type BatchOperation =
   | { model: "crdt_json_delete_field"; space: string; id: string; actorId: string; path: string; timestampMs?: number }
   | { model: "crdt_json_merge"; space: string; id: string; state: Uint8Array | LwwJsonDocumentState };
 
-export type DatabaseEvent =
-  | { type: "kv_mutated"; namespace: string; key: Uint8Array; version?: bigint; deleted: boolean }
-  | { type: "json_mutated"; space: string; id: string; version?: bigint; deleted: boolean }
-  | { type: "graph_node_mutated"; graph: string; id: string; deleted: boolean }
-  | { type: "graph_edge_mutated"; graph: string; source: string; target: string; kind: string; deleted: boolean }
-  | { type: "fts_mutated"; collection: string; docId: string; deleted: boolean }
-  | { type: "vector_mutated"; collection: string; id: string; deleted: boolean }
-  | { type: "crdt_counter_mutated"; space: string; id: string; value: number }
-  | { type: "crdt_set_mutated"; space: string; id: string; element: string; deleted: boolean }
-  | { type: "crdt_json_mutated"; space: string; id: string; version?: bigint }
-  | { type: "conflict_detected"; model: string; space: string; id: string; baseHlc?: string; oursHlc: string; theirsHlc: string; resolutionStrategy: ConflictResolutionStrategy };
-
-export interface WatchSubscription extends Disposable, AsyncDisposable {
-  unsubscribe(): void | Promise<void>;
-  (): void | Promise<void>;
-  [Symbol.dispose](): void;
-  [Symbol.asyncDispose](): Promise<void>;
+/** One version of a document; `document` is absent where it was deleted. */
+export interface JsonRevision<T = JsonValue> {
+  version: bigint;
+  document?: JsonEntry<T>;
 }
 
-export interface LiveQueryDiff<T = Record<string, unknown>> {
-  subscriptionId: number;
-  added: T[];
-  updated: T[];
-  removed: T[];
-  isInitial: boolean;
+/** A commit `undo` reverted or `redo` restored. */
+export interface UndoStep {
+  /** The version of the commit's first write. */
+  version: bigint;
+  /** The keys it wrote: records and the index entries derived from them. */
+  keys: number;
 }
 
-export interface LiveQuerySubscription extends Disposable, AsyncDisposable {
-  unsubscribe(): void | Promise<void>;
-  (): void | Promise<void>;
-  [Symbol.dispose](): void;
-  [Symbol.asyncDispose](): Promise<void>;
+/** The sorted runs of one level of the storage. */
+export interface LevelStats {
+  runs: number;
+  bytes: number;
 }
 
-export interface MaterializedViewInfo {
-  name: string;
-  sourceTable: string;
-  query: string;
-  storageTable: string;
-  groupBy?: string;
-  createdAtMs: number;
+/** The shape of the storage. */
+export interface StorageStats {
+  /** Level 0 first. */
+  levels: LevelStats[];
+  memtableBytes: number;
+  immutableMemtables: number;
+  /** The newest version written. */
+  version: bigint;
+  /** The oldest version still readable. */
+  oldestVersion: bigint;
 }
 
 export interface MutationResult {
+  /** The engine sequence of the write; a later write of the record has a greater one. */
   version?: bigint;
   deleted: boolean;
-  hlc?: string;
-  conflictDetected?: boolean;
 }
 
 export interface SqlQueryResult<T = Record<string, unknown>> {
@@ -647,14 +457,12 @@ export interface SqlQueryOptions {
 export interface SqlFunction {
   <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: JsonValue[]): Promise<T[]>;
   query<T = Record<string, unknown>>(sql: string, params?: JsonValue[], options?: SqlQueryOptions): Promise<T[]>;
-  execute(sql: string, params?: JsonValue[], options?: SqlQueryOptions): Promise<{ rowsAffected: number }>;
   raw<T = Record<string, unknown>>(sql: string, params?: JsonValue[], options?: SqlQueryOptions): Promise<SqlQueryResult<T>>;
 }
 
 export interface SyncSqlFunction {
   <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: JsonValue[]): T[];
   query<T = Record<string, unknown>>(sql: string, params?: JsonValue[]): T[];
-  execute(sql: string, params?: JsonValue[]): { rowsAffected: number };
   raw<T = Record<string, unknown>>(sql: string, params?: JsonValue[]): SqlQueryResult<T>;
 }
 

@@ -11,7 +11,8 @@ pub struct FtsHit {
     pub rank: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct FtsSuggestion {
     pub term: String,
     pub distance: u8,
@@ -19,7 +20,8 @@ pub struct FtsSuggestion {
     pub exact_prefix: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct FtsFuzzyHit {
     pub collection: String,
     pub doc_id: String,
@@ -48,7 +50,8 @@ impl Default for FtsFuzzyOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(crate = rkyv, derive(Debug))]
 pub struct FtsPhoneticHit {
     pub collection: String,
     pub doc_id: String,

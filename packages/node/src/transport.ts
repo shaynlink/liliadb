@@ -1,0 +1,320 @@
+// How operations reach a database: in process through the native module, or over the local
+// socket of a daemon. Both carry the same MessagePack payloads (see `wire.ts`).
+
+import { createRequire } from "node:module";
+import { copyFileSync, existsSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { connect, type Socket } from "node:net";
+import { resolve } from "node:path";
+import { LiliaError } from "./types.js";
+import {
+  decodeWire,
+  encodeWire,
+  expect,
+  unwrap,
+  type Operation,
+  type ResponseValue,
+  type WireResult,
+} from "./wire.js";
+import { getUuid } from "./version.js";
+
+/** The protocol version this package speaks. */
+export const PROTOCOL_MAJOR = 2;
+export const PROTOCOL_MINOR = 0;
+/** The preface of a MessagePack connection to the daemon. */
+const MESSAGE_PACK_PREFACE = Buffer.from("LMP1", "ascii");
+const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
+export interface Transport {
+  /** Runs `operation`; an aborted `signal` stops the wait, not the operation. */
+  execute(operation: Operation, signal?: AbortSignal): Promise<ResponseValue>;
+  /** Runs `operation` on the caller's thread, where the transport can. */
+  executeSync(operation: Operation): ResponseValue;
+  /** Releases the database, waiting at most `timeoutMs` for running operations. */
+  close(timeoutMs: number): Promise<void>;
+}
+
+/** Waits for `promise` until `signal` aborts. */
+async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  const { promise: aborted, reject } = Promise.withResolvers<never>();
+  const onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/** A native error whose message is the JSON of a protocol error, as a `LiliaError`. */
+function nativeError(error: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  try {
+    const shape = JSON.parse(error.message) as { code?: unknown; message?: unknown };
+    if (typeof shape.code === "string" && typeof shape.message === "string") {
+      return new LiliaError(shape as ConstructorParameters<typeof LiliaError>[0]);
+    }
+  } catch {
+    return error;
+  }
+  return error;
+}
+
+interface NativeDatabaseHandle {
+  execute(payload: Buffer): Promise<Buffer>;
+  executeSync(payload: Buffer): Buffer;
+  close(timeoutMs?: number): Promise<void>;
+}
+
+export interface NativeOpenOptions {
+  path: string;
+  durability?: string;
+  profile?: string;
+  ledger?: boolean;
+  historyRetentionMs?: number;
+  undoDepth?: number;
+}
+
+export interface NativeModule {
+  NativeDatabase: { open(options: NativeOpenOptions): Promise<NativeDatabaseHandle> };
+  tsDownsamplePoints(pointsJson: string, targetBucketMs: number, aggregation?: string): string;
+  geoHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number;
+  geoCircleToGeopoly(centerLon: number, centerLat: number, radiusMeters: number, nVertices?: number): string;
+  geoCoordsToGeopoly(coordsJson: string): string;
+}
+
+const require = createRequire(import.meta.url);
+let loaded: NativeModule | undefined;
+
+function nativePackagePlatform(): string {
+  if (process.platform === "darwin") return `darwin-${process.arch}`;
+  if (process.platform === "linux") return `linux-${process.arch}-gnu`;
+  if (process.platform === "win32") return "win32-x64-msvc";
+  return `${process.platform}-${process.arch}`;
+}
+
+/** `path` (relative to the working directory) as an addon path: a shared library loads as an addon only under a `.node` name. */
+function addonPath(path: string): string {
+  const library = resolve(path);
+  if (library.endsWith(".node")) return library;
+  const addon = `${library}.node`;
+  if (!existsSync(addon) || statSync(library).mtimeMs > statSync(addon).mtimeMs) {
+    copyFileSync(library, addon);
+  }
+  return addon;
+}
+
+/**
+ * The native module: `LILIA_NATIVE_PATH`, else the platform package, else a build of this
+ * checkout (release, then debug).
+ */
+export function loadNative(): NativeModule {
+  if (loaded) return loaded;
+  const explicit = process.env.LILIA_NATIVE_PATH;
+  if (explicit) {
+    loaded = require(addonPath(explicit)) as NativeModule;
+    return loaded;
+  }
+  const platform = nativePackagePlatform();
+  try {
+    loaded = require(`@liliadb/node-${platform}`) as NativeModule;
+    return loaded;
+  } catch (error) {
+    const library = process.platform === "win32" ? "lilia_node_native.dll"
+      : process.platform === "darwin" ? "liblilia_node_native.dylib"
+      : "liblilia_node_native.so";
+    for (const profile of ["release", "debug"]) {
+      const candidate = new URL(`../../../target/${profile}/${library}`, import.meta.url).pathname;
+      if (existsSync(candidate)) {
+        loaded = require(addonPath(candidate)) as NativeModule;
+        return loaded;
+      }
+    }
+    throw new Error(`No LiliaDB native build for ${platform}; set LILIA_NATIVE_PATH`, { cause: error });
+  }
+}
+
+/** The native module, if one loads. */
+export function tryLoadNative(): NativeModule | undefined {
+  try {
+    return loadNative();
+  } catch {
+    return undefined;
+  }
+}
+
+/** A database opened in this process by the native module. */
+export class NativeTransport implements Transport {
+  private constructor(private readonly handle: NativeDatabaseHandle) {}
+
+  static async open(options: NativeOpenOptions, signal?: AbortSignal): Promise<NativeTransport> {
+    signal?.throwIfAborted();
+    try {
+      return new NativeTransport(await abortable(loadNative().NativeDatabase.open(options), signal));
+    } catch (error) {
+      throw nativeError(error);
+    }
+  }
+
+  async execute(operation: Operation, signal?: AbortSignal): Promise<ResponseValue> {
+    let payload: Buffer;
+    try {
+      payload = await abortable(this.handle.execute(Buffer.from(encodeWire(operation))), signal);
+    } catch (error) {
+      throw nativeError(error);
+    }
+    return unwrap(decodeWire<WireResult>(payload));
+  }
+
+  executeSync(operation: Operation): ResponseValue {
+    let payload: Buffer;
+    try {
+      payload = this.handle.executeSync(Buffer.from(encodeWire(operation)));
+    } catch (error) {
+      throw nativeError(error);
+    }
+    return unwrap(decodeWire<WireResult>(payload));
+  }
+
+  async close(timeoutMs: number): Promise<void> {
+    try {
+      await this.handle.close(timeoutMs);
+    } catch (error) {
+      throw nativeError(error);
+    }
+  }
+}
+
+interface WireResponse {
+  id: string;
+  result: WireResult;
+}
+
+/** A database served by a daemon over its local socket (a named pipe on Windows). */
+export class DaemonTransport implements Transport {
+  private socket?: Socket;
+  private connecting?: Promise<Socket>;
+  private buffer = Buffer.alloc(0);
+  private readonly pending = new Map<string, PromiseWithResolvers<WireResult>>();
+  private closed = false;
+
+  private constructor(
+    private readonly endpoint: string,
+    private readonly token: string
+  ) {}
+
+  /** Connects to the daemon of `endpoint` with the token of `tokenFile`, checking its protocol. */
+  static async open(endpoint: string, tokenFile: string, signal?: AbortSignal): Promise<DaemonTransport> {
+    signal?.throwIfAborted();
+    const token = (await readFile(tokenFile, "utf8")).trim();
+    const transport = new DaemonTransport(endpoint, token);
+    try {
+      const handshake = expect(
+        await transport.execute({ type: "handshake", major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR }, signal),
+        "handshake"
+      );
+      if (handshake.major !== PROTOCOL_MAJOR) {
+        throw new LiliaError({
+          code: "UNSUPPORTED",
+          message: `the daemon speaks protocol ${handshake.major}, this package ${PROTOCOL_MAJOR}`,
+          retryable: false,
+        });
+      }
+    } catch (error) {
+      await transport.close();
+      throw error;
+    }
+    return transport;
+  }
+
+  async execute(operation: Operation, signal?: AbortSignal): Promise<ResponseValue> {
+    if (this.closed) {
+      throw new LiliaError({ code: "CLOSED", message: "the daemon connection is closed", retryable: false });
+    }
+    const socket = await abortable(this.connection(), signal);
+    const id = getUuid();
+    const payload = Buffer.from(encodeWire({ id, token: this.token, operation }));
+    if (payload.length > MAX_FRAME_BYTES) {
+      throw new LiliaError({ code: "INVALID_INPUT", message: "the request exceeds the frame limit", retryable: false });
+    }
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(payload.length);
+    const response = Promise.withResolvers<WireResult>();
+    this.pending.set(id, response);
+    socket.write(Buffer.concat([header, payload]));
+    try {
+      return unwrap(await abortable(response.promise, signal));
+    } finally {
+      this.pending.delete(id);
+    }
+  }
+
+  executeSync(): ResponseValue {
+    throw new LiliaError({
+      code: "UNSUPPORTED",
+      message: "synchronous operations need an embedded database",
+      retryable: false,
+    });
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    const socket = this.socket;
+    this.socket = undefined;
+    if (!socket || socket.destroyed) return;
+    const ended = Promise.withResolvers<void>();
+    socket.once("close", () => ended.resolve());
+    socket.end();
+    await ended.promise;
+  }
+
+  /** The open connection; a new one when the daemon dropped the last (idle clients are). */
+  private connection(): Promise<Socket> {
+    if (this.socket && !this.socket.destroyed) return Promise.resolve(this.socket);
+    this.connecting ??= new Promise<Socket>((resolve, reject) => {
+      const socket = connect(this.endpoint);
+      socket.once("error", reject);
+      socket.once("connect", () => {
+        socket.off("error", reject);
+        socket.on("data", (chunk: Buffer) => this.receive(chunk));
+        socket.on("error", (error) => this.fail(error));
+        socket.on("close", () => this.fail(new LiliaError({
+          code: "CLOSED",
+          message: "the daemon closed the connection",
+          retryable: true,
+        })));
+        socket.write(MESSAGE_PACK_PREFACE);
+        this.socket = socket;
+        this.buffer = Buffer.alloc(0);
+        resolve(socket);
+      });
+    }).finally(() => {
+      this.connecting = undefined;
+    });
+    return this.connecting;
+  }
+
+  private receive(chunk: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    while (this.buffer.length >= 4) {
+      const length = this.buffer.readUInt32BE(0);
+      if (length === 0 || length > MAX_FRAME_BYTES) {
+        this.fail(new LiliaError({ code: "PROTOCOL", message: "invalid frame length from the daemon", retryable: false }));
+        this.socket?.destroy();
+        return;
+      }
+      if (this.buffer.length < 4 + length) return;
+      const response = decodeWire<WireResponse>(this.buffer.subarray(4, 4 + length));
+      this.buffer = this.buffer.subarray(4 + length);
+      this.pending.get(response.id)?.resolve(response.result);
+    }
+  }
+
+  /** Fails every request waiting on the connection. */
+  private fail(error: unknown): void {
+    for (const waiting of this.pending.values()) waiting.reject(error);
+    this.pending.clear();
+  }
+}

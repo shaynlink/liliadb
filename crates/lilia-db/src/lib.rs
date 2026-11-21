@@ -70,10 +70,11 @@ pub use lilia_core::{
     BinaryDoc, Direction, DownsampleAggregation, FtsFuzzyHit, FtsHit, FtsPhoneticHit,
     FtsSuggestion, GeofenceMatch, GpsPoint, GraphEdge, GraphNode, HnswConfig, IndexOptions,
     JsonEntry, JsonIndexInfo, KvEntry, LedgerCommit, LedgerVerificationReport, LedgerVerifyMode,
-    MaskFunction, MaskingRule, NamedPolicy, Policy, PolicyAction, SecurityContext,
+    MaskFunction, MaskingRule, NamedPolicy, Policy, PolicyAction, ResourceProfile, SecurityContext,
     TimeSeriesLifecyclePolicy, TimeSeriesPoint, TimeSeriesRetentionRule, TimeSeriesRetentionStats,
     TimeSeriesStats, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric,
 };
+pub use lilia_engine::Durability;
 pub use read::Scan;
 pub use session::Session;
 pub use timeseries::{TimeSeries, TimeSeriesWrite};

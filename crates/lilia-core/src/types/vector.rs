@@ -80,8 +80,10 @@ impl std::str::FromStr for VectorMetric {
     }
 }
 
+/// The parameters of an HNSW index; fields left out take their [`Default`] values.
 #[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 #[rkyv(crate = rkyv, derive(Debug))]
+#[serde(default)]
 pub struct HnswConfig {
     pub m: usize,
     pub ef_construction: usize,

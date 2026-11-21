@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use lilia_core::BatchOperation;
-use lilia_protocol::{read_archived_frame, read_archived_frame_unchecked, read_frame, Operation, Request};
+use lilia_protocol::{
+    read_archived_frame, read_archived_frame_unchecked, read_frame, Operation, Request,
+};
 use rkyv::util::AlignedVec;
 use tokio::runtime::Runtime;
 
@@ -111,7 +113,8 @@ fn bench_protocol_framing(c: &mut Criterion) {
 
     g2.bench_function("3_rkyv_read_frame_owned", |b| {
         b.iter(|| {
-            let decoded: Request = rkyv::from_bytes::<Request, rkyv::rancor::Error>(black_box(&rkyv_bytes)).unwrap();
+            let decoded: Request =
+                rkyv::from_bytes::<Request, rkyv::rancor::Error>(black_box(&rkyv_bytes)).unwrap();
             let token = black_box(&decoded.token);
             black_box(token);
         });
@@ -127,7 +130,8 @@ fn bench_protocol_framing(c: &mut Criterion) {
 
     g2.bench_function("5_rkyv_read_archived_unchecked_0ns", |b| {
         b.iter(|| {
-            let archived = unsafe { lilia_core::access_archived_unchecked::<Request>(black_box(&rkyv_bytes)) };
+            let archived =
+                unsafe { lilia_core::access_archived_unchecked::<Request>(black_box(&rkyv_bytes)) };
             let token = archived.token.as_str();
             black_box(token);
         });
@@ -158,7 +162,9 @@ fn bench_protocol_framing(c: &mut Criterion) {
         b.iter(|| {
             let mut cursor = Cursor::new(&rkyv_framed);
             rt.block_on(async {
-                let archived = read_archived_frame::<Request>(&mut cursor, &mut buffer).await.unwrap();
+                let archived = read_archived_frame::<Request>(&mut cursor, &mut buffer)
+                    .await
+                    .unwrap();
                 let token = archived.token.as_str();
                 black_box(token);
             });
@@ -170,7 +176,9 @@ fn bench_protocol_framing(c: &mut Criterion) {
         b.iter(|| {
             let mut cursor = Cursor::new(&rkyv_framed);
             rt.block_on(async {
-                let archived = read_archived_frame_unchecked::<Request>(&mut cursor, &mut buffer).await.unwrap();
+                let archived = read_archived_frame_unchecked::<Request>(&mut cursor, &mut buffer)
+                    .await
+                    .unwrap();
                 let token = archived.token.as_str();
                 black_box(token);
             });
