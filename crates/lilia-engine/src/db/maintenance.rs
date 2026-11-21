@@ -17,6 +17,9 @@ use crate::version::edit::{NewFile, VersionEdit};
 use crate::version::Version;
 
 pub fn start(inner: &Arc<Inner>) -> Result<Vec<JoinHandle<()>>> {
+    if !inner.options.background_threads {
+        return Ok(Vec::new());
+    }
     let mut threads = Vec::with_capacity(1 + inner.options.compaction_threads);
     let flusher = Arc::clone(inner);
     threads.push(thread::Builder::new().name("lilia-flush".into()).spawn(move || flush_loop(&flusher))?);
@@ -25,6 +28,35 @@ pub fn start(inner: &Arc<Inner>) -> Result<Vec<JoinHandle<()>>> {
         threads.push(thread::Builder::new().name(format!("lilia-compact-{i}")).spawn(move || compaction_loop(&compactor))?);
     }
     Ok(threads)
+}
+
+/// Without background threads: flushes every sealed memtable, oldest first, then compacts while a
+/// level is due. A failure disables writes, as it would on a background thread.
+pub fn run_inline(inner: &Inner) -> Result<()> {
+    let result = flush_and_compact(inner);
+    if let Err(error) = &result {
+        inner.fail(error);
+    }
+    result
+}
+
+fn flush_and_compact(inner: &Inner) -> Result<()> {
+    while let Some(oldest) = inner.super_version().imm.last().cloned() {
+        flush(inner, &oldest)?;
+    }
+    loop {
+        let (compaction, version) = {
+            let versions = inner.versions.lock();
+            let version = Arc::clone(&versions.current);
+            match compaction::pick(&version, &inner.options) {
+                Some(compaction) => (compaction, version),
+                None => return Ok(()),
+            }
+        };
+        let result = run(inner, &compaction, &version);
+        compaction.release();
+        result?;
+    }
 }
 
 /// Whether some level is over its compaction trigger or size budget.

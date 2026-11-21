@@ -66,6 +66,10 @@ pub struct Options {
     pub max_group_bytes: usize,
     /// Background compaction threads (flushes have their own thread).
     pub compaction_threads: usize,
+    /// Run flushes and compactions on background threads. Without them (the default on
+    /// `wasm32`, where threads are not available), the writer that fills a memtable flushes it
+    /// and compacts the levels that are due before its write completes.
+    pub background_threads: bool,
     pub create_if_missing: bool,
     /// Keep old versions for reads in the past ([`crate::Db::snapshot_at`]): compactions keep
     /// every version visible at or after the history horizon, which starts at the oldest data and
@@ -98,6 +102,7 @@ impl Options {
             compaction_threads: background.clamp(1, 4),
             create_if_missing: true,
             retain_history: false,
+            background_threads: !cfg!(target_arch = "wasm32"),
         }
     }
 

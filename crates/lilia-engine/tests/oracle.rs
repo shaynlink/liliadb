@@ -8,7 +8,7 @@ use std::ops::Bound;
 use std::sync::Arc;
 
 use common::{key, scan, small_options, Rng};
-use lilia_engine::{Db, Durability, Error, WriteBatch};
+use lilia_engine::{Db, Durability, Error, Options, WriteBatch};
 use lilia_io::{MemVfs, Vfs};
 
 type Model = BTreeMap<Vec<u8>, (Vec<u8>, u64)>;
@@ -26,10 +26,10 @@ fn check_range(db: &Db, model: &Model, rng: &mut Rng) {
     assert_eq!(got, expected, "range {start:?}..{end:?}");
 }
 
-fn run(seed: u64, operations: u64) {
+fn run(seed: u64, operations: u64, background_threads: bool) {
     let vfs = MemVfs::new(seed);
     let vfs: Arc<dyn Vfs> = Arc::new(vfs);
-    let options = small_options(Durability::Durable);
+    let options = Options { background_threads, ..small_options(Durability::Durable) };
     let mut db = Db::open_with(Arc::clone(&vfs), "/oracle", options.clone()).unwrap();
     let mut rng = Rng(seed);
     let mut model = Model::new();
@@ -114,6 +114,13 @@ fn run(seed: u64, operations: u64) {
 #[test]
 fn random_operations_match_the_model() {
     for seed in 1..=6 {
-        run(seed, 4_000);
+        run(seed, 4_000, true);
+    }
+}
+
+#[test]
+fn without_background_threads_writers_flush_and_compact_themselves() {
+    for seed in 1..=6 {
+        run(seed, 4_000, false);
     }
 }

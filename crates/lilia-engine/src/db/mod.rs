@@ -414,12 +414,16 @@ impl Db {
         }
     }
 
-    /// Waits until no compaction is due (every level within budget, level 0 below its trigger).
+    /// Waits until no compaction is due (every level within budget, level 0 below its trigger);
+    /// without background threads, runs the due compactions.
     ///
     /// # Errors
     ///
-    /// The failure that stopped a compaction thread, if any.
+    /// The failure that stopped a compaction, if any.
     pub fn wait_for_compactions(&self) -> Result<()> {
+        if !self.inner.options.background_threads {
+            return maintenance::run_inline(&self.inner);
+        }
         let mut work = self.inner.work.lock();
         loop {
             if let Some(error) = &work.error {

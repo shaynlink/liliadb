@@ -138,6 +138,10 @@ impl Inner {
             }
             let behind = current.imm.len() >= self.options.max_immutable_memtables
                 || current.version.levels[0].len() >= self.options.l0_stop_writes;
+            if behind && !self.options.background_threads {
+                super::maintenance::run_inline(self)?;
+                continue;
+            }
             if behind {
                 let mut work = self.work.lock();
                 let current = self.super_version();
@@ -156,6 +160,9 @@ impl Inner {
                 return Err(error);
             }
             self.switch_requested.store(false, Ordering::Release);
+            if !self.options.background_threads {
+                super::maintenance::run_inline(self)?;
+            }
         }
     }
 

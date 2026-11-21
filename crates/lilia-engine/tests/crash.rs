@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{key, small_options, Rng};
-use lilia_engine::{Db, Durability, WriteBatch};
+use lilia_engine::{Db, Durability, Options, WriteBatch};
 use lilia_io::{CrashOptions, MemVfs, Vfs};
 
 type State = BTreeMap<Vec<u8>, Vec<u8>>;
@@ -49,14 +49,14 @@ fn read_state(db: &Db) -> State {
     (0..KEYS).filter_map(|i| db.get(&key(i)).unwrap().map(|v| (key(i), v.to_vec()))).collect()
 }
 
-fn iteration(seed: u64) {
+fn iteration(seed: u64, background_threads: bool) {
     let mut rng = Rng(seed);
     let durability = match rng.below(4) {
         0 => Durability::Balanced,
         1 => Durability::Performance,
         _ => Durability::Durable,
     };
-    let options = small_options(durability);
+    let options = Options { background_threads, ..small_options(durability) };
     let memvfs = MemVfs::new(seed);
     let vfs: Arc<dyn Vfs> = Arc::new(memvfs.clone());
     let count = 40 + usize::try_from(rng.below(400)).unwrap();
@@ -140,6 +140,15 @@ fn recovered_state_is_always_a_prefix_of_the_submitted_batches() {
     let iterations: u64 = std::env::var("LILIA_CRASH_ITERATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000);
     let base: u64 = std::env::var("LILIA_CRASH_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     for seed in base..base + iterations {
-        iteration(seed);
+        iteration(seed, true);
+    }
+}
+
+#[test]
+fn without_background_threads_too() {
+    let iterations: u64 = std::env::var("LILIA_CRASH_ITERATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000);
+    let base: u64 = std::env::var("LILIA_CRASH_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    for seed in base..base + iterations {
+        iteration(seed, false);
     }
 }
