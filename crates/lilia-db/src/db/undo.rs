@@ -191,26 +191,27 @@ impl Undo {
         Ok(clears)
     }
 
-    /// Deletes every entry, after a catalog change.
+    /// Adds to `batch`, a catalog change, the deletion of every entry: the entries go with the
+    /// change or not at all, whatever a crash interrupts. [`Undo::cleared`] once it commits.
     ///
     /// # Errors
     ///
     /// Engine errors.
-    pub fn clear(&self, engine: &Db) -> Result<()> {
+    pub fn clear(&self, engine: &Db, batch: &mut lilia_engine::WriteBatch) -> Result<()> {
         if self.depth == 0 {
             return Ok(());
         }
-        let mut batch = lilia_engine::WriteBatch::new();
         for kind in [UNDO, REDO] {
             for entry in entries(engine, kind)? {
                 batch.delete(entry.key);
             }
         }
-        if !batch.is_empty() {
-            engine.write(batch)?;
-        }
-        self.redo_pending.store(false, Ordering::Release);
         Ok(())
+    }
+
+    /// Records that a catalog change cleared the entries.
+    pub fn cleared(&self) {
+        self.redo_pending.store(false, Ordering::Release);
     }
 
     /// Records that a commit that cleared the redo entries committed.

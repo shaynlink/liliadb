@@ -308,12 +308,16 @@ impl Database {
         name: &str,
         schema: Schema,
     ) -> Result<()> {
+        // Writers wait for the catalog lock, so no commit adds an entry before this batch.
+        let mut batch = lilia_engine::WriteBatch::new();
         if schema.is_empty() {
-            self.engine.delete(keys::schema(name))?;
+            batch.delete(keys::schema(name));
         } else {
-            self.engine.put(keys::schema(name), schema.encode()?)?;
+            batch.put(keys::schema(name), schema.encode()?);
         }
-        self.undo.clear(&self.engine)?;
+        self.undo.clear(&self.engine, &mut batch)?;
+        self.engine.write(batch)?;
+        self.undo.cleared();
         catalog.set(name, schema);
         Ok(())
     }
