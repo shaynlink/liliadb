@@ -14,6 +14,7 @@ use crate::keys::validate_name;
 use crate::read::{self, Latest, Scan};
 use crate::record::now_ms;
 use crate::txn::Transaction;
+use crate::vectors::Vectors;
 
 /// Reads and writes on behalf of one caller. Cheap to create and clone.
 #[derive(Debug, Clone)]
@@ -217,6 +218,12 @@ impl<'db> Session<'db> {
     #[must_use]
     pub fn fts(&self, name: &str) -> Fts<'_, Self> {
         Fts::new(self, name)
+    }
+
+    /// Vector collection `name`; its writes commit at once.
+    #[must_use]
+    pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
+        Vectors::new(self, name)
     }
 
     /// Starts an optimistic transaction over a snapshot of the database as of now.

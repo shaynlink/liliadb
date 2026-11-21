@@ -17,6 +17,7 @@
 //! | `0x09` | collection `\0` term `\0` document id | posting: positions, document length |
 //! | `0x0A` | collection `\0` shard | document and token counts |
 //! | `0x0B` | collection `\0` term | dictionary word count |
+//! | `0x0C` | collection `\0` id | vector ([`crate::vectors`]) |
 //!
 //! Collection names never contain control characters ([`validate_name`]), so the `\0` after a
 //! name separates collections and keeps them in name order.
@@ -36,10 +37,19 @@ pub const FTS_DOC: u8 = 0x08;
 pub const FTS_POSTING: u8 = 0x09;
 pub const FTS_STATS: u8 = 0x0A;
 pub const FTS_DICTIONARY: u8 = 0x0B;
+pub const VECTOR: u8 = 0x0C;
 
 /// Tags of the keyspaces whose records the ledger attests. Derived keyspaces (secondary
 /// index entries, inbound edge mirrors) are not records of their own.
-pub const RECORD_TAGS: [u8; 6] = [KV, DOC, GRAPH_NODE, EDGE_OUT, FTS_DOC, FTS_DICTIONARY];
+pub const RECORD_TAGS: [u8; 7] = [
+    KV,
+    DOC,
+    GRAPH_NODE,
+    EDGE_OUT,
+    FTS_DOC,
+    FTS_DICTIONARY,
+    VECTOR,
+];
 
 pub const FORMAT: &[u8] = b"\x00format";
 pub const NEXT_INDEX: &[u8] = b"\x00next-index";

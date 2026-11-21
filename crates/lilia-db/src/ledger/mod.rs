@@ -153,6 +153,11 @@ fn record_identity(key: &[u8]) -> Option<(Model, String, String)> {
             space,
             crate::graph::edge_identity(record)?,
         )),
+        keys::VECTOR => Some((
+            Model::Vector,
+            space,
+            String::from_utf8(record.to_vec()).ok()?,
+        )),
         keys::FTS_DOC | keys::FTS_DICTIONARY => {
             let (model, id) = crate::fts::identity(tag, record)?;
             Some((model, space, id))

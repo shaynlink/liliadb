@@ -8,8 +8,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use lilia_core::{
-    eval_expr, eval_filter_predicate, parse_expr, BinaryDoc, Expr, JsonIndexInfo, MaskingRule,
-    NamedPolicy, PolicyAction,
+    eval_expr, eval_filter_predicate, parse_expr, BinaryDoc, Expr, HnswConfig, JsonIndexInfo,
+    MaskingRule, NamedPolicy, PolicyAction,
 };
 use lilia_engine::Db;
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,8 @@ struct StoredSchema {
     masking: Vec<MaskingRule>,
     #[serde(default)]
     dropping: Vec<u64>,
+    #[serde(default)]
+    vector: Option<HnswConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,7 +150,8 @@ impl CompiledMask {
     }
 }
 
-/// Indexes, policies and masking rules of one collection.
+/// Indexes, policies and masking rules of one collection, and the HNSW index of the vector
+/// collection of the same name.
 #[derive(Debug, Clone, Default)]
 pub struct Schema {
     pub indexes: Vec<Index>,
@@ -156,6 +159,8 @@ pub struct Schema {
     pub masking: Vec<CompiledMask>,
     /// Ids of dropped indexes whose entries are still being deleted.
     pub dropping: Vec<u64>,
+    /// HNSW index of the vector collection of this name.
+    pub vector: Option<HnswConfig>,
 }
 
 impl Schema {
@@ -182,6 +187,7 @@ impl Schema {
                 .map(CompiledMask::new)
                 .collect::<Result<_>>()?,
             dropping: stored.dropping,
+            vector: stored.vector,
         })
     }
 
@@ -206,6 +212,7 @@ impl Schema {
             policies: self.policies.iter().map(|p| p.named.clone()).collect(),
             masking: self.masking.iter().map(|m| m.rule.clone()).collect(),
             dropping: self.dropping.clone(),
+            vector: self.vector.clone(),
         };
         serde_json::to_vec(&stored).map_err(|e| corruption(format!("schema encoding: {e}")))
     }
@@ -215,6 +222,7 @@ impl Schema {
             && self.policies.is_empty()
             && self.masking.is_empty()
             && self.dropping.is_empty()
+            && self.vector.is_none()
     }
 
     pub fn index(&self, name: &str) -> Option<&Index> {

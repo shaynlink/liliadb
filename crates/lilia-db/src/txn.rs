@@ -30,6 +30,7 @@ use crate::guard::{Access, Guard};
 use crate::keys::validate_name;
 use crate::read::{self, Item, Items, Scan, Source};
 use crate::record::now_ms;
+use crate::vectors::Vectors;
 use crate::write::overlay;
 
 /// A transaction; see the [module documentation](self). Dropping it without committing
@@ -361,6 +362,13 @@ impl<'db> Transaction<'db> {
     #[must_use]
     pub fn fts(&self, name: &str) -> Fts<'_, Self> {
         Fts::new(self, name)
+    }
+
+    /// Vector collection `name`; its writes are buffered until [`Transaction::commit`] and its
+    /// searches see them.
+    #[must_use]
+    pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
+        Vectors::new(self, name)
     }
 
     /// Commits the transaction's writes if every record it read is unchanged; returns one

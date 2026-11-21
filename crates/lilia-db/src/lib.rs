@@ -30,6 +30,7 @@ mod read;
 mod record;
 mod session;
 mod txn;
+pub mod vectors;
 mod write;
 
 pub use batch::{Batch, Outcome, Write};
@@ -43,10 +44,11 @@ pub use ledger::mmr::MmrProof;
 pub use ledger::{CommitProof, RecordProof};
 pub use lilia_core::{
     BinaryDoc, Direction, FtsFuzzyHit, FtsHit, FtsPhoneticHit, FtsSuggestion, GraphEdge, GraphNode,
-    IndexOptions, JsonEntry, JsonIndexInfo, KvEntry, LedgerCommit, LedgerVerificationReport,
-    LedgerVerifyMode, MaskFunction, MaskingRule, NamedPolicy, Policy, PolicyAction,
-    SecurityContext,
+    HnswConfig, IndexOptions, JsonEntry, JsonIndexInfo, KvEntry, LedgerCommit,
+    LedgerVerificationReport, LedgerVerifyMode, MaskFunction, MaskingRule, NamedPolicy, Policy,
+    PolicyAction, SecurityContext, VectorElementType, VectorHit, VectorIndexInfo, VectorMetric,
 };
 pub use read::Scan;
 pub use session::Session;
 pub use txn::Transaction;
+pub use vectors::{Vector, VectorWrite, Vectors};

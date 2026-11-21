@@ -70,23 +70,18 @@ impl<'a> Guard<'a> {
         self.policies(PolicyAction::Select).next().is_some()
     }
 
-    /// Whether the caller may see a full-text hit: through the read policies of the JSON
-    /// document of the same id when there is one, otherwise of a document made of the
-    /// collection, the document id and the snippet.
-    pub fn fts_hit(
+    /// Whether the caller may see a record related to a JSON document (a full-text hit, a
+    /// vector): through the read policies of `document`, the JSON document of the same id, when
+    /// there is one, otherwise of the document `synthetic` makes.
+    pub fn related_hit(
         &self,
-        collection: &str,
-        doc_id: &str,
-        snippet: &str,
         document: Option<&BinaryDoc>,
+        synthetic: impl FnOnce() -> serde_json::Value,
     ) -> bool {
         if !self.checks_reads() {
             return true;
         }
-        let value = document.map_or_else(
-            || serde_json::json!({ "collection": collection, "doc_id": doc_id, "snippet": snippet }),
-            BinaryDoc::to_json_value,
-        );
+        let value = document.map_or_else(synthetic, BinaryDoc::to_json_value);
         self.doc_allowed(PolicyAction::Select, &value)
     }
 

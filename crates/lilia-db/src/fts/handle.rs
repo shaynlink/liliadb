@@ -358,7 +358,9 @@ impl<'c, C: Context> Fts<'c, C> {
             } else {
                 None
             };
-            if guard.fts_hit(&self.name, &candidate.doc, &snippet, document.as_ref()) {
+            if guard.related_hit(document.as_ref(), || {
+                serde_json::json!({ "collection": self.name, "doc_id": candidate.doc, "snippet": snippet })
+            }) {
                 out.push(hit(
                     &candidate.doc,
                     &candidate.matched,

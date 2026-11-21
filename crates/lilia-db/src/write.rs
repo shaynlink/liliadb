@@ -29,6 +29,7 @@ pub enum Model {
     GraphEdge,
     Fts,
     FtsDictionary,
+    Vector,
 }
 
 impl Model {
@@ -40,6 +41,7 @@ impl Model {
             Self::GraphEdge => "graph_edge",
             Self::Fts => "fts",
             Self::FtsDictionary => "fts_dictionary",
+            Self::Vector => "vector",
         }
     }
 }
@@ -76,6 +78,8 @@ pub struct Plan {
     /// Term count changes of full-text writes, applied to the loaded vocabularies once the
     /// plan commits.
     pub vocabulary: crate::fts::Deltas,
+    /// Vector changes, applied to the loaded HNSW indexes once the plan commits.
+    pub vectors: Vec<crate::vectors::VectorDelta>,
 }
 
 impl Plan {
@@ -259,6 +263,16 @@ impl<'a> Planner<'a> {
             .collect())
     }
 
+    /// The schema of collection `name`, as the batch is planned under it.
+    pub(crate) fn schema(&self, name: &str) -> Option<std::sync::Arc<crate::catalog::Schema>> {
+        self.catalog.schema(name)
+    }
+
+    /// Records a vector change, for the HNSW index once the plan commits.
+    pub(crate) fn vector_change(&mut self, delta: crate::vectors::VectorDelta) {
+        self.plan.vectors.push(delta);
+    }
+
     /// Records term count changes of a full-text write of `collection`.
     pub(crate) fn vocabulary(&mut self, collection: &str, deltas: Vec<(String, i64)>) {
         self.plan.vocabulary.extend(
@@ -332,6 +346,7 @@ impl<'a> Planner<'a> {
             } => self.json_delete(space, id, *if_version),
             Write::Graph(write) => self.graph(write),
             Write::Fts(write) => self.fts(write),
+            Write::Vector(write) => self.vector(write),
         }
     }
 
@@ -575,6 +590,7 @@ pub mod overlay {
             }
             Write::Graph(write) => crate::graph::overlay(write, view),
             Write::Fts(write) => crate::fts::overlay(write, view),
+            Write::Vector(write) => crate::vectors::overlay(write, view),
         }
     }
 }

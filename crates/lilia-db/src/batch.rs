@@ -4,6 +4,7 @@ use lilia_core::BinaryDoc;
 
 use crate::fts::FtsWrite;
 use crate::graph::GraphWrite;
+use crate::vectors::VectorWrite;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
@@ -40,6 +41,7 @@ pub enum Write {
     },
     Graph(GraphWrite),
     Fts(FtsWrite),
+    Vector(VectorWrite),
 }
 
 /// Writes applied atomically, all of them or none, in order: a later write of a record sees the
