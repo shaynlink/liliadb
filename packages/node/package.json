@@ -26,8 +26,6 @@
     "test": "node --test dist/**/*.test.js",
     "test:bun": "bun test tests/compat-bun.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "bench": "node dist/benchmarks/runner.js",
-    "bench:full": "node dist/benchmarks/runner.js --workload all",
     "package": "pnpm pack --pack-destination ../../dist"
   },
   "dependencies": { "@msgpack/msgpack": "3.1.2" },

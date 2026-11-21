@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - 0.2.0-alpha.1
+
+### Added
+- **Comparative benchmark suite (`tools/lilia-bench`)**: one command (`pnpm bench:compare`) measures
+  LiliaDB against SQLite (with and without `fullfsync`), LMDB, redb, fjall, RocksDB (with and
+  without `HAVE_FULLFSYNC`) and DuckDB, on writes (1–64 concurrent writers, batches, value sizes,
+  updates, deletes), reads (point reads after reopen and warm, 1–N threads, multi-get, ranges,
+  scans), YCSB A–F, JSON documents, full-text search, vector search and analytics, plus the
+  JavaScript surfaces. Every engine runs in its most durable mode and every row states the sync
+  primitive it uses, checked against the measured commit latency. Wrong answers fail a run instead
+  of producing a number. Raw results are kept in `docs/benchmarks.jsonl`.
+- **v0.2 storage RFC** (`docs/v0.2-storage-paradigm.md`): audit of the write path and the
+  native log-structured engine plan.
+
+- **`lilia-io`**: platform layer of the v0.2 engine. A `Vfs` trait with the native file system
+  (`F_FULLFSYNC` / `F_BARRIERFSYNC` on Apple, `fdatasync` on Linux, `FlushFileBuffers` on Windows,
+  `F_PREALLOCATE` / `fallocate`) and an in-memory file system that models power loss (synced data
+  and directory entries survive, unsynced tails may be torn) with fault injection;
+  `HardwareProfile` (page size, cache line, performance and efficiency cores, memory) and
+  background QoS for maintenance threads.
+- **`lilia-engine`**: native log-structured storage engine (not yet wired behind the `LiliaDB`
+  models). Group commit (one journal write and one sync per group of concurrent commits),
+  lock-free MVCC memtable, atomic batches with version expectations, snapshots, range iterators,
+  checksummed sorted runs with Bloom filters and a sharded block cache, an atomic manifest, and
+  leveled compaction on background threads. Recovery replays journals up to the first damaged
+  record. Validated by an oracle test, a concurrent maintenance stress test, and 100,000
+  simulated power cuts with torn writes and injected I/O errors. Read path: CLOCK block cache
+  spread over 64 shards, runs that keep their own open table, binary-search index blocks, a
+  blocked Bloom filter per memtable, batched memtable iteration and zero-copy scan values
+  (point reads ×2.5 single-threaded, ×2.9 with 10 threads).
+- **`lilia-db`**: the data models over `lilia-engine`, without SQLite (bindings not yet switched).
+  Key-value records with expiry; JSON documents with secondary indexes over paths or expressions,
+  partial indexes, online index builds and equality `find` served by the indexes; atomic batches
+  over every model with per-record version conditions; paged scans; optimistic transactions over
+  a snapshot, validated at commit; row-level security and masking applied by one guard on every
+  read and write of a `Session`, with no thread-global context; an optional ledger kept as a
+  Merkle Mountain Range in the same engine batch as the data (O(log n) append and proof, record and
+  commit proofs, fast and strict verification). Validated by 22,000 simulated power cuts that
+  check records, ledger and indexes together.
+- **`lilia-engine`**: `WriteBatch::at_sequence` (commit only at a given sequence number),
+  `Db::last_sequence`, and the group commit queue exported as `GroupCommit` for layers that
+  serialize their own commits.
+
+### Changed
+- `docs/benchmarks.md` is generated from measurements; the README no longer carries hand-written
+  benchmark numbers.
+- JavaScript benchmark drivers moved out of the published `@liliadb/node` package into
+  `tools/benchmarks/sdk/`, one process per surface, with read workloads added.
+
+### Removed
+- `lilia_bench`, `bench_rusqlite` and `lilia_bench_analytics` binaries and the `bench-bin` feature of
+  `lilia-storage-sqlite`, with their `clap` and `rusqlite` dependencies.
+- `jit_bench` binary of `lilia-storage-sqlite`: a printing duplicate of the criterion benchmark
+  `benches/query_jit.rs` (interpreted, JIT single, JIT batch).
+- `docs/benchmarks_comparison.md` and `tools/benchmarks/run_comparative_suite.mjs`, whose analysis
+  text was written by hand and contradicted their own tables.
+
+---
+
 ## [0.1.0-alpha.9] - 2026-11-20
 
 ### Added

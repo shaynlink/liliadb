@@ -1,0 +1,22 @@
+[package]
+name = "lilia-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LiliaDB native storage engine: group-committed journal, MVCC memtable, leveled sorted runs"
+
+[dependencies]
+lilia-io = { path = "../lilia-io" }
+bytes.workspace = true
+crc32c.workspace = true
+crossbeam-skiplist.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

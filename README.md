@@ -380,51 +380,18 @@ let output = analytics.query(
 
 ## Performance Benchmarks
 
-Calibrated throughput and latency distributions measured on Apple M3 Max (14 cores, macOS 25.6, SQLite WAL `Durability::Durable`, November 2026):
+All published numbers come from one reproducible suite, [`tools/lilia-bench`](tools/lilia-bench/README.md),
+which measures LiliaDB against SQLite, LMDB, redb, fjall, RocksDB and DuckDB on the same machine:
+durable commits (1 to 64 writers), batched and bulk writes, point, multi-key, range and scan reads,
+YCSB A–F, JSON documents, full-text search, vector search, analytics, and the JavaScript surfaces
+(Node-API, daemon IPC/HTTP, better-sqlite3, `node:sqlite`, `bun:sqlite`, Deno). Every engine runs
+in its most durable mode, and each row states the sync primitive it actually uses.
 
-### 1. Multi-Tier Storage Engine & Concurrency Benchmarks
-| Storage Tier / Architecture | Threads | Workload | Throughput (ops/sec) | Latency $p_{50}$ | Latency $p_{99}$ | Architectural Highlights |
-| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| **Memory Tier (`StorageTier::Memory`)** | 1 | 10,000 | **1,570,126 ops/s** | **0.50 µs** | 4.63 µs | Sub-microsecond pure RAM engine, zero disk I/O, zero WAL |
-| **Memory Tier (`StorageTier::Memory`)** | 8 | 10,000 | **972,136 ops/s** | **3.75 µs** | 44.92 µs | Concurrent multi-threaded lock-free in-memory storage |
-| **Buffered RingBuffer (`StorageTier::Buffered`)** | 8 | 10,000 | **386,462 ops/s** | **3.00 µs** | 33.04 µs | Enqueue rate **1,399,474 ops/s**, async micro-batch flush to SQLite |
-| **GroupSync Multi-Thread Commit** | 8 | 10,000 | **19,481 ops/s** | **372.83 µs** | 929.17 µs | Shared WAL commit (**10.8x faster** under concurrent write contention) |
-| **Buffered IoT Gorilla TS Stream** | 1 | 10,000 | **3,446,790 pts/s** | **0.25 µs** | 0.50 µs | Auto-coalescing single-point pushes into Gorilla float chunks |
+The report, including where LiliaDB is slower, is [docs/benchmarks.md](docs/benchmarks.md). Reproduce it with:
 
-### 2. Standard ACID Disk Persistence Across Execution Surfaces (`Durability::Durable`)
-| Surface | Workload | Batch Size | Throughput (ops/sec) | Latency $p_{50}$ | Latency $p_{99}$ |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Node.js (Node-API Sync)** | 10,000 | 1 | **4,347 ops/s** | 193.42 µs | 437.42 µs |
-| **Daemon via HTTP Loopback** | 10,000 | 1 | **3,556 ops/s** | 268.60 µs | 456.80 µs |
-| **Node.js (Node-API Async)** | 10,000 | 1 | **3,518 ops/s** | 220.83 µs | 496.97 µs |
-| **Daemon via IPC (Socket)** | 10,000 | 1 | **3,353 ops/s** | 253.79 µs | 454.42 µs |
-| **Rust Native Embedded** | 10,000 | 1 | **1,797 ops/s** | 211.33 µs | 3807.74 µs |
-| **Node.js (Node-API Sync)** | 10,000 | 100 | **117,816 ops/s** | 7.67 µs | 10.85 µs |
-| **Daemon via IPC (Socket)** | 10,000 | 100 | **104,071 ops/s** | 9.06 µs | 14.26 µs |
-| **Node.js (Node-API Async)** | 10,000 | 100 | **98,157 ops/s** | 8.15 µs | 42.75 µs |
-| **Daemon via HTTP Loopback** | 10,000 | 100 | **97,907 ops/s** | 9.87 µs | 12.27 µs |
-| **Rust Native Embedded** | 10,000 | 100 | **94,867 ops/s** | 8.19 µs | 44.05 µs |
-| **Rust Native Bulk Ingest** | 100,000 | 500 | **145,547 ops/s** | 6.69 µs | 8.75 µs |
-| **Node.js (Node-API Sync)** | 100,000 | 500 | **131,563 ops/s** | 6.59 µs | 18.98 µs |
-| **Node.js (Node-API Async)** | 100,000 | 500 | **127,768 ops/s** | 6.62 µs | 30.87 µs |
-| **Daemon via HTTP Bulk Ingest** | 100,000 | 500 | **122,225 ops/s** | 7.57 µs | 22.07 µs |
-| **Daemon via IPC Bulk Ingest** | 100,000 | 500 | **117,370 ops/s** | 7.17 µs | 25.98 µs |
-
-### 3. Vectorized Analytics vs Row Store (500,000 rows, `analytics` feature)
-| Query | SQLite on JSON documents | SQLite on a typed table | Columnar, warm cache | Columnar, no cache |
-| :--- | :---: | :---: | :---: | :---: |
-| `count`/`sum`/`avg` with a filter | 5,637 ms | 18.9 ms | **0.97 ms** (513 M rows/s) | 2.60 ms |
-| `GROUP BY` (16 groups) with `count`/`avg` | 5,167 ms | 117.6 ms | **1.37 ms** (366 M rows/s) | 3.87 ms |
-
-### 4. Zero-Copy Relative-Pointer Deserialization (`rkyv` vs `serde_json` / MessagePack)
-| Format / Method | Memory Allocations | Access Latency | Speedup | Architectural Paradigm |
-| :--- | :---: | :---: | :---: | :--- |
-| **`serde_json` (Typed AST)** | Heap allocations | 86.16 ns | Baseline (1.0x) | Text parsing and heap allocation |
-| **`rmp_serde` (MessagePack)** | Heap allocations | 63.45 ns | 1.36x | Binary decoding with heap unpack |
-| **`rkyv` Dynamic `JsonDocument`** | **0 B (Zero Heap Alloc)** | **1.22 ns** | **70.6x** | Contiguous FlatNode tape arena |
-| **`rkyv` Typed Struct (0-ns)** | **0 B (Zero Heap Alloc)** | **0.69 ns** | **125.0x** | $O(1)$ relative-pointer memory cast |
-
-Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) and the [Comparative Benchmark: LiliaDB vs Native SQLite & Ecosystems](docs/benchmarks_comparison.md).
+```bash
+pnpm bench:compare
+```
 
 ---
 
@@ -454,7 +421,7 @@ Read the full report in [Official Performance Benchmarks](docs/benchmarks.md) an
 - `tools/`: Cross-platform mobile build scripts (`tools/mobile/`), conformance test suite (`tools/conformance/`), and benchmarks (`tools/benchmarks/`).
 - `Formula/`: Homebrew packaging (`Formula/liliadb.rb`, `Formula/lilia.rb`).
 
-Documentation: [Architecture](docs/architecture.md) | [Node.js SDK](docs/node_sdk.md) | [HTTP REST API](docs/http_api.md) | [Benchmarks](docs/benchmarks.md) | [Comparative Benchmarks](docs/benchmarks_comparison.md) | [Plugins](docs/plugins.md) | [Security Policy](SECURITY.md)
+Documentation: [Architecture](docs/architecture.md) | [Node.js SDK](docs/node_sdk.md) | [HTTP REST API](docs/http_api.md) | [Benchmarks](docs/benchmarks.md) | [Plugins](docs/plugins.md) | [Security Policy](SECURITY.md)
 
 ---
 

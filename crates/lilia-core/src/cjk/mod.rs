@@ -1,6 +1,8 @@
 //! Native CJK (Chinese, Japanese, Korean) micro-segmentation and tokenization.
 
+#[cfg(feature = "cjk")]
 use std::collections::HashSet;
+#[cfg(feature = "cjk")]
 use std::sync::OnceLock;
 
 #[cfg(feature = "cjk")]
