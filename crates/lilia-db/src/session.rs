@@ -7,6 +7,7 @@ use lilia_engine::Snapshot;
 use serde_json::{Map, Value};
 
 use crate::batch::{Batch, Outcome, Write};
+use crate::bitemporal::Bitemporal;
 use crate::context::{sealed, Context, Reader};
 use crate::crdt::Crdt;
 use crate::db::Database;
@@ -359,6 +360,12 @@ impl<'db> Session<'db> {
     #[must_use]
     pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
         Vectors::new(self, name)
+    }
+
+    /// Bitemporal space `name`; its writes commit at once.
+    #[must_use]
+    pub fn bitemporal(&self, name: &str) -> Bitemporal<'_, Self> {
+        Bitemporal::new(self, name)
     }
 
     /// CRDT space `name`; its writes commit at once.

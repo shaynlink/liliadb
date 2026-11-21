@@ -28,6 +28,9 @@
 //! | `0x14` | space `\0` set id `\0` element (escaped), tag | OR-set entry: live or tombstoned |
 //! | `0x15` | space `\0` document id `\0` path | LWW document field |
 //! | `0x16` | commit time (ms, ordered) | empty: a time mark ([`crate::history`]) |
+//! | `0x17` | space `\0` entity id `\0` valid from (ordered) | current bitemporal slice ([`crate::bitemporal`]) |
+//! | `0x18` | space `\0` entity id `\0` superseded at, valid from (ordered) | past bitemporal slice |
+//! | `0x19` | space `\0` entity id | transaction time of the entity's last change |
 //!
 //! Collection names never contain control characters ([`validate_name`]), so the `\0` after a
 //! name separates collections and keeps them in name order.
@@ -58,10 +61,13 @@ pub const CRDT_COUNTER: u8 = 0x13;
 pub const CRDT_SET: u8 = 0x14;
 pub const CRDT_FIELD: u8 = 0x15;
 pub const CLOCK: u8 = 0x16;
+pub const BT_CURRENT: u8 = 0x17;
+pub const BT_PAST: u8 = 0x18;
+pub const BT_STATE: u8 = 0x19;
 
 /// Tags of the keyspaces whose records the ledger attests. Derived keyspaces (secondary
 /// index entries, inbound edge mirrors) are not records of their own.
-pub const RECORD_TAGS: [u8; 13] = [
+pub const RECORD_TAGS: [u8; 15] = [
     KV,
     DOC,
     GRAPH_NODE,
@@ -75,6 +81,8 @@ pub const RECORD_TAGS: [u8; 13] = [
     CRDT_COUNTER,
     CRDT_SET,
     CRDT_FIELD,
+    BT_CURRENT,
+    BT_PAST,
 ];
 
 /// Separates the parts of a ledger id made of several names (an edge, a CRDT entry): a

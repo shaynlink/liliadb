@@ -12,13 +12,16 @@
 //! - **Row-level security and masking**: every read and write of a [`Session`] passes through
 //!   one guard that applies the policies and masking rules of the collection for the caller's
 //!   [`SecurityContext`] ([`guard`]).
-//! - **Graph, full-text search, vectors, time series, geo, CRDTs**: model handles of a session
-//!   or transaction ([`Graph`], [`Fts`], [`Vectors`], [`TimeSeries`], [`Geo`], [`Crdt`]), whose
-//!   writes are batch writes like any other.
+//! - **Graph, full-text search, vectors, time series, geo, CRDTs, bitemporal entities**: model
+//!   handles of a session or transaction ([`Graph`], [`Fts`], [`Vectors`], [`TimeSeries`],
+//!   [`Geo`], [`Crdt`], [`Bitemporal`]), whose writes are batch writes like any other.
+//! - **History**: reads in the past within a retention window and revisions of records
+//!   ([`history`]).
 //! - **Ledger**: an optional tamper-evident history of every record write, a Merkle Mountain
 //!   Range with `O(log n)` appends and proofs ([`ledger`]).
 
 mod batch;
+pub mod bitemporal;
 mod catalog;
 mod context;
 pub mod crdt;
@@ -42,6 +45,7 @@ pub mod vectors;
 mod write;
 
 pub use batch::{Batch, Outcome, Write};
+pub use bitemporal::{Bitemporal, BitemporalWrite};
 pub use context::Context;
 pub use crdt::{Crdt, CrdtCounter, CrdtDoc, CrdtSet, CrdtWrite};
 pub use db::{Database, Options, DEFAULT_HISTORY_RETENTION};

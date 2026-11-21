@@ -164,6 +164,22 @@ impl Database {
         )
     }
 
+    /// Proof that the current slice of entity `id` of bitemporal space `space` starting at valid
+    /// time `vt_from` was written by a ledger commit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Database::prove_kv`].
+    pub fn prove_bitemporal(&self, space: &str, id: &str, vt_from: i64) -> Result<RecordProof> {
+        self.ledger()?;
+        validate_name("space", space)?;
+        validate_name("entity id", id)?;
+        Ledger::prove_record(
+            self.engine(),
+            &crate::bitemporal::current_key(space, id, vt_from),
+        )
+    }
+
     /// Proof that the current totals of `actor` in PN-counter `id` of CRDT space `space` were
     /// written by a ledger commit.
     ///

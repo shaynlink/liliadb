@@ -167,6 +167,10 @@ fn record_identity(key: &[u8]) -> Option<(Model, String, String)> {
             let (model, id) = crate::geo::identity(tag, record)?;
             Some((model, space, id))
         }
+        keys::BT_CURRENT | keys::BT_PAST => {
+            let (model, id) = crate::bitemporal::identity(tag, record)?;
+            Some((model, space, id))
+        }
         keys::CRDT_COUNTER | keys::CRDT_SET | keys::CRDT_FIELD => {
             let (model, id) = crate::crdt::identity(tag, record)?;
             Some((model, space, id))

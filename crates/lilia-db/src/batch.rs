@@ -2,6 +2,7 @@
 
 use lilia_core::BinaryDoc;
 
+use crate::bitemporal::BitemporalWrite;
 use crate::crdt::CrdtWrite;
 use crate::fts::FtsWrite;
 use crate::geo::GeoWrite;
@@ -48,6 +49,7 @@ pub enum Write {
     TimeSeries(TimeSeriesWrite),
     Geo(GeoWrite),
     Crdt(CrdtWrite),
+    Bitemporal(BitemporalWrite),
 }
 
 /// Writes applied atomically, all of them or none, in order: a later write of a record sees the

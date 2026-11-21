@@ -36,6 +36,8 @@ pub enum Model {
     CrdtCounter,
     CrdtSet,
     CrdtDoc,
+    Bitemporal,
+    BitemporalPast,
 }
 
 impl Model {
@@ -54,6 +56,8 @@ impl Model {
             Self::CrdtCounter => "crdt_counter",
             Self::CrdtSet => "crdt_set",
             Self::CrdtDoc => "crdt_doc",
+            Self::Bitemporal => "bitemporal",
+            Self::BitemporalPast => "bitemporal_past",
         }
     }
 }
@@ -345,6 +349,11 @@ impl<'a> Planner<'a> {
         })
     }
 
+    /// The time the batch is planned at.
+    pub(crate) fn now_ms(&self) -> i64 {
+        self.now_ms
+    }
+
     /// The schema of collection `name`, as the batch is planned under it.
     pub(crate) fn schema(&self, name: &str) -> Option<std::sync::Arc<crate::catalog::Schema>> {
         self.catalog.schema(name)
@@ -434,6 +443,7 @@ impl<'a> Planner<'a> {
             Write::TimeSeries(write) => self.series(write),
             Write::Geo(write) => self.geo(write),
             Write::Crdt(write) => self.crdt(write),
+            Write::Bitemporal(write) => self.bitemporal(write),
         }
     }
 
@@ -681,6 +691,7 @@ pub mod overlay {
             Write::TimeSeries(write) => crate::timeseries::overlay(write, view),
             Write::Geo(write) => crate::geo::overlay(write, view),
             Write::Crdt(write) => crate::crdt::overlay(write, view),
+            Write::Bitemporal(write) => crate::bitemporal::overlay(write, view),
         }
     }
 }

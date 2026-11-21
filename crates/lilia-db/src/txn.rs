@@ -22,6 +22,7 @@ use lilia_engine::{Db, Snapshot};
 use serde_json::{Map, Value};
 
 use crate::batch::{Outcome, Write};
+use crate::bitemporal::Bitemporal;
 use crate::context::{sealed, Context, Reader};
 use crate::crdt::Crdt;
 use crate::db::Database;
@@ -372,6 +373,13 @@ impl<'db> Transaction<'db> {
     #[must_use]
     pub fn vectors(&self, name: &str) -> Vectors<'_, Self> {
         Vectors::new(self, name)
+    }
+
+    /// Bitemporal space `name`; its writes are buffered until [`Transaction::commit`] and its
+    /// reads see them.
+    #[must_use]
+    pub fn bitemporal(&self, name: &str) -> Bitemporal<'_, Self> {
+        Bitemporal::new(self, name)
     }
 
     /// CRDT space `name`; its writes are buffered until [`Transaction::commit`] and its reads
