@@ -221,8 +221,9 @@ method!(
 );
 
 method!(
-    /// The documents whose indexes hold the values of `query_json` (an object of index names and
-    /// values), after `after_id`, at most `limit` (every one when 0).
+    /// The documents matching `query_json`, an object of field paths (or index names) and
+    /// values, all of which must match; an index on a term serves the query, else the space is
+    /// scanned. After `after_id`, at most `limit` (every one when 0).
     json_find / json_find_sync(space: String, query_json: String, after_id: Option<String>, limit: u32) -> Vec<FfiJsonEntry>,
     |db| {
         let query = serde_json::from_str(&query_json)?;

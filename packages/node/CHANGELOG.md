@@ -19,7 +19,8 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 - `db.sync` has every call of the asynchronous API, not only KV, JSON, batches and SQL.
 - SQL is DataFusion and read-only: parameters are `$1`, `$2`...; JSON is read with
   `value->>'field'` and `json_get_*`. Every JSON space is also a table.
-- `json.find` matches indexes: every key of the query names an index of the space.
+- `json.find` terms are field paths or index names; an index serves the query when one
+  covers a term, else the space is scanned.
 - Open options: `durability`, `profile`, `ledger`, `historyRetentionMs`, `undoDepth`.
 - `json.history` returns `{ version, document? }`; `undo`, `redo` and `undoHistory` return
   `{ version, keys }`; `storageStats` describes the engine's levels and memtables;

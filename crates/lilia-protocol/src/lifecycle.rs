@@ -77,7 +77,10 @@ impl SharedDatabase {
     /// Takes the database out, so that later calls fail with [`ErrorCode::Closed`]; `None`
     /// when it was already taken. [`close`] closes what this returns.
     pub fn take(&self) -> Option<Arc<Database>> {
-        self.inner.write().unwrap_or_else(PoisonError::into_inner).take()
+        self.inner
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     /// Takes the database out and closes it once the calls holding it return; nothing when
@@ -87,7 +90,8 @@ impl SharedDatabase {
     ///
     /// As [`close`].
     pub fn close(&self, timeout: Duration) -> Result<(), LiliaError> {
-        self.take().map_or(Ok(()), |database| close(database, timeout))
+        self.take()
+            .map_or(Ok(()), |database| close(database, timeout))
     }
 }
 

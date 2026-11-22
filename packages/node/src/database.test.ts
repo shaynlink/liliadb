@@ -197,11 +197,12 @@ async function conformance(mode: DatabaseMode, path: string, endpoint?: string, 
     assert.equal(hybrid[0]?.id, "art1");
     assert.ok(hybrid[0]!.rrfScore > 0 && hybrid[0]!.ftsRank === 1 && hybrid[0]!.vectorRank === 1);
 
-    await database.json.createIndex("users", "role");
-    await database.json.createIndex("users", "active");
     for (const [id, role, active] of [["u1", "admin", true], ["u2", "member", true], ["u3", "admin", false]] as const) {
       await database.json.put("users", id, { role, active });
     }
+    assert.deepEqual((await database.json.find("users", { role: "admin" })).map((d) => d.id), ["u1", "u3"], "without an index: a scan");
+    await database.json.createIndex("users", "role");
+    await database.json.createIndex("users", "active");
     assert.deepEqual((await database.json.listIndexes("users")).map((i) => i.indexName).sort(), ["active", "role"]);
     assert.deepEqual((await database.json.find("users", { role: "admin" })).map((d) => d.id), ["u1", "u3"]);
     assert.deepEqual((await database.json.find("users", { role: "admin", active: true })).map((d) => d.id), ["u1"]);

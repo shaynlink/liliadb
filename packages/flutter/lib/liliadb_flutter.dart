@@ -3,7 +3,6 @@ library liliadb_flutter;
 // Core Database & Models
 export 'src/database.dart';
 export 'src/observer.dart';
-export 'src/secure_storage.dart';
 export 'src/scope.dart';
 
 // Reactive Builders
@@ -37,6 +36,5 @@ export 'src/widgets/security/biometric_lock.dart';
 export 'src/widgets/security/secure_field.dart';
 
 export 'src/widgets/storage/storage_bar.dart';
-export 'src/widgets/storage/backup_button.dart';
 
 export 'src/widgets/devtools/dev_inspector.dart';

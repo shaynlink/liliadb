@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liliadb_flutter/liliadb_flutter.dart';
@@ -6,30 +6,38 @@ import 'package:liliadb_flutter/liliadb_flutter.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('LiliadbOptions and Profiles', () {
-    test('default constructor sets mobile profile and autoFlush true', () {
-      const options = LiliadbOptions(
-        path: 'test.db',
-        profile: LiliadbProfile.mobile,
-        autoFlushOnBackground: true,
-      );
+  /// A database in a new temporary directory; the engine library comes from `LILIA_FFI_PATH`.
+  Future<LiliaDatabase> openTemporary() {
+    final directory = Directory.systemTemp.createTempSync('lilia-flutter-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    return LiliaDatabase.open(path: directory.path, durability: Durability.performance);
+  }
 
-      expect(options.path, equals('test.db'));
+  group('LiliadbOptions and Profiles', () {
+    test('defaults: mobile profile, durable, no ledger, autoFlush', () {
+      const options = LiliadbOptions(path: 'data');
       expect(options.profile, equals(LiliadbProfile.mobile));
+      expect(options.durability, equals(Durability.durable));
       expect(options.autoFlushOnBackground, isTrue);
-      expect(options.useSecureStorage, isFalse);
+      expect(options.toJson(), {
+        'path': 'data',
+        'profile': 'mobile',
+        'durability': 'durable',
+        'ledger': false,
+        'undo_depth': 0,
+      });
     });
 
-    test('constrained profile configuration for watchOS / wearables', () {
+    test('constrained profile with a history window and undo', () {
       const options = LiliadbOptions(
-        path: 'watch.db',
+        path: 'watch',
         profile: LiliadbProfile.constrained,
-        useSecureStorage: true,
+        historyRetentionMs: 60000,
+        undoDepth: 8,
       );
-
-      expect(options.path, equals('watch.db'));
-      expect(options.profile, equals(LiliadbProfile.constrained));
-      expect(options.useSecureStorage, isTrue);
+      expect(options.toJson()['profile'], equals('constrained'));
+      expect(options.toJson()['history_retention_ms'], equals(60000));
+      expect(options.toJson()['undo_depth'], equals(8));
     });
   });
 
@@ -74,98 +82,83 @@ void main() {
   });
 
   group('LiliaDatabase synchronous and asynchronous engine', () {
-    test('can open and execute KV operations', () async {
-      final db = await LiliaDatabase.open(path: ':memory:');
-      expect(db.isClosed, isFalse);
-
-      // Synchronous peek before any write
+    test('KV: peek, get, set, scan, delete', () async {
+      final db = await openTemporary();
       expect(db.sync.kv.peek('prefs', 'lang'), isNull);
-
-      // Synchronous set
-      db.sync.kv.set('prefs', 'lang', 'fr');
+      final version = db.sync.kv.set('prefs', 'lang', 'fr');
       expect(db.sync.kv.peek('prefs', 'lang'), equals('fr'));
+      final entry = db.sync.kv.get('prefs', 'lang')!;
+      expect(entry.valueString, equals('fr'));
+      expect(entry.version, equals(version));
 
-      final entry = db.sync.kv.get('prefs', 'lang');
-      expect(entry, isNotNull);
-      expect(entry!.valueString, equals('fr'));
-
-      // Asynchronous API
       await db.kv.set('prefs', 'theme', 'dark');
-      final asyncEntry = await db.kv.get('prefs', 'theme');
-      expect(asyncEntry?.valueString, equals('dark'));
+      expect((await db.kv.get('prefs', 'theme'))?.valueString, equals('dark'));
+      expect(db.sync.kv.scan('prefs', limit: 0).length, equals(2));
 
-      // Delete
       expect(db.sync.kv.delete('prefs', 'lang'), isTrue);
       expect(db.sync.kv.peek('prefs', 'lang'), isNull);
-
       await db.close();
       expect(db.isClosed, isTrue);
+      expect(() => db.sync.kv.get('prefs', 'theme'), throwsA(isA<LiliaException>()));
     });
 
-    test('can execute JSON documents and cursor find', () async {
-      final db = await LiliaDatabase.open(path: ':memory:');
+    test('JSON: documents, indexes and queries', () async {
+      final db = await openTemporary();
+      db.sync.json.put('users', 'u1', {'name': 'Ada Lovelace', 'role': 'admin'});
+      await db.json.put('users', 'u2', {'name': 'Alan Turing', 'role': 'guest'});
+      expect(db.sync.json.get<Map<String, dynamic>>('users', 'u1')!.value['name'], equals('Ada Lovelace'));
+      expect(db.sync.json.scan<Map<String, dynamic>>('users').map((d) => d.id), equals(['u1', 'u2']));
 
-      // Put document
-      db.sync.json.put('users', 'u1', {'name': 'Ada Lovelace', 'age': 36});
-      final doc = db.sync.json.get<Map<String, dynamic>>('users', 'u1');
-      expect(doc, isNotNull);
-      expect(doc!.value['name'], equals('Ada Lovelace'));
-
-      // Find documents
-      final list = db.sync.json.find<Map<String, dynamic>>('users', {});
-      expect(list, isA<List<JsonEntry<Map<String, dynamic>>>>());
-
-      // Async put
-      await db.json.put('users', 'u2', {'name': 'Alan Turing'});
-      final u2 = await db.json.get<Map<String, dynamic>>('users', 'u2');
-      expect(u2?.value['name'], equals('Alan Turing'));
-
+      db.sync.json.createIndex('users', 'role', r'$.role');
+      final admins = db.sync.json.find<Map<String, dynamic>>('users', {'role': 'admin'});
+      expect(admins.map((d) => d.id), equals(['u1']));
+      expect(db.sync.json.listIndexes('users').single.indexName, equals('role'));
+      expect(db.sync.json.dropIndex('users', 'role'), isTrue);
       await db.close();
     });
 
-    test('can execute Graph engine operations', () async {
-      final db = await LiliaDatabase.open(path: ':memory:');
-
+    test('Graph: nodes, edges, neighbours, reachability', () async {
+      final db = await openTemporary();
       db.sync.graph.setNode('social', 'alice', 'user', {'role': 'admin'});
       db.sync.graph.setNode('social', 'bob', 'user', {'role': 'guest'});
       db.sync.graph.addEdge('social', 'alice', 'bob', 'follows');
-
-      final neighbors = db.sync.graph.neighbors('social', 'alice');
-      expect(neighbors, isA<List<String>>());
-
+      expect(db.sync.graph.neighbors('social', 'alice'), equals(['bob']));
+      expect(db.sync.graph.reachability('social', ['alice']), containsAll(['alice', 'bob']));
+      expect(db.sync.graph.getNode<Map<String, dynamic>>('social', 'alice')!.metadata['role'], equals('admin'));
       await db.close();
     });
 
-    test('can execute FTS5 and SQL queries', () async {
-      final db = await LiliaDatabase.open(path: ':memory:');
-
+    test('Full-text search and SQL', () async {
+      final db = await openTemporary();
       db.sync.fts.index('docs', 'd1', 'LiliaDB is lightning fast');
-      final hits = db.sync.fts.search('docs', 'lightning');
-      expect(hits, isA<List<FtsHit>>());
+      expect(db.sync.fts.search('docs', 'lightning').single.docId, equals('d1'));
 
-      final sqlRes = db.sync.sql.query('SELECT 1 as num');
-      expect(sqlRes, isA<SqlQueryResult>());
-      expect(sqlRes.columns, isNotNull);
-
+      db.sync.json.put('users', 'u1', {'name': 'Ada'});
+      final rows = db.sync.sql.query<Map<String, dynamic>>(
+        "SELECT id, value->>'name' AS name FROM users WHERE id = \$1",
+        ['u1'],
+      );
+      expect(rows.columns, equals(['id', 'name']));
+      expect(rows.rows.single, equals({'id': 'u1', 'name': 'Ada'}));
       await db.close();
     });
 
-    test('can execute storage maintenance', () async {
-      final db = await LiliaDatabase.open(path: ':memory:');
-
-      final metrics = db.sync.maintenance.getFileSize();
-      expect(metrics.totalBytes, isNotNull);
-
+    test('Maintenance: checkpoint, checks, storage statistics', () async {
+      final db = await openTemporary();
+      db.sync.kv.set('k', 'v', 'x');
       db.sync.maintenance.checkpoint();
-      db.sync.maintenance.vacuum();
-
+      expect(db.sync.maintenance.integrityCheck(), isTrue);
+      expect(db.sync.maintenance.quickCheck(), isTrue);
+      final stats = db.sync.maintenance.storageStats();
+      expect(stats.diskBytes, greaterThan(0));
+      expect(stats.version, greaterThanOrEqualTo(stats.oldestVersion));
       await db.close();
     });
   });
 
-  group('20 Built-in Widgets Instantiation', () {
-    testWidgets('all 20 widgets can be instantiated and constructed', (tester) async {
-      final db = await LiliaDatabase.open(path: ':memory:');
+  group('Built-in Widgets Instantiation', () {
+    testWidgets('every widget can be instantiated', (tester) async {
+      final db = await openTemporary();
 
       final widgets = [
         LiliaListView<Map<String, dynamic>>(
@@ -249,16 +242,13 @@ void main() {
         LiliaStorageBar(
           database: db,
         ),
-        LiliaBackupShareButton(
-          database: db,
-        ),
         LiliaDevInspector(
           enabled: false,
           database: db,
         ),
       ];
 
-      expect(widgets.length, equals(20));
+      expect(widgets.length, equals(19));
       for (final widget in widgets) {
         expect(widget, isA<Widget>());
       }

@@ -305,7 +305,8 @@ val name = doc?.valueJson?.let { JSONObject(it).optString("name") }
 
 val deleted: Boolean = db.jsonDeleteSync("users", "usr:1")
 
-// Indexed query: a JSON object of index names and values, combined with AND.
+// Query: field paths (or index names) and values, combined with AND. An index on a
+// term serves the query; without one, the space is scanned.
 db.jsonCreateIndexSync("users", "role", "$.role", filter = null)
 // Array fields match when any element equals the value (multikey).
 val admins: List<FfiJsonEntry> = db.jsonFindSync(

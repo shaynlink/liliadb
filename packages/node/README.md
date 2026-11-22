@@ -238,7 +238,8 @@ await db.json.dropIndex("customers", "idx_custom_email");
 ### Querying
 
 ```typescript
-// Index names and values (AND); every key names an index of the space.
+// Terms combined with AND; a key is a field path (`plan`, `$.user.city`) or an index name.
+// An index on a term serves the query; without one, the space is scanned.
 const enterprise = await db.json.find("customers", { plan: "enterprise" }, { limit: 10 });
 const activeEnterprise = await db.json.find("customers", { plan: "enterprise", active: true });
 
@@ -250,8 +251,7 @@ const byEmail = await db.json.findByIndex("customers", "idx_custom_email", "grac
 ```
 
 `limit` defaults to `100` for scans and finds; `0` reads everything. `findByIndex` accepts
-`string | number | boolean` values. A field without an index cannot be queried by `find`:
-create the index first, or use SQL.
+`string | number | boolean` values. Create an index on the fields you query often.
 
 ---
 

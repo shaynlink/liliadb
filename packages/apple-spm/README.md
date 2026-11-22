@@ -407,7 +407,8 @@ if let doc {
 
 let deleted: Bool = try db.jsonDeleteSync(space: "users", id: "usr:1")
 
-// Indexed query: a JSON object of index names and values, combined with AND.
+// Query: field paths (or index names) and values, combined with AND. An index on a
+// term serves the query; without one, the space is scanned.
 try db.jsonCreateIndexSync(space: "users", name: "role", path: "$.role", filter: nil)
 // Array fields match when any element equals the value (multikey).
 let admins: [FfiJsonEntry] = try db.jsonFindSync(
@@ -431,7 +432,7 @@ let admins: [FfiJsonEntry] = try db.jsonFindSync(
 | `jsonDropIndex`   | `(space: String, name: String) async throws -> Bool`                                              |
 | `jsonListIndexes` | `(space: String) async throws -> [FfiJsonIndexInfo]`                                              |
 
-`limit: 0` reads everything. Every key of a `jsonFind` query names an index of the space.
+`limit: 0` reads everything. Create an index on the fields you query often.
 
 Each method also has a `*Sync` variant.
 

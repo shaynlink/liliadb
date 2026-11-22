@@ -123,7 +123,7 @@ pub fn execute(database: &Database, operation: Operation) -> Result<ResponseValu
         } => {
             let Value::Object(terms) = query else {
                 return Err(invalid(
-                    "a query is a JSON object of index names and values",
+                    "a query is a JSON object of field paths (or index names) and values",
                 ));
             };
             ResponseValue::JsonPage(s.json_find(&space, &terms, &page(after, limit))?)
