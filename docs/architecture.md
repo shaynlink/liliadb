@@ -474,6 +474,7 @@ To provide cross-platform database support without JVM or V8 overhead, `crates/l
 - **Android SDK (`packages/android-sdk`)**: Kotlin bindings with JNI/NDK prebuilts targeting `aarch64-linux-android` and `armv7-linux-androideabi` (`tools/mobile/build-android.sh`).
 - **React Native (`packages/react-native`)**: A TurboModule installs a C++ JSI binding over the C ABI (`lilia_c_execute`): MessagePack operations in, JS frames out (the JSON text for Hermes' `JSON.parse`, the bytes as an `ArrayBuffer` over the engine's memory), asynchronous calls on native worker threads. The calls are those of `@liliadb/client`, shared with `@liliadb/node`.
 - **Flutter (`packages/flutter`)**: Dart FFI plugin delivering direct native execution across mobile platforms.
+- **WebAssembly (`crates/lilia-wasm`, `packages/wasm`)**: The engine in the browser, on a pool of slot files of the origin private file system (`lilia_io::OpfsPool`, dedicated workers) or in memory, without background threads. The module answers the same MessagePack operations with the same JS frames; `@liliadb/wasm` runs it in the calling thread or in its own worker, with the calls of `@liliadb/client`.
 
 ## Visual Studio Code Extension (`apps/lilia-vscode`)
 

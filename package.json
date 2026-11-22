@@ -18,7 +18,7 @@
     "bench:compare:quick": "node tools/build-prebuilds.mjs && pnpm --filter @liliadb/node build && cargo build --release -p lilia-daemon && cargo run --release --manifest-path tools/lilia-bench/Cargo.toml -- suite --profile quick --out target/benchmarks-quick.jsonl --report target/benchmarks-quick.md",
     "graph": "nx graph",
     "prebuild": "node ./tools/build-prebuilds.mjs",
-    "build:wasm": "node ./tools/build-wasm.mjs",
+    "build:wasm": "bash tools/wasm/build.sh",
     "lilia": "cargo run -p lilia-cli --"
   },
   "devDependencies": {

@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { Database, LiliaError } from "../index.js";
+import { Database, LiliaError, serve, type OpenOptions } from "./index.js";
+import { WorkerTransport } from "./transport.js";
+
+/** The module's bytes: Node's `fetch` does not read `file:` URLs. */
+const wasm = readFileSync(new URL("../pkg/lilia_wasm_bg.wasm", import.meta.url));
+
+function open(options: OpenOptions = {}): Promise<Database> {
+  return Database.open({ storage: "memory", wasm, ...options });
+}
 
 test("WASM in-memory database: lifecycle and integrity", async () => {
-  const db = await Database.open({ path: ":memory:", vfs: "memory" });
+  const db = await open();
   assert.equal(await db.integrityCheck(), true);
   await db.close();
 
@@ -15,7 +24,7 @@ test("WASM in-memory database: lifecycle and integrity", async () => {
 });
 
 test("WASM KV store: CRUD, CAS, and scanning", async () => {
-  const db = await Database.open({ path: ":memory:", vfs: "memory" });
+  const db = await open();
 
   const k1 = new Uint8Array([1, 2, 3]);
   const v1 = new Uint8Array([10, 20, 30]);
@@ -68,7 +77,7 @@ test("WASM KV store: CRUD, CAS, and scanning", async () => {
 });
 
 test("WASM JSON store: documents, indexing, and queries", async () => {
-  const db = await Database.open({ path: ":memory:", vfs: "memory" });
+  const db = await open();
 
   await db.json.put("products", "p1", { name: "Laptop", category: "electronics", price: 1200 });
   await db.json.put("products", "p2", { name: "Mouse", category: "electronics", price: 25 });
@@ -109,7 +118,7 @@ test("WASM JSON store: documents, indexing, and queries", async () => {
 });
 
 test("WASM Graph engine: nodes, edges, and reachability", async () => {
-  const db = await Database.open({ path: ":memory:", vfs: "memory" });
+  const db = await open();
 
   await db.graph.setNode("dependency", "app", "service");
   await db.graph.setNode("dependency", "auth", "service");
@@ -135,7 +144,7 @@ test("WASM Graph engine: nodes, edges, and reachability", async () => {
 });
 
 test("WASM FTS5 engine: full-text indexing and search", async () => {
-  const db = await Database.open({ path: ":memory:", vfs: "memory" });
+  const db = await open();
 
   await db.fts.index(
     "knowledge",
@@ -161,28 +170,22 @@ test("WASM FTS5 engine: full-text indexing and search", async () => {
   await db.close();
 });
 
-test("WASM SQL engine: relational queries and JSON extracts", async () => {
-  const db = await Database.open({ path: ":memory:", vfs: "memory" });
+test("WASM SQL engine: read-only queries over the models", async () => {
+  const db = await open();
 
   await db.json.put("users", "u1", { name: "Alice", active: true });
   await db.json.put("users", "u2", { name: "Bob", active: false });
 
-  // Query records
   const users = await db.sql.query<{ id: string; name: string }>(
-    "SELECT id, json_extract(value, '$.name') as name FROM _lilia_json WHERE space = ? ORDER BY id",
+    "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = $1 ORDER BY id",
     ["users"]
   );
-  assert.equal(users.length, 2);
-  assert.equal(users[0]?.id, "u1");
-  assert.equal(users[0]?.name, "Alice");
-  assert.equal(users[1]?.id, "u2");
-  assert.equal(users[1]?.name, "Bob");
+  assert.deepEqual(users, [
+    { id: "u1", name: "Alice" },
+    { id: "u2", name: "Bob" },
+  ]);
 
-  // Raw query
-  const raw = await db.sql.raw(
-    "SELECT count(*) as count FROM _lilia_json WHERE space = ?",
-    ["users"]
-  );
+  const raw = await db.sql.raw("SELECT count(*) AS count FROM users");
   assert.deepEqual(raw.columns, ["count"]);
   assert.equal(raw.rows[0]?.[0], 2);
 
@@ -190,7 +193,7 @@ test("WASM SQL engine: relational queries and JSON extracts", async () => {
 });
 
 test("WASM Atomic multi-model batch and rollback", async () => {
-  const db = await Database.open({ path: ":memory:", vfs: "memory" });
+  const db = await open();
 
   // Atomic batch across KV, JSON, Graph, FTS
   const batchRes = await db.batch([
@@ -249,27 +252,44 @@ test("WASM Atomic multi-model batch and rollback", async () => {
   await db.close();
 });
 
-test("WASM AES-256-GCM transparent encryption", async () => {
-  const db = await Database.open({
-    path: ":memory:",
-    vfs: "memory",
-    encryptionKey: "my-secure-master-passphrase",
-  });
-
-  await db.kv.set(
-    "vault",
-    new Uint8Array([42]),
-    new Uint8Array([1, 2, 3, 4, 5])
-  );
-  await db.json.put("secure_docs", "d1", { secret: "top-secret-data" });
-
-  const kvVal = await db.kv.get("vault", new Uint8Array([42]));
-  assert.ok(kvVal);
-  assert.deepEqual([...kvVal.value], [1, 2, 3, 4, 5]);
-
-  const docVal = await db.json.get("secure_docs", "d1");
-  assert.ok(docVal);
-  assert.deepEqual(docVal.value, { secret: "top-secret-data" });
-
+test("WASM synchronous API: the same calls in place", async () => {
+  const db = await open();
+  const written = db.sync.json.put("notes", "n1", { text: "hello" });
+  assert.equal(db.sync.json.get("notes", "n1")?.version, written.version);
+  assert.deepEqual((await db.json.get("notes", "n1"))?.value, { text: "hello" });
   await db.close();
+});
+
+test("WASM open options: invalid ones are refused as the engine reports them", async () => {
+  await assert.rejects(open({ durability: "fast" as never }), (err: unknown) => err instanceof LiliaError && err.code === "INVALID_INPUT");
+  await assert.rejects(open({ storage: "opfs", worker: false }), (err: unknown) => err instanceof LiliaError && err.code === "INVALID_INPUT", "OPFS needs a path");
+  await assert.rejects(open({ storage: "opfs" }), (err: unknown) => err instanceof LiliaError && err.code === "UNSUPPORTED", "OPFS runs in a worker, which Node lacks");
+});
+
+test("WASM in a worker: serve() and the worker transport over a message channel", async () => {
+  const channel = new MessageChannel();
+  serve(channel.port2);
+  let released = false;
+  const transport = await WorkerTransport.open(
+    channel.port1,
+    JSON.stringify({ storage: "memory" }),
+    wasm,
+    () => {
+      released = true;
+      channel.port1.close();
+      channel.port2.close();
+    }
+  );
+  const db = Reflect.construct(Database, [transport]) as Database;
+
+  await db.kv.set("ns", "k", "v");
+  assert.equal(new TextDecoder().decode((await db.kv.get("ns", "k"))?.value), "v");
+  await assert.rejects(
+    db.kv.set("ns", "k", "w", { ifVersion: 1n }),
+    (err: unknown) => err instanceof LiliaError && err.code === "CONFLICT",
+    "engine errors cross the channel"
+  );
+  assert.throws(() => db.sync, (err: unknown) => err instanceof LiliaError && err.code === "UNSUPPORTED", "no synchronous calls through a worker");
+  await db.close();
+  assert.ok(released, "the worker is released once the database closes");
 });

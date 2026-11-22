@@ -9,7 +9,7 @@
   "targetDefaults": {
     "build": { "cache": true, "inputs": ["production", "^production"], "dependsOn": ["^build"] },
     "test": { "cache": true, "inputs": ["default", "^production"], "dependsOn": ["^build"] },
-    "lint": { "cache": true, "inputs": ["default", "^production"] },
+    "lint": { "cache": true, "inputs": ["default", "^production"], "dependsOn": ["^build"] },
     "bench*": { "cache": false, "inputs": ["production", "^production"], "parallelism": false }
   },
   "analytics": false

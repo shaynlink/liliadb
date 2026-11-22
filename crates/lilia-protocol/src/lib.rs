@@ -24,7 +24,9 @@ pub use frame::{
     read_archived_frame, read_archived_frame_unchecked, read_frame, write_archived_frame,
     write_frame,
 };
-pub use lifecycle::{close, open, OpenOptions, SharedDatabase};
+#[cfg(any(unix, windows))]
+pub use lifecycle::open;
+pub use lifecycle::{close, OpenOptions, SharedDatabase};
 pub use operation::Operation;
 pub use response::{ResponseValue, StoredVector};
 

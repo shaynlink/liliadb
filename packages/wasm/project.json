@@ -4,9 +4,57 @@
   "projectType": "library",
   "sourceRoot": "packages/wasm/src",
   "targets": {
-    "build": { "executor": "nx:run-script", "options": { "script": "build" } },
-    "test": { "executor": "nx:run-script", "options": { "script": "test" } },
-    "lint": { "executor": "nx:run-script", "options": { "script": "lint" } }
+    "build-wasm": {
+      "executor": "nx:run-script",
+      "options": {
+        "script": "build:wasm"
+      },
+      "cache": false
+    },
+    "build": {
+      "executor": "nx:run-script",
+      "options": {
+        "script": "build"
+      },
+      "dependsOn": [
+        "build-wasm",
+        "^build"
+      ]
+    },
+    "test": {
+      "executor": "nx:run-script",
+      "options": {
+        "script": "test"
+      },
+      "dependsOn": [
+        "build-wasm",
+        "^build"
+      ]
+    },
+    "lint": {
+      "executor": "nx:run-script",
+      "options": {
+        "script": "lint"
+      },
+      "dependsOn": [
+        "build-wasm",
+        "^build"
+      ]
+    },
+    "package": {
+      "executor": "nx:run-script",
+      "options": {
+        "script": "package"
+      },
+      "dependsOn": [
+        "build"
+      ]
+    }
   },
-  "tags": ["scope:bindings", "type:library", "lang:typescript", "target:wasm"]
+  "tags": [
+    "scope:bindings",
+    "type:library",
+    "lang:typescript",
+    "target:wasm"
+  ]
 }

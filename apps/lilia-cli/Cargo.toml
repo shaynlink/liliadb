@@ -22,7 +22,7 @@ lilia-plugin-api = { path = "../../crates/lilia-plugin-api" }
 lilia-protocol = { path = "../../crates/lilia-protocol" }
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 uuid.workspace = true
 
 [dev-dependencies]

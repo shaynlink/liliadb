@@ -96,7 +96,8 @@ semver = "1.0.28"
 sha2 = "0.10.9"
 simd-json = "0.14.3"
 thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+# Each crate names the features it uses: the protocol builds for wasm32, where `net` does not.
+tokio = { version = "1.53.1", default-features = false }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
@@ -114,6 +115,12 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# The browser module (tools/wasm/build.sh): size before speed, the download being the cost.
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

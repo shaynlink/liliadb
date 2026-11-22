@@ -38,6 +38,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: clippy,rustfmt
+          targets: wasm32-unknown-unknown
+      # @liliadb/wasm builds its module (tools/wasm/build.sh) before its TypeScript.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.128
       - uses: pnpm/action-setup@v4
         with:
           version: 11.5.2
@@ -50,6 +55,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: pnpm nx run-many -t build,lint,test --all
+        env:
+          CC_wasm32_unknown_unknown: clang-18
+          AR_wasm32_unknown_unknown: llvm-ar-18
 
   compat-verify:
     needs: verify

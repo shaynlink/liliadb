@@ -1,6 +1,7 @@
 //! Opening a database from the options the daemon and the bindings take, sharing it between
 //! calls, and closing it once they return.
 
+#[cfg(any(unix, windows))]
 use std::path::Path;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
@@ -95,11 +96,13 @@ impl SharedDatabase {
     }
 }
 
-/// Opens (or creates) the database of directory `path`.
+/// Opens (or creates) the database of directory `path`, on the platform's file system (the
+/// browser opens its databases on a pool of storage files instead: see `lilia-wasm`).
 ///
 /// # Errors
 ///
 /// Invalid options; the database's failure to open.
+#[cfg(any(unix, windows))]
 pub fn open(path: impl AsRef<Path>, options: &OpenOptions) -> Result<Database, LiliaError> {
     Ok(Database::open(path, options.options()?)?)
 }
@@ -112,7 +115,13 @@ pub fn open(path: impl AsRef<Path>, options: &OpenOptions) -> Result<Database, L
 /// [`ErrorCode::Timeout`] when calls still hold the database after `timeout`: it then closes
 /// when the last of them returns, and nobody hears of a failure of that close. The failure of
 /// the close otherwise.
-pub fn close(mut database: Arc<Database>, timeout: Duration) -> Result<(), LiliaError> {
+pub fn close(database: Arc<Database>, timeout: Duration) -> Result<(), LiliaError> {
+    // The clock is read only when calls hold the database: `wasm32-unknown-unknown`, whose
+    // single thread leaves none, has no `Instant`.
+    let mut database = match Arc::try_unwrap(database) {
+        Ok(database) => return Ok(database.close()?),
+        Err(shared) => shared,
+    };
     let deadline = Instant::now() + timeout;
     loop {
         match Arc::try_unwrap(database) {
