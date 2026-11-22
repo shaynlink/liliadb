@@ -4205,8 +4205,8 @@ name = "lilia-ffi"
 version = "0.1.0-alpha.9"
 dependencies = [
  "lilia-core",
- "lilia-shm",
- "lilia-storage-sqlite",
+ "lilia-db",
+ "lilia-protocol",
  "serde",
  "serde_json",
  "tempfile",

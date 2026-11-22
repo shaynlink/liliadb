@@ -18,13 +18,13 @@ use lilia_core::LiliaError;
 use serde::{Deserialize, Serialize};
 pub use serde_bytes::ByteBuf;
 
-pub use codec::{from_msgpack, to_js_frame, to_msgpack, Codec};
+pub use codec::{execute_js, from_msgpack, to_js_frame, to_msgpack, Codec, RequestEncoding};
 pub use execute::{execute, GEO_COLLECTION};
 pub use frame::{
     read_archived_frame, read_archived_frame_unchecked, read_frame, write_archived_frame,
     write_frame,
 };
-pub use lifecycle::{close, open, OpenOptions};
+pub use lifecycle::{close, open, OpenOptions, SharedDatabase};
 pub use operation::Operation;
 pub use response::{ResponseValue, StoredVector};
 

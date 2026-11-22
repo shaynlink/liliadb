@@ -11,12 +11,12 @@
 // errors are JavaScript exceptions, documented by the TypeScript package.
 #![allow(clippy::needless_pass_by_value, clippy::missing_errors_doc)]
 
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lilia_core::{ErrorCode, LiliaError};
 use lilia_db::Database;
-use lilia_protocol::{from_msgpack, to_js_frame, OpenOptions, Operation};
+use lilia_protocol::{execute_js, OpenOptions, RequestEncoding, SharedDatabase};
 use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env, Error, Result, Status, Task};
 use napi_derive::napi;
 
@@ -24,7 +24,7 @@ use napi_derive::napi;
 #[napi]
 #[derive(Debug)]
 pub struct NativeDatabase {
-    inner: RwLock<Option<Arc<Database>>>,
+    database: SharedDatabase,
 }
 
 #[napi(object)]
@@ -61,19 +61,9 @@ fn invalid_arg(message: impl Into<String>) -> Error {
     napi_error(LiliaError::new(ErrorCode::InvalidInput, message, false))
 }
 
-/// Runs the operation `request` encodes; the JS frame of its result, `{ Ok: value }` or
-/// `{ Err: error }`, a request that does not decode included.
+/// Runs the operation `request` encodes (in `MessagePack`); the JS frame of its result.
 fn run(database: &Database, request: &[u8]) -> Result<Vec<u8>> {
-    let result = from_msgpack::<Operation>(request)
-        .map_err(|e| {
-            LiliaError::new(
-                ErrorCode::InvalidInput,
-                format!("invalid operation: {e}"),
-                false,
-            )
-        })
-        .and_then(|operation| lilia_protocol::execute(database, operation));
-    to_js_frame(&result)
+    execute_js(database, request, RequestEncoding::MessagePack)
         .map_err(|e| napi_error(LiliaError::new(ErrorCode::Storage, e.to_string(), false)))
 }
 
@@ -94,7 +84,7 @@ impl Task for Open {
 
     fn resolve(&mut self, _env: Env, database: Database) -> Result<NativeDatabase> {
         Ok(NativeDatabase {
-            inner: RwLock::new(Some(Arc::new(database))),
+            database: SharedDatabase::new(database),
         })
     }
 }
@@ -145,17 +135,7 @@ impl Task for Close {
 impl NativeDatabase {
     /// The open database, or a `CLOSED` error.
     fn database(&self) -> Result<Arc<Database>> {
-        self.inner
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-            .ok_or_else(|| {
-                napi_error(LiliaError::new(
-                    ErrorCode::Closed,
-                    "the database is closed",
-                    false,
-                ))
-            })
+        self.database.get().map_err(napi_error)
     }
 }
 
@@ -184,11 +164,7 @@ impl NativeDatabase {
     /// (5 seconds by default). Later calls fail with `CLOSED`; closing twice does nothing.
     #[napi]
     pub fn close(&self, timeout_ms: Option<u32>) -> AsyncTask<Close> {
-        let database = self
-            .inner
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let database = self.database.take();
         AsyncTask::new(Close {
             database,
             timeout: Duration::from_millis(u64::from(timeout_ms.unwrap_or(5_000))),

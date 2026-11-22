@@ -1,18 +1,20 @@
-//! Opening a database from the options the daemon and the bindings take, and closing a
-//! database they share between calls.
+//! Opening a database from the options the daemon and the bindings take, sharing it between
+//! calls, and closing it once they return.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use lilia_core::{ErrorCode, LiliaError};
 use lilia_db::{Database, Options};
+use serde::Deserialize;
 
 use crate::names;
 
 /// How a daemon or a binding opens a database; names as [`names::durability`] and
-/// [`names::profile`] read them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// [`names::profile`] read them. Its JSON form (for the C ABI) leaves out any field.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
 pub struct OpenOptions {
     /// `"durable"` (default), `"balanced"` or `"performance"`.
     pub durability: Option<String>,
@@ -42,6 +44,50 @@ impl OpenOptions {
         }
         options.undo_depth = self.undo_depth as usize;
         Ok(options)
+    }
+}
+
+/// An open database that calls share and [`SharedDatabase::close`] closes: a binding's handle.
+#[derive(Debug)]
+pub struct SharedDatabase {
+    inner: RwLock<Option<Arc<Database>>>,
+}
+
+impl SharedDatabase {
+    #[must_use]
+    pub fn new(database: Database) -> Self {
+        Self {
+            inner: RwLock::new(Some(Arc::new(database))),
+        }
+    }
+
+    /// The database, for one call.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Closed`] once [`SharedDatabase::close`] or [`SharedDatabase::take`] ran.
+    pub fn get(&self) -> Result<Arc<Database>, LiliaError> {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| LiliaError::new(ErrorCode::Closed, "the database is closed", false))
+    }
+
+    /// Takes the database out, so that later calls fail with [`ErrorCode::Closed`]; `None`
+    /// when it was already taken. [`close`] closes what this returns.
+    pub fn take(&self) -> Option<Arc<Database>> {
+        self.inner.write().unwrap_or_else(PoisonError::into_inner).take()
+    }
+
+    /// Takes the database out and closes it once the calls holding it return; nothing when
+    /// it was already closed.
+    ///
+    /// # Errors
+    ///
+    /// As [`close`].
+    pub fn close(&self, timeout: Duration) -> Result<(), LiliaError> {
+        self.take().map_or(Ok(()), |database| close(database, timeout))
     }
 }
 

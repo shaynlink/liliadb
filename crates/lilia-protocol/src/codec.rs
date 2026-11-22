@@ -9,11 +9,13 @@
 
 use std::io::{self, Write};
 
+use lilia_core::{ErrorCode, LiliaError};
+use lilia_db::Database;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::{read_frame, write_frame, Request, Response, MAX_FRAME_BYTES};
+use crate::{execute, read_frame, write_frame, Operation, Request, Response, MAX_FRAME_BYTES};
 
 /// The payload format of a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +168,42 @@ pub fn to_js_frame<T: Serialize + ?Sized>(value: &T) -> io::Result<Vec<u8>> {
     }
     frame.extend_from_slice(&segments.bytes);
     Ok(frame)
+}
+
+/// How a JavaScript (or Dart) client encodes its operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestEncoding {
+    MessagePack,
+    /// The JSON form of the operation; byte strings are arrays of numbers.
+    Json,
+}
+
+/// Runs the operation `request` encodes on `database` and answers with the JS frame of its
+/// result, `{ Ok: value }` or `{ Err: error }`, a request that does not decode included.
+///
+/// # Errors
+///
+/// Only when the frame itself cannot be written (past 4 GiB).
+pub fn execute_js(
+    database: &Database,
+    request: &[u8],
+    encoding: RequestEncoding,
+) -> io::Result<Vec<u8>> {
+    let operation = match encoding {
+        RequestEncoding::MessagePack => from_msgpack::<Operation>(request),
+        RequestEncoding::Json => serde_json::from_slice::<Operation>(request)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
+    };
+    let result = operation
+        .map_err(|e| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid operation: {e}"),
+                false,
+            )
+        })
+        .and_then(|operation| execute(database, operation));
+    to_js_frame(&result)
 }
 
 async fn read_payload(stream: &mut (impl AsyncRead + Unpin)) -> io::Result<Vec<u8>> {
