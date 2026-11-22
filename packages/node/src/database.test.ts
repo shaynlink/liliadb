@@ -19,7 +19,7 @@ import {
   type KvEntry,
 } from "./index.js";
 import { tryLoadNative, type Transport } from "./transport.js";
-import type { Operation, ResponseValue } from "./wire.js";
+import type { Operation, ResponseValue } from "@liliadb/client";
 
 const native = tryLoadNative();
 const daemonBinary =
@@ -40,9 +40,6 @@ function over(transport: Transport): Database {
 function fake(answer: (operation: Operation) => ResponseValue | Promise<ResponseValue>, onClose: () => void = () => {}): Transport {
   return {
     execute: async (operation) => answer(operation),
-    executeSync: () => {
-      throw new Error("not synchronous");
-    },
     close: async () => onClose(),
   };
 }

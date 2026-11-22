@@ -261,6 +261,7 @@ pub enum BatchOperation {
     CrdtJsonMerge {
         space: String,
         id: String,
+        /// The JSON of the merged `LwwJsonDocument`.
         #[serde(with = "serde_bytes")]
         state: Vec<u8>,
     },

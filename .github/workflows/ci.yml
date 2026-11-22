@@ -58,8 +58,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm nx show projects
-      - run: pnpm --filter @liliadb/node lint
-      - run: pnpm --filter @liliadb/node build
+      - run: pnpm --filter "@liliadb/node..." build
+      - run: pnpm --filter "@liliadb/node..." lint
+      - run: pnpm --filter @liliadb/client test
       - uses: dtolnay/rust-toolchain@1.100.0
       - name: Five-surface Node version conformance
         run: pnpm nx run lilia-conformance:test

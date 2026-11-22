@@ -4,7 +4,7 @@ import { command } from './process.mjs';
 
 for (const [binary, args] of [
   ['cargo', ['build', '--workspace']],
-  [process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['--filter', '@liliadb/node', 'build']],
+  [process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['--filter', '@liliadb/node...', 'build']],
 ]) {
   const result = command(binary, args, { stdio: 'inherit', timeout: 0, shell: process.platform === 'win32' && binary === 'pnpm.cmd' });
   if (result.status !== 0) process.exit(result.status ?? 1);

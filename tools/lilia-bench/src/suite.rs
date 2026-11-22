@@ -282,7 +282,7 @@ fn sdk(repo: &Path, profile: &str, lines: &mut Vec<Line>) {
     let entry = repo.join("tools/benchmarks/sdk_suite.mjs");
     let built = repo.join("packages/node/dist/index.js");
     if !built.exists() {
-        lines.push(failure("sdk", "*", "sdk", "packages/node is not built: run `pnpm --filter @liliadb/node build` first"));
+        lines.push(failure("sdk", "*", "sdk", "packages/node is not built: run `pnpm --filter \"@liliadb/node...\" build` first"));
         return;
     }
     let mut cmd = Command::new("node");

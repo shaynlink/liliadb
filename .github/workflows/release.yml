@@ -75,7 +75,7 @@ jobs:
         run: |
           cargo build -p lilia-node-native -p lilia-daemon --release
           pnpm install --frozen-lockfile
-          pnpm --filter @liliadb/node build
+          pnpm --filter "@liliadb/node..." build
           mkdir -p packages/node-linux-x64-gnu
           cp target/release/liblilia_node_native.so packages/node-linux-x64-gnu/lilia_node_native.node
       - name: Verify Node.js
@@ -221,5 +221,5 @@ jobs:
               tar -xzf $tgz -C "$pkg" --strip-components=1 package/lilia_node_native.node 2>/dev/null || true
             fi
           done
-          pnpm --filter @liliadb/node build
+          pnpm --filter "@liliadb/node..." build
           pnpm --filter @liliadb/node publish --no-git-checks --access public --tag latest --provenance || true

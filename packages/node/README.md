@@ -605,7 +605,7 @@ Supported models:
 | `crdt_or_set_remove` | `space`, `id`, `element`, `timestampMs?` |
 | `crdt_json_set_field` | `space`, `id`, `actorId`, `path`, `value`, `timestampMs?` |
 | `crdt_json_delete_field` | `space`, `id`, `actorId`, `path`, `timestampMs?` |
-| `crdt_json_merge` | `space`, `id`, `state` |
+| `crdt_json_merge` | `space`, `id`, `state` (as `crdt.json.state` returns it) |
 
 If any operation fails, the whole batch rolls back and the call rejects.
 

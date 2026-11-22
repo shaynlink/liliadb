@@ -9,7 +9,8 @@ import { precision } from './versions.mjs';
 
 const rust = command('cargo', ['test', '-p', 'lilia-storage-sqlite', '--test', 'conformance'], { stdio: 'inherit', timeout: 0 });
 assert.equal(rust.status, 0, 'Rust embedded conformance');
-const codec = command(process.execPath, ['--test', 'packages/node/dist/version.test.js'], { stdio: 'inherit' });
+const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+const codec = command(pnpm, ['--filter', '@liliadb/client', 'test'], { stdio: 'inherit', shell: process.platform === 'win32' });
 assert.equal(codec.status, 0, 'SDK version codec validation');
 const fixtures = JSON.parse(await readFile(new URL('./fixtures.json', import.meta.url), 'utf8'));
 assert(fixtures.length > 0);

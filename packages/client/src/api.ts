@@ -347,7 +347,7 @@ export function buildApi<M extends Mode>(run: Runner<M>) {
           options.signal
         ),
       get: (collection: string, id: string, options: Signal = {}) =>
-        call({ type: "vector_get", collection, id }, "vector", (stored) => (stored ? new Uint8Array(stored.data) : null), options.signal),
+        call({ type: "vector_get", collection, id }, "vector", (stored) => stored?.data ?? null, options.signal),
       delete: (collection: string, id: string, options: Signal = {}) => write({ model: "vector_delete", collection, id }, options.signal),
       search: (collection: string, query: VectorInput, options: VectorSearchOptions = {}) => {
         const vector = queryVector(query, options.elementType, options.dim);

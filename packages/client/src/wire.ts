@@ -1,7 +1,7 @@
-// The operations of the LiliaDB protocol and their results, as the native module and the
-// daemon exchange them with JavaScript: operations in MessagePack, results in JS frames (one
-// JSON text for V8's native `JSON.parse`, then the raw bytes it refers to). Field names are
-// those of the Rust types (snake case); `mappers.ts` turns them into the public types.
+// The operations of the LiliaDB protocol and their results, as the engine exchanges them with
+// JavaScript: operations in MessagePack, results in JS frames (one JSON text for the runtime's
+// native `JSON.parse`, then the raw bytes it refers to). Field names are those of the Rust types
+// (snake case); `mappers.ts` turns them into the public types.
 
 import { Packr } from "msgpackr";
 import { LiliaError, type JsonValue } from "./types.js";
@@ -403,27 +403,37 @@ function integers(value: unknown): unknown {
   return copy;
 }
 
-/** The MessagePack of an operation (or a request); absent fields are left out. The buffer is
- * valid until the next call: callers hand it over (or copy it) at once. */
-export function encodeWire(value: unknown): Buffer {
+/** The MessagePack of an operation (or a request); absent fields are left out. The bytes are
+ * valid until the next call: callers hand them over (or copy them) at once. */
+export function encodeWire(value: unknown): Uint8Array {
   return packr.pack(integers(value));
 }
 
+/** The little-endian `u32` at `at` in `bytes`. */
+function u32(bytes: Uint8Array, at: number): number {
+  return (bytes[at]! | (bytes[at + 1]! << 8) | (bytes[at + 2]! << 16)) + bytes[at + 3]! * 0x100_0000;
+}
+
+/** The length of the JSON text a JS frame starts with (after its own 4 bytes). */
+export function frameJsonLength(frame: Uint8Array): number {
+  return u32(frame, 0);
+}
+
 /**
- * The value of the JS frame in `frame` (from its start): `[u32 JSON length][JSON][u32 segment
- * count][(u32 offset, u32 length) per segment][segment bytes]`, all little-endian. Each byte
- * string of the value is the number of its segment until `bytesOf` replaces it.
+ * The value of a JS frame, `[u32 JSON length][JSON][u32 segment count][(u32 offset, u32
+ * length) per segment][segment bytes]` (little-endian), from its JSON text `json` and the bytes
+ * after it, `tail` (from the segment count on): each runtime decodes the text its fastest way.
+ * Each byte string of the value is the number of its segment until `bytesOf` replaces it.
  */
-export function readFrame<T>(frame: Buffer): { value: T; segment: (index: number) => Uint8Array } {
-  const json = frame.readUInt32LE(0);
-  const value = JSON.parse(frame.toString("utf8", 4, 4 + json)) as T;
-  const table = 8 + json;
-  const bytes = table + frame.readUInt32LE(4 + json) * 8;
+export function readFrame<T>(json: string, tail: Uint8Array): { value: T; segment: (index: number) => Uint8Array } {
+  const value = JSON.parse(json) as T;
+  const bytes = 4 + u32(tail, 0) * 8;
   const segment = (index: number): Uint8Array => {
-    const at = table + index * 8;
-    const start = bytes + frame.readUInt32LE(at);
-    // A copy: the frame may be a buffer the next call writes over.
-    return new Uint8Array(frame.subarray(start, start + frame.readUInt32LE(at + 4)));
+    const at = 4 + index * 8;
+    const start = bytes + u32(tail, at);
+    // A copy (`slice` of a Node buffer would be a view): the frame may be a buffer the next
+    // call writes over.
+    return new Uint8Array(tail.subarray(start, start + u32(tail, at + 4)));
   };
   return { value, segment };
 }

@@ -40,6 +40,6 @@
     "typescript": "6.0.2"
   },
   "dependencies": {
-    "msgpackr": "2.1.4"
+    "@liliadb/client": "workspace:*"
   }
 }

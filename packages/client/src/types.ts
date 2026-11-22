@@ -1,12 +1,9 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-export type DatabaseMode = "embedded" | "daemon";
 export type Durability = "durable" | "balanced" | "performance";
 export type ResourceProfile = "server" | "mobile" | "constrained";
 
-export interface OpenOptions {
-  /** Directory of the database (embedded); created if missing. */
-  path: string;
-  mode?: DatabaseMode;
+/** How the engine runs a database it opens; every field has a default. */
+export interface EngineOptions {
   durability?: Durability;
   profile?: ResourceProfile;
   /** Keep a tamper-evident ledger of every record write; a database that keeps one must always be opened with it. */
@@ -15,11 +12,6 @@ export interface OpenOptions {
   historyRetentionMs?: number;
   /** Commits `undo` can undo; none by default. Needs a history retention. */
   undoDepth?: number;
-  /** Socket (or named pipe) of the daemon; `<path>.sock` by default. */
-  endpoint?: string;
-  /** File holding the daemon's token; `<path>.token` by default. */
-  tokenFile?: string;
-  signal?: AbortSignal;
 }
 
 export interface KvEntry {
@@ -403,7 +395,7 @@ export type BatchOperation =
   | { model: "crdt_or_set_remove"; space: string; id: string; element: string; timestampMs?: number }
   | { model: "crdt_json_set_field"; space: string; id: string; actorId: string; path: string; value: JsonValue; timestampMs?: number }
   | { model: "crdt_json_delete_field"; space: string; id: string; actorId: string; path: string; timestampMs?: number }
-  | { model: "crdt_json_merge"; space: string; id: string; state: Uint8Array | LwwJsonDocumentState };
+  | { model: "crdt_json_merge"; space: string; id: string; state: LwwJsonDocumentState };
 
 /** One version of a document; `document` is absent where it was deleted. */
 export interface JsonRevision<T = JsonValue> {
@@ -487,9 +479,6 @@ export class LiliaError extends Error {
     this.retryable = shape.retryable ?? false;
     this.details = shape.details;
     this.requestId = shape.request_id;
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, LiliaError);
-    }
   }
 
   static isLiliaError(value: unknown): value is LiliaError {

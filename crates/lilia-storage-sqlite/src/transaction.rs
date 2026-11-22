@@ -755,8 +755,7 @@ fn apply_in_schema(
         BatchOperation::CrdtJsonMerge { space, id, state } => {
             validate_name("space", space)?;
             validate_name("id", id)?;
-            let raw = lilia_core::compression::decompress_bytes(state)?;
-            let remote_doc: lilia_core::crdt::LwwJsonDocument = serde_json::from_slice(&raw)
+            let remote_doc: lilia_core::crdt::LwwJsonDocument = serde_json::from_slice(state)
                 .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;
             let (mut doc, cur_ver) = load_crdt_doc(tx, space, id)?;
             lilia_core::crdt::CvRdt::merge(&mut doc, &remote_doc);

@@ -6,8 +6,7 @@ use crate::storage::{now_ms, validate_name};
 use crate::Database;
 use lilia_core::crdt::{LwwJsonDocument, OrSet, PNCounter};
 use lilia_core::{
-    compress_bytes, decompress_bytes, BatchOperation, CollectionKind, ErrorCode, LiliaError,
-    Result, StorageTier,
+    decompress_bytes, BatchOperation, CollectionKind, ErrorCode, LiliaError, Result, StorageTier,
 };
 
 /// Fluent interface for interacting with native CRDT data structures in storage.
@@ -600,9 +599,8 @@ impl DocStore<'_> {
     /// Returns `Storage` errors detected here, and propagates errors from the
     /// operations it performs.
     pub fn merge(&self, remote: &LwwJsonDocument) -> Result<u64> {
-        let raw = serde_json::to_vec(remote)
+        let state = serde_json::to_vec(remote)
             .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;
-        let state = compress_bytes(&raw);
         let results = self.db.batch(&[BatchOperation::CrdtJsonMerge {
             space: self.space.clone(),
             id: self.id.clone(),

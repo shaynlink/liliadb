@@ -36,7 +36,7 @@ jobs:
         run: |
           cargo build -p lilia-node-native -p lilia-daemon --release
           pnpm install --frozen-lockfile
-          pnpm --filter @liliadb/node build
+          pnpm --filter "@liliadb/node..." build
           mkdir -p packages/node-linux-x64-gnu
           cp target/release/liblilia_node_native.so packages/node-linux-x64-gnu/lilia_node_native.node
       - name: Verify Node.js
@@ -46,7 +46,7 @@ jobs:
           bun test packages/node/dist/database.test.js
           bun test packages/node/tests/compat-bun.test.ts
       - name: Verify Deno
-        run: deno test --allow-all packages/node/tests/compat-deno.test.ts
+        run: deno test --allow-all --no-check --node-modules-dir=auto packages/node/tests/compat-deno.test.ts
 
   publish:
     needs: compat-verify
@@ -61,7 +61,7 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @liliadb/node build
+      - run: pnpm --filter "@liliadb/node..." build
       - name: Publish Platform Prebuilds
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -72,6 +72,10 @@ jobs:
               pnpm --dir "$pkg" publish --no-git-checks --access public --tag "${{ inputs.tag }}" --provenance || true
             fi
           done
+      - name: Publish @liliadb/client
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm --filter @liliadb/client publish --no-git-checks --access public --tag "${{ inputs.tag }}" --provenance
       - name: Publish @liliadb/node
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

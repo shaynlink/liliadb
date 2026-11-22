@@ -1,6 +1,5 @@
 // Conversions between the public types of the package and the wire types of the protocol.
 
-import { deflateRawSync } from "node:zlib";
 import { vectorToBytes } from "./math.js";
 import type {
   BatchOperation,
@@ -135,10 +134,11 @@ export function toWireLwwDocument(state: LwwJsonDocumentState): WireLwwDocument 
   };
 }
 
-/** A merged CRDT document state as a batch carries it: deflated JSON. */
-function lwwStateBytes(state: Uint8Array | LwwJsonDocumentState): Uint8Array {
-  if (state instanceof Uint8Array) return state;
-  return new Uint8Array(deflateRawSync(Buffer.from(JSON.stringify(toWireLwwDocument(state)), "utf8")));
+const encoder = new TextEncoder();
+
+/** A merged CRDT document state as a batch carries it: its JSON. */
+function lwwStateBytes(state: LwwJsonDocumentState): Uint8Array {
+  return encoder.encode(JSON.stringify(toWireLwwDocument(state)));
 }
 
 export function toWireBatchOperation(operation: BatchOperation): WireBatchOperation {
@@ -229,12 +229,11 @@ export function toWireBatchOperation(operation: BatchOperation): WireBatchOperat
   }
 }
 
-/** An entry owning its bytes, rather than views into the response they were decoded from. */
 export function mapKvEntry(entry: WireKvEntry): KvEntry {
   return {
     namespace: entry.namespace,
-    key: new Uint8Array(entry.key),
-    value: new Uint8Array(entry.value),
+    key: entry.key,
+    value: entry.value,
     version: readVersion(entry.version),
     ...(entry.expires_at_ms == null ? {} : { expiresAtMs: num(entry.expires_at_ms) }),
   };

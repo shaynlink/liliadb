@@ -17,6 +17,10 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
   MessagePack, synchronous calls reuse one output buffer, and asynchronous calls run on the
   libuv thread pool.
 - `db.sync` has every call of the asynchronous API, not only KV, JSON, batches and SQL.
+- The calls, the wire format and the database lifecycle live in `@liliadb/client`, shared with
+  `@liliadb/react-native`; this package adds the native and daemon transports and Node's
+  streams, and re-exports the client.
+- A batch `crdt_json_merge` takes the state object `crdt.json.state` returns, not bytes.
 - SQL is DataFusion and read-only: parameters are `$1`, `$2`...; JSON is read with
   `value->>'field'` and `json_get_*`. Every JSON space is also a table.
 - `json.find` terms are field paths or index names; an index serves the query when one

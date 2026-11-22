@@ -1,24 +1,28 @@
 // How operations reach a database: in process through the native module, or over the local
 // socket of a daemon. Both take operations in MessagePack and answer in JS frames (see
-// `wire.ts`).
+// `@liliadb/client`).
 
 import { createRequire } from "node:module";
 import { copyFileSync, existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import { resolve } from "node:path";
-import { LiliaError } from "./types.js";
 import {
+  LiliaError,
+  abortable,
   bytesOf,
   encodeWire,
   expect,
+  getUuid,
   readFrame,
   unwrap,
   type Operation,
   type ResponseValue,
+  type Transport,
   type WireResult,
-} from "./wire.js";
-import { getUuid } from "./version.js";
+} from "@liliadb/client";
+
+export type { Transport } from "@liliadb/client";
 
 /** The protocol version this package speaks. */
 export const PROTOCOL_MAJOR = 2;
@@ -29,33 +33,16 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 /** Initial size of the buffer synchronous calls write their results into; it grows to fit. */
 const SYNC_BUFFER_BYTES = 64 * 1024;
 
+/** The value of the JS frame `frame` (from its start), its JSON decoded by Node. */
+function nodeFrame<T>(frame: Buffer): { value: T; segment: (index: number) => Uint8Array } {
+  const json = frame.readUInt32LE(0);
+  return readFrame<T>(frame.toString("utf8", 4, 4 + json), frame.subarray(4 + json));
+}
+
 /** The result a JS frame holds, its byte strings in place. */
 function frameResult(frame: Buffer): WireResult {
-  const { value, segment } = readFrame<WireResult>(frame);
+  const { value, segment } = nodeFrame<WireResult>(frame);
   return bytesOf(value, segment);
-}
-
-export interface Transport {
-  /** Runs `operation`; an aborted `signal` stops the wait, not the operation. */
-  execute(operation: Operation, signal?: AbortSignal): Promise<ResponseValue>;
-  /** Runs `operation` on the caller's thread, where the transport can. */
-  executeSync(operation: Operation): ResponseValue;
-  /** Releases the database, waiting at most `timeoutMs` for running operations. */
-  close(timeoutMs: number): Promise<void>;
-}
-
-/** Waits for `promise` until `signal` aborts. */
-async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  signal.throwIfAborted();
-  const { promise: aborted, reject } = Promise.withResolvers<never>();
-  const onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
 }
 
 /** A native error whose message is the JSON of a protocol error, as a `LiliaError`. */
@@ -90,10 +77,6 @@ export interface NativeOpenOptions {
 
 export interface NativeModule {
   open(options: NativeOpenOptions): Promise<NativeDatabaseHandle>;
-  tsDownsamplePoints(pointsJson: string, targetBucketMs: number, aggregation?: string): string;
-  geoHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number;
-  geoCircleToGeopoly(centerLon: number, centerLat: number, radiusMeters: number, nVertices?: number): string;
-  geoCoordsToGeopoly(coordsJson: string): string;
 }
 
 const require = createRequire(import.meta.url);
@@ -172,10 +155,10 @@ export class NativeTransport implements Transport {
     }
   }
 
-  async execute(operation: Operation, signal?: AbortSignal): Promise<ResponseValue> {
+  async execute(operation: Operation): Promise<ResponseValue> {
     let frame: Buffer;
     try {
-      frame = await abortable(this.handle.execute(encodeWire(operation)), signal);
+      frame = await this.handle.execute(encodeWire(operation));
     } catch (error) {
       throw nativeError(error);
     }
@@ -228,7 +211,7 @@ export class DaemonTransport implements Transport {
     const transport = new DaemonTransport(endpoint, token);
     try {
       const handshake = expect(
-        await transport.execute({ type: "handshake", major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR }, signal),
+        await abortable(transport.execute({ type: "handshake", major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR }), signal),
         "handshake"
       );
       if (handshake.major !== PROTOCOL_MAJOR) {
@@ -245,11 +228,11 @@ export class DaemonTransport implements Transport {
     return transport;
   }
 
-  async execute(operation: Operation, signal?: AbortSignal): Promise<ResponseValue> {
+  async execute(operation: Operation): Promise<ResponseValue> {
     if (this.closed) {
       throw new LiliaError({ code: "CLOSED", message: "the daemon connection is closed", retryable: false });
     }
-    const socket = await abortable(this.connection(), signal);
+    const socket = await this.connection();
     const id = getUuid();
     const payload = encodeWire({ id, token: this.token, operation });
     if (payload.length > MAX_FRAME_BYTES) {
@@ -261,18 +244,10 @@ export class DaemonTransport implements Transport {
     this.pending.set(id, response);
     socket.write(Buffer.concat([header, payload]));
     try {
-      return unwrap(await abortable(response.promise, signal));
+      return unwrap(await response.promise);
     } finally {
       this.pending.delete(id);
     }
-  }
-
-  executeSync(): ResponseValue {
-    throw new LiliaError({
-      code: "UNSUPPORTED",
-      message: "synchronous operations need an embedded database",
-      retryable: false,
-    });
   }
 
   async close(): Promise<void> {
@@ -322,7 +297,7 @@ export class DaemonTransport implements Transport {
         return;
       }
       if (this.buffer.length < 4 + length) return;
-      const { value: response, segment } = readFrame<WireResponse>(this.buffer.subarray(4, 4 + length));
+      const { value: response, segment } = nodeFrame<WireResponse>(this.buffer.subarray(4, 4 + length));
       this.buffer = this.buffer.subarray(4 + length);
       this.pending.get(response.id)?.resolve(bytesOf(response.result, segment));
     }

@@ -1,0 +1,14 @@
+{
+  "name": "liliadb-client",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/client/src",
+  "implicitDependencies": ["lilia-protocol"],
+  "targets": {
+    "build": { "executor": "nx:run-script", "options": { "script": "build" } },
+    "test": { "executor": "nx:run-script", "options": { "script": "test" } },
+    "lint": { "executor": "nx:run-script", "options": { "script": "lint" } },
+    "package": { "executor": "nx:run-script", "options": { "script": "package" } }
+  },
+  "tags": ["scope:bindings", "type:library", "lang:typescript"]
+}

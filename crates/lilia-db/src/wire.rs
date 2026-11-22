@@ -249,8 +249,6 @@ fn write(operation: &BatchOperation, now: i64) -> Result<Write> {
             timestamp_ms: timestamp_ms.unwrap_or(now),
         }),
         BatchOperation::CrdtJsonMerge { space, id, state } => {
-            let state = lilia_core::decompress_bytes(&state)
-                .map_err(|e| Error::InvalidArgument(format!("merged CRDT state: {e}")))?;
             let state: LwwJsonDocument = serde_json::from_slice(&state)
                 .map_err(|e| Error::InvalidArgument(format!("merged CRDT state: {e}")))?;
             Write::Crdt(CrdtWrite::DocMerge { space, id, state })

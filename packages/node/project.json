@@ -3,7 +3,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "sourceRoot": "packages/node/src",
-  "implicitDependencies": ["lilia-node-native", "lilia-protocol"],
+  "implicitDependencies": ["lilia-node-native", "lilia-protocol", "liliadb-client"],
   "targets": {
     "build": { "executor": "nx:run-script", "options": { "script": "build" } },
     "test": { "executor": "nx:run-script", "options": { "script": "test" } },

@@ -1477,8 +1477,7 @@ impl MemEngine {
                 Ok(mem_result(Some(ver), false))
             }
             BatchOperation::CrdtJsonMerge { space, id, state } => {
-                let raw = lilia_core::compression::decompress_bytes(state)?;
-                let remote: LwwJsonDocument = serde_json::from_slice(&raw)
+                let remote: LwwJsonDocument = serde_json::from_slice(state)
                     .map_err(|e| LiliaError::new(ErrorCode::Storage, e.to_string(), false))?;
                 let ver = self.crdt_json_merge(space, id, &remote);
                 Ok(mem_result(Some(ver), false))
