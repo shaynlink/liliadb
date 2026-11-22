@@ -1,5 +1,6 @@
 // How operations reach a database: in process through the native module, or over the local
-// socket of a daemon. Both carry the same MessagePack payloads (see `wire.ts`).
+// socket of a daemon. Both take operations in MessagePack and answer in JS frames (see
+// `wire.ts`).
 
 import { createRequire } from "node:module";
 import { copyFileSync, existsSync, statSync } from "node:fs";
@@ -8,9 +9,10 @@ import { connect, type Socket } from "node:net";
 import { resolve } from "node:path";
 import { LiliaError } from "./types.js";
 import {
-  decodeWire,
+  bytesOf,
   encodeWire,
   expect,
+  readFrame,
   unwrap,
   type Operation,
   type ResponseValue,
@@ -21,9 +23,17 @@ import { getUuid } from "./version.js";
 /** The protocol version this package speaks. */
 export const PROTOCOL_MAJOR = 2;
 export const PROTOCOL_MINOR = 0;
-/** The preface of a MessagePack connection to the daemon. */
-const MESSAGE_PACK_PREFACE = Buffer.from("LMP1", "ascii");
+/** The preface of a JavaScript client's connection to the daemon. */
+const JS_PREFACE = Buffer.from("LJS1", "ascii");
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+/** Initial size of the buffer synchronous calls write their results into; it grows to fit. */
+const SYNC_BUFFER_BYTES = 64 * 1024;
+
+/** The result a JS frame holds, its byte strings in place. */
+function frameResult(frame: Buffer): WireResult {
+  const { value, segment } = readFrame<WireResult>(frame);
+  return bytesOf(value, segment);
+}
 
 export interface Transport {
   /** Runs `operation`; an aborted `signal` stops the wait, not the operation. */
@@ -63,8 +73,9 @@ function nativeError(error: unknown): unknown {
 }
 
 interface NativeDatabaseHandle {
-  execute(payload: Buffer): Promise<Buffer>;
-  executeSync(payload: Buffer): Buffer;
+  execute(request: Uint8Array): Promise<Buffer>;
+  /** Writes the frame into `out` and returns its length, or returns it in a new buffer. */
+  executeSync(request: Uint8Array, out: Buffer): number | Buffer;
   close(timeoutMs?: number): Promise<void>;
 }
 
@@ -78,7 +89,7 @@ export interface NativeOpenOptions {
 }
 
 export interface NativeModule {
-  NativeDatabase: { open(options: NativeOpenOptions): Promise<NativeDatabaseHandle> };
+  open(options: NativeOpenOptions): Promise<NativeDatabaseHandle>;
   tsDownsamplePoints(pointsJson: string, targetBucketMs: number, aggregation?: string): string;
   geoHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number;
   geoCircleToGeopoly(centerLon: number, centerLat: number, radiusMeters: number, nVertices?: number): string;
@@ -147,35 +158,40 @@ export function tryLoadNative(): NativeModule | undefined {
 
 /** A database opened in this process by the native module. */
 export class NativeTransport implements Transport {
+  /** Where synchronous calls write their results, reused from call to call. */
+  private out = Buffer.allocUnsafe(SYNC_BUFFER_BYTES);
+
   private constructor(private readonly handle: NativeDatabaseHandle) {}
 
   static async open(options: NativeOpenOptions, signal?: AbortSignal): Promise<NativeTransport> {
     signal?.throwIfAborted();
     try {
-      return new NativeTransport(await abortable(loadNative().NativeDatabase.open(options), signal));
+      return new NativeTransport(await abortable(loadNative().open(options), signal));
     } catch (error) {
       throw nativeError(error);
     }
   }
 
   async execute(operation: Operation, signal?: AbortSignal): Promise<ResponseValue> {
-    let payload: Buffer;
+    let frame: Buffer;
     try {
-      payload = await abortable(this.handle.execute(Buffer.from(encodeWire(operation))), signal);
+      frame = await abortable(this.handle.execute(encodeWire(operation)), signal);
     } catch (error) {
       throw nativeError(error);
     }
-    return unwrap(decodeWire<WireResult>(payload));
+    return unwrap(frameResult(frame));
   }
 
   executeSync(operation: Operation): ResponseValue {
-    let payload: Buffer;
+    let written: number | Buffer;
     try {
-      payload = this.handle.executeSync(Buffer.from(encodeWire(operation)));
+      written = this.handle.executeSync(encodeWire(operation), this.out);
     } catch (error) {
       throw nativeError(error);
     }
-    return unwrap(decodeWire<WireResult>(payload));
+    if (typeof written === "number") return unwrap(frameResult(this.out));
+    this.out = Buffer.allocUnsafe(written.length * 2);
+    return unwrap(frameResult(written));
   }
 
   async close(timeoutMs: number): Promise<void> {
@@ -235,7 +251,7 @@ export class DaemonTransport implements Transport {
     }
     const socket = await abortable(this.connection(), signal);
     const id = getUuid();
-    const payload = Buffer.from(encodeWire({ id, token: this.token, operation }));
+    const payload = encodeWire({ id, token: this.token, operation });
     if (payload.length > MAX_FRAME_BYTES) {
       throw new LiliaError({ code: "INVALID_INPUT", message: "the request exceeds the frame limit", retryable: false });
     }
@@ -285,7 +301,7 @@ export class DaemonTransport implements Transport {
           message: "the daemon closed the connection",
           retryable: true,
         })));
-        socket.write(MESSAGE_PACK_PREFACE);
+        socket.write(JS_PREFACE);
         this.socket = socket;
         this.buffer = Buffer.alloc(0);
         resolve(socket);
@@ -306,9 +322,9 @@ export class DaemonTransport implements Transport {
         return;
       }
       if (this.buffer.length < 4 + length) return;
-      const response = decodeWire<WireResponse>(this.buffer.subarray(4, 4 + length));
+      const { value: response, segment } = readFrame<WireResponse>(this.buffer.subarray(4, 4 + length));
       this.buffer = this.buffer.subarray(4 + length);
-      this.pending.get(response.id)?.resolve(response.result);
+      this.pending.get(response.id)?.resolve(bytesOf(response.result, segment));
     }
   }
 

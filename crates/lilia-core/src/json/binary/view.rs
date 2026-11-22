@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Serialize, Serializer};
+
 use super::{exact_int, int_as_real, parse_path_segments, read_value};
 
 /// A zero-copy borrowed reference to a value inside a `BinaryDoc`.
@@ -274,5 +277,73 @@ impl<'a> BinaryObjectRef<'a> {
             let val = read_value(self.data, val_off)?;
             Some((k_str, val))
         })
+    }
+}
+
+/// Serializes the value as its JSON form ([`BinaryValueRef::to_json_value`]) without building
+/// it: the view is walked into the serializer. Non-finite floats are `null`, bytes are
+/// `{"$bytes": "<hex>"}`, and object keys come in their stored (sorted) order.
+impl Serialize for BinaryValueRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match *self {
+            Self::Float64(n) if n.is_finite() => serializer.serialize_f64(n),
+            Self::Null | Self::Float64(_) => serializer.serialize_unit(),
+            Self::Bool(b) => serializer.serialize_bool(b),
+            Self::Int64(n) => serializer.serialize_i64(n),
+            Self::String(s) => serializer.serialize_str(s),
+            Self::Bytes(b) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("$bytes", &hex::encode(b))?;
+                map.end()
+            }
+            Self::Array(array) => array.serialize(serializer),
+            Self::Object(object) => object.serialize(serializer),
+        }
+    }
+}
+
+impl Serialize for BinaryArrayRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.count))?;
+        for item in self.iter() {
+            seq.serialize_element(&item)?;
+        }
+        seq.end()
+    }
+}
+
+impl Serialize for BinaryObjectRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.len()))?;
+        for (key, value) in self.iter() {
+            map.serialize_entry(key, &value)?;
+        }
+        map.end()
+    }
+}
+
+#[cfg(test)]
+mod serialize_tests {
+    use serde_json::json;
+
+    use crate::json::binary::BinaryDoc;
+
+    #[test]
+    fn streamed_serialization_equals_the_value_form() {
+        let value = json!({
+            "z": [1, -2, 3.5, null, true, "é\"\n"],
+            "a": {"nested": {"deep": [[], {}], "n": 9_007_199_254_740_993_i64}},
+            "m": "text",
+            "f": 1.0e-7,
+            "empty": {}
+        });
+        let doc = BinaryDoc::from_json_value(&value).unwrap();
+        let streamed = serde_json::to_string(&doc).unwrap();
+        let through_value = serde_json::to_string(&doc.to_json_value()).unwrap();
+        assert_eq!(streamed, through_value);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&streamed).unwrap(),
+            value
+        );
     }
 }

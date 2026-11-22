@@ -151,12 +151,13 @@ impl BinaryDoc {
     }
 }
 
+/// The document's JSON form, written straight from the binary view.
 impl Serialize for BinaryDoc {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        self.to_json_value().serialize(serializer)
+        self.root().serialize(serializer)
     }
 }
 

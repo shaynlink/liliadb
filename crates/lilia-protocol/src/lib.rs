@@ -1,7 +1,8 @@
 //! The protocol of the `LiliaDB` daemon and of the bindings that share its operations: a
 //! [`Request`] carries one [`Operation`], a [`Response`] its [`ResponseValue`] or the error.
 //! A connection opens with the preface of its [`Codec`]; its frames are size-prefixed `rkyv`
-//! archives ([`read_frame`], [`write_frame`]) or `MessagePack` maps. [`execute`]
+//! archives ([`read_frame`], [`write_frame`]), or for JavaScript clients `MessagePack` requests
+//! and responses in JS frames ([`to_js_frame`]). [`execute`]
 //! runs an operation on a database, so every binding gives an operation the same meaning;
 //! [`open`] and [`close`] open a database from the options the bindings take and close it.
 
@@ -17,7 +18,7 @@ use lilia_core::LiliaError;
 use serde::{Deserialize, Serialize};
 pub use serde_bytes::ByteBuf;
 
-pub use codec::{from_msgpack, to_msgpack, Codec};
+pub use codec::{from_msgpack, to_js_frame, to_msgpack, Codec};
 pub use execute::{execute, GEO_COLLECTION};
 pub use frame::{
     read_archived_frame, read_archived_frame_unchecked, read_frame, write_archived_frame,

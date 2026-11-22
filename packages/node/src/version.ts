@@ -1,4 +1,4 @@
-import { LiliaError, type JsonValue } from "./types.js";
+import { LiliaError } from "./types.js";
 
 const MAX_U64 = (1n << 64n) - 1n;
 
@@ -30,15 +30,4 @@ export function readVersion(value: unknown): bigint {
   const version = BigInt(value as string | number | bigint);
   if (version < 0n || version > MAX_U64) throw new Error("wire version exceeds u64");
   return version;
-}
-
-// MessagePack integer decoding uses bigint for 64-bit integers. JSON document
-// numbers still follow the SDK JsonValue contract (IEEE-754 number), unlike versions.
-export function jsonNumbers(value: unknown): JsonValue {
-  if (typeof value === "bigint") return Number(value);
-  if (Array.isArray(value)) return value.map(jsonNumbers);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, jsonNumbers(item)]));
-  }
-  return value as JsonValue;
 }

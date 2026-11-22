@@ -15,7 +15,6 @@ lilia-protocol = { path = "../lilia-protocol" }
 napi.workspace = true
 napi-derive.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
 
 [build-dependencies]
 napi-build = "2.2.3"

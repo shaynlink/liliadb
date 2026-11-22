@@ -222,7 +222,7 @@ test("embedded conformance", { skip: !native }, async () => {
   await withDirectory("lilia-node-", (directory) => conformance("embedded", join(directory, "embedded")));
 });
 
-test("daemon conformance over MessagePack", { skip: !daemonBinary }, async () => {
+test("daemon conformance over the JS codec", { skip: !daemonBinary }, async () => {
   await withDirectory("lilia-daemon-", async (directory) => {
     const path = join(directory, "db");
     const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\liliadb-test-${process.pid}` : join(directory, "d.sock");

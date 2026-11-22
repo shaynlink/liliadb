@@ -69,8 +69,7 @@ async fn connect(
     (client, handler)
 }
 
-async fn exchange_in(
-    codec: Codec,
+async fn exchange(
     stream: &mut tokio::io::DuplexStream,
     token: &str,
     operation: Operation,
@@ -83,11 +82,12 @@ async fn exchange_in(
         deadline_ms,
         operation,
     };
-    codec.write_request(stream, &request).await.unwrap();
-    let response = tokio::time::timeout(Duration::from_secs(5), codec.read_response(stream))
-        .await
-        .unwrap()
-        .unwrap();
+    lilia_protocol::write_frame(stream, &request).await.unwrap();
+    let response: Response =
+        tokio::time::timeout(Duration::from_secs(5), lilia_protocol::read_frame(stream))
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(response.id, id);
     if let Err(error) = &response.result {
         assert_eq!(error.request_id.to_string(), id);
@@ -96,43 +96,62 @@ async fn exchange_in(
     response
 }
 
-async fn exchange(
+/// One request of a JS client: its JSON response and the segments it refers to.
+async fn exchange_js(
     stream: &mut tokio::io::DuplexStream,
     token: &str,
     operation: Operation,
-    deadline_ms: Option<u64>,
-) -> Response {
-    exchange_in(Codec::Rkyv, stream, token, operation, deadline_ms).await
+) -> (serde_json::Value, Vec<Vec<u8>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let request = lilia_protocol::to_msgpack(&Request {
+        id: Uuid::new_v4().to_string(),
+        token: token.into(),
+        deadline_ms: None,
+        operation,
+    })
+    .unwrap();
+    stream.write_u32(request.len() as u32).await.unwrap();
+    stream.write_all(&request).await.unwrap();
+    let length = stream.read_u32().await.unwrap() as usize;
+    let mut frame = vec![0; length];
+    stream.read_exact(&mut frame).await.unwrap();
+    let u32_at = |at: usize| u32::from_le_bytes(frame[at..at + 4].try_into().unwrap()) as usize;
+    let json = u32_at(0);
+    let value = serde_json::from_slice(&frame[4..4 + json]).unwrap();
+    let count = u32_at(4 + json);
+    let bytes = 8 + json + count * 8;
+    let segments = (0..count)
+        .map(|i| {
+            let (offset, len) = (u32_at(8 + json + i * 8), u32_at(12 + json + i * 8));
+            frame[bytes + offset..bytes + offset + len].to_vec()
+        })
+        .collect();
+    (value, segments)
 }
 
 #[tokio::test]
-async fn message_pack_clients_are_served_like_rkyv_clients() {
+async fn js_clients_are_served_like_rkyv_clients() {
     let (_directory, database) = database();
     let shutdown = Arc::new(Notify::new());
-    let (mut client, handler) = connect(Arc::clone(&database), shutdown, Codec::MessagePack).await;
-    let codec = Codec::MessagePack;
-    assert!(matches!(
-        exchange_in(codec, &mut client, TOKEN, mutation(), None)
-            .await
-            .result,
-        Ok(ResponseValue::Mutations(_))
-    ));
-    let response = exchange_in(
-        codec,
+    let (mut client, handler) = connect(Arc::clone(&database), shutdown, Codec::Js).await;
+    let (written, _) = exchange_js(&mut client, TOKEN, mutation()).await;
+    assert_eq!(written["result"]["Ok"]["type"], "mutations");
+    let (read, segments) = exchange_js(
         &mut client,
         TOKEN,
         Operation::KvGet {
             namespace: "test".into(),
             key: b"key".to_vec(),
         },
-        None,
     )
     .await;
-    assert!(
-        matches!(response.result, Ok(ResponseValue::Kv(Some(entry))) if entry.value == b"value")
-    );
-    let refused = exchange_in(codec, &mut client, "wrong", Operation::IntegrityCheck, None).await;
-    assert_eq!(refused.result.unwrap_err().code, ErrorCode::Unauthorized);
+    let entry = &read["result"]["Ok"]["value"];
+    let value = entry["value"].as_u64().unwrap() as usize;
+    assert_eq!(segments[value], b"value");
+    assert!(entry["version"].is_string(), "versions are decimal strings");
+    let (refused, _) = exchange_js(&mut client, "wrong", Operation::IntegrityCheck).await;
+    assert_eq!(refused["result"]["Err"]["code"], "UNAUTHORIZED");
     drop(client);
     handler.await.unwrap().unwrap();
 }

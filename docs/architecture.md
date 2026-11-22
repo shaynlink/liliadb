@@ -24,9 +24,9 @@ other expected versions implement optimistic concurrency. A missing expectation 
 Rust versions and conditional expectations are `u64`. Node requires `bigint` for
 `ifVersion` in `0..=18446744073709551615` and always returns version `bigint`s;
 numbers, negative values and values above u64 are rejected, not coerced or wrapped.
-Both daemon codecs (`rkyv` and MessagePack) keep native integer fields. The Node
-SDK decodes 64-bit integers as `bigint` and never routes versions through
-JavaScript `number`.
+The `rkyv` codec keeps native integer fields; the JS frames Node receives carry
+versions as decimal strings, which the SDK reads as `bigint`, so versions never go
+through JavaScript `number`.
 
 Human-readable serialization (native JSON and CLI JSON/JSONL) now emits
 canonical decimal strings for `version` and `if_version`, including small values.
@@ -48,10 +48,15 @@ requires a separate format migration; this transport fix does not perform one.
 
 - Embedded Rust calls `lilia-core` directly.
 - Embedded Node calls `lilia-node-native`; blocking SQLite work runs outside the JavaScript loop.
-- Daemon clients open a Unix socket or Windows named pipe with the preface of their codec, `LRK1`
-  (size-prefixed `rkyv` archives, Rust clients) or `LMP1` (size-prefixed MessagePack maps, the
-  `serde` form of the same types, the Node client). The daemon, its HTTP gateway and the Node
+- Daemon clients open a Unix socket or Windows named pipe with the preface of their codec: `LRK1`
+  (size-prefixed `rkyv` archives both ways, Rust clients) or `LJS1` (JavaScript clients:
+  MessagePack requests, responses in JS frames). The daemon, its HTTP gateway and the Node
   native module run every operation through `lilia_protocol::execute`.
+- A JS frame is one JSON text, written straight from the stored binary documents and parsed by
+  the client's native `JSON.parse`, followed by the raw bytes (keys, values, vectors) the JSON
+  refers to by segment number. Measured on a 400-byte document, V8 parses the JSON twice as fast
+  as a JavaScript MessagePack decoder, and writing it from the binary view (no intermediate
+  `serde_json::Value`) is 2.7 times faster than through a value tree.
 - CLI uses the embedded core and emits human, JSON, or JSONL output.
 
 The daemon handshake has protocol major/minor `1.0`, a 16 MiB frame limit, per-request UUIDs, a
@@ -908,8 +913,8 @@ Reader Process 1        Reader Process 2        C-ABI / FFI Consumers
 - Writers can push pre-archived buffers directly into SHM via `Engine::put_archived()`, skipping intermediate serialization.
 
 ### 4. Zero-Copy Protocol Framing (`lilia-protocol`)
-- Rust clients exchange `rkyv` archives; clients that cannot read archives (Node) announce the
-  MessagePack codec (`LMP1`) when they connect, and exchange the `serde` form of the same types.
+- Rust clients exchange `rkyv` archives; JavaScript clients, which cannot read archives, announce
+  the JS codec (`LJS1`): MessagePack requests, responses in JS frames (`to_js_frame`).
 - Sockets and IPC connections communicate through `write_archived_frame()` and `read_archived_frame()` operating over `RawFrame` envelopes.
 - Core types (CRDTs `LwwJson`/`LwwRegister`/`OrSet`/`PnCounter`, IBF, HLC timestamps, Geo, Timeseries, Graph, and Vector types) derive `Archive`, `Serialize`, and `Deserialize`, eliminating wire conversion costs.
 

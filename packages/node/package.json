@@ -28,7 +28,6 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "package": "pnpm pack --pack-destination ../../dist"
   },
-  "dependencies": { "@msgpack/msgpack": "3.1.2" },
   "optionalDependencies": {
     "@liliadb/node-darwin-arm64": "workspace:*",
     "@liliadb/node-darwin-x64": "workspace:*",
@@ -36,5 +35,11 @@
     "@liliadb/node-linux-x64-gnu": "workspace:*",
     "@liliadb/node-win32-x64-msvc": "workspace:*"
   },
-  "devDependencies": { "@types/node": "24.10.0", "typescript": "6.0.2" }
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "typescript": "6.0.2"
+  },
+  "dependencies": {
+    "msgpackr": "2.1.4"
+  }
 }

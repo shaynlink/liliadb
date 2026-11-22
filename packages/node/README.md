@@ -141,7 +141,8 @@ const db = await Database.open({
 ### Daemon Mode
 
 Connects to an isolated `lilia-daemon` process over local IPC: the connection opens with the
-MessagePack preface (`LMP1`), then exchanges length-prefixed MessagePack frames. Embedded and
+JS preface (`LJS1`), then sends MessagePack requests and receives JS frames (one JSON text for
+`JSON.parse`, then raw bytes), the same results the native addon returns. Embedded and
 daemon databases run the same operations; only the synchronous `db.sync` API needs an embedded
 database.
 

@@ -40,7 +40,7 @@ import type {
   VectorIndexInfo,
   WeightedPath,
 } from "./types.js";
-import { checkedExpiry, checkedVersion, jsonNumbers, readVersion } from "./version.js";
+import { checkedExpiry, checkedVersion, readVersion } from "./version.js";
 import type {
   ResponseOf,
   WireAggregation,
@@ -244,7 +244,7 @@ export function mapJsonEntry<T = JsonValue>(entry: WireJsonEntry): JsonEntry<T> 
   return {
     space: entry.space,
     id: entry.id,
-    value: jsonNumbers(entry.value) as T,
+    value: entry.value as T,
     version: readVersion(entry.version),
   };
 }
@@ -272,12 +272,12 @@ function records<T>(columns: string[], rows: JsonValue[][]): T[] {
 }
 
 export function mapSqlResult<T = Record<string, unknown>>(result: ResponseOf<"sql">): SqlQueryResult<T> {
-  const rows = jsonNumbers(result.rows) as JsonValue[][];
+  const rows = result.rows;
   return { columns: result.columns, rows, rowsAffected: num(result.rows_affected), records: records<T>(result.columns, rows) };
 }
 
 export function mapCypherResult<T = Record<string, JsonValue>>(result: ResponseOf<"cypher_result">): CypherResult<T> {
-  const rows = jsonNumbers(result.rows) as JsonValue[][];
+  const rows = result.rows;
   return { columns: result.columns, rows, records: records<T>(result.columns, rows) };
 }
 
@@ -286,7 +286,7 @@ export function mapGraphNode(node: WireGraphNode): GraphNode {
     graph: node.graph,
     id: node.id,
     kind: node.kind,
-    metadata: jsonNumbers(node.metadata),
+    metadata: node.metadata,
     ...(node.doc_space == null ? {} : { docSpace: node.doc_space }),
     ...(node.doc_id == null ? {} : { docId: node.doc_id }),
   };
@@ -431,7 +431,7 @@ export function mapLwwDocument(state: WireLwwDocument): LwwJsonDocumentState {
       Object.entries(state.fields).map(([path, field]) => [
         path,
         {
-          value: jsonNumbers(field.value),
+          value: field.value,
           clock: {
             clock: { timestampMs: num(field.clock.clock.timestamp_ms), counter: num(field.clock.clock.counter) },
             actorId: field.clock.actor_id,

@@ -125,60 +125,55 @@ async fn rkyv_zero_copy_frame_round_trip() {
     assert_eq!(archived.payload.as_slice(), &[1, 2, 3, 4, 5]);
 }
 
-#[tokio::test]
-async fn each_codec_carries_requests_and_responses_after_its_preface() {
-    use lilia_core::{BatchOperation, ErrorCode, LiliaError};
-    use lilia_protocol::{Codec, Response, ResponseValue};
-
-    for codec in [Codec::Rkyv, Codec::MessagePack] {
-        let (mut client, mut server) = tokio::io::duplex(8_192);
-        let request = Request {
-            id: "r1".into(),
-            token: "tok".into(),
-            deadline_ms: None,
-            operation: Operation::Batch {
-                operations: vec![BatchOperation::KvSet {
-                    namespace: "ns".into(),
-                    key: vec![0, 159, 255],
-                    value: b"v".to_vec(),
-                    if_version: Some(u64::MAX),
-                    expires_at_ms: None,
-                }],
-            },
-        };
-        codec.announce(&mut client).await.unwrap();
-        codec.write_request(&mut client, &request).await.unwrap();
-        let accepted = Codec::accept(&mut server).await.unwrap();
-        assert_eq!(accepted, codec);
-        let decoded = accepted.read_request(&mut server).await.unwrap();
-        let Operation::Batch { operations } = decoded.operation else {
-            panic!("{codec:?}: the batch survives");
-        };
-        assert!(matches!(
-            &operations[0],
-            BatchOperation::KvSet { key, if_version: Some(u64::MAX), .. } if key == &[0, 159, 255]
-        ));
-
-        let response = Response {
-            id: "r1".into(),
-            result: Err(LiliaError::new(ErrorCode::Conflict, "stale", true)),
-        };
-        accepted
-            .write_response(&mut server, &response)
-            .await
-            .unwrap();
-        let decoded = codec.read_response(&mut client).await.unwrap();
-        let error = decoded.result.unwrap_err();
-        assert_eq!((error.code, error.retryable), (ErrorCode::Conflict, true));
-
-        let ok = Response {
-            id: "r2".into(),
-            result: Ok(ResponseValue::Ids(vec!["a".into()])),
-        };
-        accepted.write_response(&mut server, &ok).await.unwrap();
-        let decoded = codec.read_response(&mut client).await.unwrap();
-        assert!(matches!(decoded.result, Ok(ResponseValue::Ids(ids)) if ids == ["a"]));
+/// A batch request whose key and condition test the byte and `u64` encodings.
+fn batch_request() -> Request {
+    use lilia_core::BatchOperation;
+    Request {
+        id: "r1".into(),
+        token: "tok".into(),
+        deadline_ms: None,
+        operation: Operation::Batch {
+            operations: vec![BatchOperation::KvSet {
+                namespace: "ns".into(),
+                key: vec![0, 159, 255],
+                value: b"v".to_vec(),
+                if_version: Some(u64::MAX),
+                expires_at_ms: None,
+            }],
+        },
     }
+}
+
+fn assert_batch(decoded: Request) {
+    use lilia_core::BatchOperation;
+    let Operation::Batch { operations } = decoded.operation else {
+        panic!("the batch survives");
+    };
+    assert!(matches!(
+        &operations[0],
+        BatchOperation::KvSet { key, if_version: Some(u64::MAX), .. } if key == &[0, 159, 255]
+    ));
+}
+
+#[tokio::test]
+async fn rkyv_clients_exchange_archives_after_their_preface() {
+    use lilia_core::{ErrorCode, LiliaError};
+    use lilia_protocol::{Codec, Response};
+
+    let (mut client, mut server) = tokio::io::duplex(8_192);
+    Codec::Rkyv.announce(&mut client).await.unwrap();
+    write_frame(&mut client, &batch_request()).await.unwrap();
+    let codec = Codec::accept(&mut server).await.unwrap();
+    assert_eq!(codec, Codec::Rkyv);
+    assert_batch(codec.read_request(&mut server).await.unwrap());
+    let response = Response {
+        id: "r1".into(),
+        result: Err(LiliaError::new(ErrorCode::Conflict, "stale", true)),
+    };
+    codec.write_response(&mut server, &response).await.unwrap();
+    let decoded: Response = read_frame(&mut client).await.unwrap();
+    let error = decoded.result.unwrap_err();
+    assert_eq!((error.code, error.retryable), (ErrorCode::Conflict, true));
 
     let (mut client, mut server) = tokio::io::duplex(64);
     tokio::io::AsyncWriteExt::write_all(&mut client, b"HTTP")
@@ -186,4 +181,55 @@ async fn each_codec_carries_requests_and_responses_after_its_preface() {
         .unwrap();
     let refused = Codec::accept(&mut server).await.unwrap_err();
     assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[tokio::test]
+async fn js_clients_send_message_pack_and_receive_js_frames() {
+    use lilia_core::KvEntry;
+    use lilia_protocol::{to_msgpack, Codec, Response, ResponseValue};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (mut client, mut server) = tokio::io::duplex(8_192);
+    client.write_all(&Codec::Js.preface()).await.unwrap();
+    let request = to_msgpack(&batch_request()).unwrap();
+    client.write_u32(request.len() as u32).await.unwrap();
+    client.write_all(&request).await.unwrap();
+    let codec = Codec::accept(&mut server).await.unwrap();
+    assert_eq!(codec, Codec::Js);
+    assert_batch(codec.read_request(&mut server).await.unwrap());
+
+    let response = Response {
+        id: "r1".into(),
+        result: Ok(ResponseValue::Kv(Some(KvEntry {
+            namespace: "ns".into(),
+            key: vec![0, 159, 255],
+            value: b"v".to_vec(),
+            version: u64::MAX,
+            expires_at_ms: None,
+        }))),
+    };
+    codec.write_response(&mut server, &response).await.unwrap();
+    let length = client.read_u32().await.unwrap() as usize;
+    let mut frame = vec![0; length];
+    client.read_exact(&mut frame).await.unwrap();
+    let json = u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize;
+    let value: serde_json::Value = serde_json::from_slice(&frame[4..4 + json]).unwrap();
+    let entry = &value["result"]["Ok"]["value"];
+    assert_eq!(value["result"]["Ok"]["type"], "kv");
+    assert_eq!(
+        entry["version"],
+        u64::MAX.to_string(),
+        "versions are decimal strings"
+    );
+    let segments = 8 + json;
+    let key = entry["key"].as_u64().unwrap() as usize;
+    let at = |i: usize, field: usize| {
+        let offset = segments + i * 8 + field * 4;
+        u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap()) as usize
+    };
+    let bytes = segments + 2 * 8;
+    assert_eq!(
+        &frame[bytes + at(key, 0)..bytes + at(key, 0) + at(key, 1)],
+        &[0, 159, 255]
+    );
 }

@@ -10,8 +10,12 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 - The SDK runs on the native `lilia-db` engine instead of SQLite. `path` is a directory.
   Versions are engine sequences: they grow with every write, not per record from 1.
 - One client for both modes: every call is a protocol operation, sent to the native addon
-  (`execute`) or to the daemon. Daemon connections speak MessagePack after an `LMP1`
-  preface, so daemon mode works again with the `rkyv` daemon.
+  (`execute`) or to the daemon (after an `LJS1` preface), so daemon mode works again with the
+  `rkyv` daemon. Requests are MessagePack (`msgpackr`, replacing `@msgpack/msgpack`); results
+  are JS frames: one JSON text written straight from the stored documents and read by V8's
+  `JSON.parse`, then raw bytes. A `json.get` takes about half the time it took through
+  MessagePack, synchronous calls reuse one output buffer, and asynchronous calls run on the
+  libuv thread pool.
 - `db.sync` has every call of the asynchronous API, not only KV, JSON, batches and SQL.
 - SQL is DataFusion and read-only: parameters are `$1`, `$2`...; JSON is read with
   `value->>'field'` and `json_get_*`. Every JSON space is also a table.

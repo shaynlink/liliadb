@@ -1,8 +1,11 @@
 //! The Node.js binding of `LiliaDB`: a [`NativeDatabase`] that runs the operations of
-//! [`lilia_protocol`] through its system session. An operation goes in, and its result comes
-//! out, as `MessagePack`, the same payloads the daemon exchanges with Node clients, so the
-//! TypeScript package has one client for both. [`NativeDatabase::execute`] runs on a blocking
-//! worker, [`NativeDatabase::execute_sync`] on the caller's thread.
+//! [`lilia_protocol`] through its system session. An operation comes in as `MessagePack`; its
+//! result goes out as a JS frame ([`lilia_protocol::to_js_frame`]): one JSON text for V8's
+//! native `JSON.parse`, then the raw bytes it refers to. The daemon answers its JavaScript
+//! clients with the same frames, so the TypeScript package has one client for both.
+//!
+//! [`NativeDatabase::execute_sync`] runs on the caller's thread and writes into a buffer the
+//! caller reuses from call to call; [`NativeDatabase::execute`] runs on the libuv thread pool.
 
 // reason: N-API functions take their arguments owned, as JavaScript passes them, and their
 // errors are JavaScript exceptions, documented by the TypeScript package.
@@ -13,8 +16,8 @@ use std::time::Duration;
 
 use lilia_core::{ErrorCode, LiliaError};
 use lilia_db::Database;
-use lilia_protocol::{from_msgpack, to_msgpack, OpenOptions, Operation, ResponseValue};
-use napi::bindgen_prelude::{Buffer, Error, Result, Status};
+use lilia_protocol::{from_msgpack, to_js_frame, OpenOptions, Operation};
+use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env, Error, Result, Status, Task};
 use napi_derive::napi;
 
 /// An open database. Calls share it; [`NativeDatabase::close`] closes it once they return.
@@ -58,18 +61,10 @@ fn invalid_arg(message: impl Into<String>) -> Error {
     napi_error(LiliaError::new(ErrorCode::InvalidInput, message, false))
 }
 
-fn join_error(error: tokio::task::JoinError) -> Error {
-    napi_error(LiliaError::new(
-        ErrorCode::Storage,
-        format!("worker failed: {error}"),
-        false,
-    ))
-}
-
-/// Runs the operation `payload` encodes; the `MessagePack` of its result, `{ Ok: value }` or
-/// `{ Err: error }`, a payload that does not decode included.
-fn run(database: &Database, payload: &[u8]) -> Result<Buffer> {
-    let result: std::result::Result<ResponseValue, LiliaError> = from_msgpack::<Operation>(payload)
+/// Runs the operation `request` encodes; the JS frame of its result, `{ Ok: value }` or
+/// `{ Err: error }`, a request that does not decode included.
+fn run(database: &Database, request: &[u8]) -> Result<Vec<u8>> {
+    let result = from_msgpack::<Operation>(request)
         .map_err(|e| {
             LiliaError::new(
                 ErrorCode::InvalidInput,
@@ -78,9 +73,73 @@ fn run(database: &Database, payload: &[u8]) -> Result<Buffer> {
             )
         })
         .and_then(|operation| lilia_protocol::execute(database, operation));
-    to_msgpack(&result)
-        .map(Buffer::from)
+    to_js_frame(&result)
         .map_err(|e| napi_error(LiliaError::new(ErrorCode::Storage, e.to_string(), false)))
+}
+
+/// Opens a database on the libuv pool.
+#[derive(Debug)]
+pub struct Open {
+    path: String,
+    options: OpenOptions,
+}
+
+impl Task for Open {
+    type Output = Database;
+    type JsValue = NativeDatabase;
+
+    fn compute(&mut self) -> Result<Database> {
+        lilia_protocol::open(&self.path, &self.options).map_err(napi_error)
+    }
+
+    fn resolve(&mut self, _env: Env, database: Database) -> Result<NativeDatabase> {
+        Ok(NativeDatabase {
+            inner: RwLock::new(Some(Arc::new(database))),
+        })
+    }
+}
+
+/// Runs an operation on the libuv pool.
+#[derive(Debug)]
+pub struct Execute {
+    database: Arc<Database>,
+    request: Vec<u8>,
+}
+
+impl Task for Execute {
+    type Output = Vec<u8>;
+    type JsValue = Buffer;
+
+    fn compute(&mut self) -> Result<Vec<u8>> {
+        run(&self.database, &self.request)
+    }
+
+    fn resolve(&mut self, _env: Env, frame: Vec<u8>) -> Result<Buffer> {
+        Ok(Buffer::from(frame))
+    }
+}
+
+/// Closes a database on the libuv pool.
+#[derive(Debug)]
+pub struct Close {
+    database: Option<Arc<Database>>,
+    timeout: Duration,
+}
+
+impl Task for Close {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<()> {
+        match self.database.take() {
+            Some(database) => lilia_protocol::close(database, self.timeout).map_err(napi_error),
+            None => Ok(()),
+        }
+    }
+
+    fn resolve(&mut self, _env: Env, (): ()) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl NativeDatabase {
@@ -100,63 +159,64 @@ impl NativeDatabase {
     }
 }
 
+/// Opens (or creates) the database `options` describe.
 #[napi]
-impl NativeDatabase {
-    #[napi(factory)]
-    pub async fn open(options: NativeOpenOptions) -> Result<Self> {
-        let history_retention_ms = options
-            .history_retention_ms
-            .map(|ms| u64::try_from(ms).map_err(|_| invalid_arg("historyRetentionMs must be >= 0")))
-            .transpose()?;
-        let open = OpenOptions {
+pub fn open(options: NativeOpenOptions) -> Result<AsyncTask<Open>> {
+    let history_retention_ms = options
+        .history_retention_ms
+        .map(|ms| u64::try_from(ms).map_err(|_| invalid_arg("historyRetentionMs must be >= 0")))
+        .transpose()?;
+    Ok(AsyncTask::new(Open {
+        path: options.path,
+        options: OpenOptions {
             durability: options.durability,
             profile: options.profile,
             ledger: options.ledger.unwrap_or(false),
             history_retention_ms,
             undo_depth: options.undo_depth.unwrap_or(0),
-        };
-        let path = options.path;
-        let database = tokio::task::spawn_blocking(move || lilia_protocol::open(path, &open))
-            .await
-            .map_err(join_error)?
-            .map_err(napi_error)?;
-        Ok(Self {
-            inner: RwLock::new(Some(Arc::new(database))),
-        })
-    }
+        },
+    }))
+}
 
+#[napi]
+impl NativeDatabase {
     /// Closes the database once the calls running on it return, waiting at most `timeout_ms`
     /// (5 seconds by default). Later calls fail with `CLOSED`; closing twice does nothing.
     #[napi]
-    pub async fn close(&self, timeout_ms: Option<u32>) -> Result<()> {
-        let taken = self
+    pub fn close(&self, timeout_ms: Option<u32>) -> AsyncTask<Close> {
+        let database = self
             .inner
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
-        let Some(database) = taken else {
-            return Ok(());
-        };
-        let timeout = Duration::from_millis(u64::from(timeout_ms.unwrap_or(5_000)));
-        tokio::task::spawn_blocking(move || lilia_protocol::close(database, timeout))
-            .await
-            .map_err(join_error)?
-            .map_err(napi_error)
+        AsyncTask::new(Close {
+            database,
+            timeout: Duration::from_millis(u64::from(timeout_ms.unwrap_or(5_000))),
+        })
     }
 
-    /// Runs the operation `payload` encodes on a blocking worker; see [`run`].
+    /// Runs the operation `request` encodes on the libuv pool; the JS frame of its result.
     #[napi]
-    pub async fn execute(&self, payload: Buffer) -> Result<Buffer> {
-        let database = self.database()?;
-        tokio::task::spawn_blocking(move || run(&database, &payload))
-            .await
-            .map_err(join_error)?
+    pub fn execute(&self, request: &[u8]) -> Result<AsyncTask<Execute>> {
+        Ok(AsyncTask::new(Execute {
+            database: self.database()?,
+            request: request.to_vec(),
+        }))
     }
 
-    /// Runs the operation `payload` encodes on the caller's thread; see [`run`].
+    /// Runs the operation `request` encodes on the caller's thread and writes the JS frame of
+    /// its result into `out`: its length when it fits, else the frame in a new buffer.
     #[napi]
-    pub fn execute_sync(&self, payload: Buffer) -> Result<Buffer> {
+    pub fn execute_sync(&self, request: &[u8], mut out: Buffer) -> Result<Either<u32, Buffer>> {
         let database = self.database()?;
-        run(&database, &payload)
+        let frame = run(&database, request)?;
+        let target: &mut [u8] = out.as_mut();
+        if frame.len() > target.len() {
+            return Ok(Either::B(Buffer::from(frame)));
+        }
+        target[..frame.len()].copy_from_slice(&frame);
+        u32::try_from(frame.len())
+            .map(Either::A)
+            .map_err(|_| invalid_arg("the frame passes 4 GiB"))
     }
 }

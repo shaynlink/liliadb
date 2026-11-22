@@ -1,11 +1,15 @@
-// The operations of the LiliaDB protocol and their results, in their MessagePack form: the
-// payloads the native module and the daemon both exchange. Field names are those of the Rust
-// types (snake case); `mappers.ts` turns them into the public types.
+// The operations of the LiliaDB protocol and their results, as the native module and the
+// daemon exchange them with JavaScript: operations in MessagePack, results in JS frames (one
+// JSON text for V8's native `JSON.parse`, then the raw bytes it refers to). Field names are
+// those of the Rust types (snake case); `mappers.ts` turns them into the public types.
 
-import { decode, encode } from "@msgpack/msgpack";
+import { Packr } from "msgpackr";
 import { LiliaError, type JsonValue } from "./types.js";
 
+/** An integer of a request; integers beyond 32 bits go as `bigint`s (see `encodeWire`). */
 type Int = number | bigint;
+/** A version in a result: a decimal string where the engine keeps all 64 bits, else a number. */
+type Version = string | number;
 
 export type WireDirection = "outbound" | "inbound" | "both";
 export type WireElementType = "float32" | "int8" | "bit";
@@ -235,7 +239,7 @@ export interface WireKvEntry {
   namespace: string;
   key: Uint8Array;
   value: Uint8Array;
-  version: Int;
+  version: Version;
   expires_at_ms: number | null;
 }
 
@@ -243,7 +247,7 @@ export interface WireJsonEntry {
   space: string;
   id: string;
   value: JsonValue;
-  version: Int;
+  version: Version;
 }
 
 export interface WireGraphNode {
@@ -283,8 +287,8 @@ export interface WireVectorHit {
 }
 
 export interface WireUndoStep {
-  version: Int;
-  keys: Int;
+  version: Version;
+  keys: number;
 }
 
 /** The result of an operation, by its `type`. */
@@ -301,8 +305,8 @@ export type ResponseValue =
         levels: { runs: Int; bytes: Int }[];
         memtable_bytes: Int;
         immutable_memtables: Int;
-        version: Int;
-        oldest_version: Int;
+        version: Version;
+        oldest_version: Version;
       };
     }
   | { type: "kv"; value: WireKvEntry | null }
@@ -312,8 +316,8 @@ export type ResponseValue =
   | { type: "json_indexes"; value: { space: string; index_name: string; json_path: string }[] }
   | { type: "json_extracted"; value: JsonValue | null }
   | { type: "json_value"; value: JsonValue }
-  | { type: "json_revisions"; value: { version: Int; doc: WireJsonEntry | null }[] }
-  | { type: "mutations"; value: { version?: Int | null; deleted: boolean }[] }
+  | { type: "json_revisions"; value: { version: Version; doc: WireJsonEntry | null }[] }
+  | { type: "mutations"; value: { version?: Version | null; deleted: boolean }[] }
   | { type: "sql"; value: { columns: string[]; rows: JsonValue[][]; rows_affected: Int } }
   | { type: "ids"; value: string[] }
   | { type: "graph_node"; value: WireGraphNode | null }
@@ -365,49 +369,77 @@ export type ResponseType = ResponseValue["type"];
 /** The value a response of type `K` carries. */
 export type ResponseOf<K extends ResponseType> = Extract<ResponseValue, { type: K }> extends { value: infer V } ? V : undefined;
 
-/** An error as the protocol carries it; the request id is a UUID in bytes. */
+/** An error as the protocol carries it. */
 export interface WireError {
   code: string;
   message: string;
   retryable: boolean;
   details?: JsonValue;
-  request_id: Uint8Array | string;
+  request_id: string;
 }
 
 export type WireResult = { Ok: ResponseValue } | { Err: WireError };
 
-const ENCODE_OPTIONS = { ignoreUndefined: true, useBigInt64: true } as const;
-const DECODE_OPTIONS = { useBigInt64: true } as const;
+/** Absent fields go as nil, which the engine reads as `None`. */
+const packr = new Packr({ useRecords: false, encodeUndefinedAsNil: true });
 
 /**
- * `value` with its integers beyond 32 bits as `bigint`s: the encoder writes such numbers as
- * floats, which the engine's integer fields (timestamps, counts) refuse.
+ * `value` without its undefined fields, and with its integers beyond 32 bits as `bigint`s: the
+ * encoder writes such numbers as floats, which would turn the engine's integer fields
+ * (timestamps, counts) and the integers of documents into floats.
  */
 function integers(value: unknown): unknown {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) && (value < -0x8000_0000 || value > 0xffff_ffff) ? BigInt(value) : value;
   }
+  if (value === null || typeof value !== "object" || ArrayBuffer.isView(value)) return value;
   if (Array.isArray(value)) return value.map(integers);
-  if (value !== null && typeof value === "object" && !ArrayBuffer.isView(value)) {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, integers(item)]));
+  const copy: Record<string, unknown> = {};
+  for (const key in value) {
+    const item = (value as Record<string, unknown>)[key];
+    // An absent field takes its default (`None`, or the field's serde default).
+    if (item !== undefined) copy[key] = integers(item);
   }
-  return value;
+  return copy;
 }
 
-/** The MessagePack of `value`; absent fields are left out, integers stay integers. */
-export function encodeWire(value: unknown): Uint8Array {
-  return encode(integers(value), ENCODE_OPTIONS);
+/** The MessagePack of an operation (or a request); absent fields are left out. The buffer is
+ * valid until the next call: callers hand it over (or copy it) at once. */
+export function encodeWire(value: unknown): Buffer {
+  return packr.pack(integers(value));
 }
 
-/** The value `bytes` hold in MessagePack; 64-bit integers decode as `bigint`. */
-export function decodeWire<T>(bytes: Uint8Array): T {
-  return decode(bytes, DECODE_OPTIONS) as T;
+/**
+ * The value of the JS frame in `frame` (from its start): `[u32 JSON length][JSON][u32 segment
+ * count][(u32 offset, u32 length) per segment][segment bytes]`, all little-endian. Each byte
+ * string of the value is the number of its segment until `bytesOf` replaces it.
+ */
+export function readFrame<T>(frame: Buffer): { value: T; segment: (index: number) => Uint8Array } {
+  const json = frame.readUInt32LE(0);
+  const value = JSON.parse(frame.toString("utf8", 4, 4 + json)) as T;
+  const table = 8 + json;
+  const bytes = table + frame.readUInt32LE(4 + json) * 8;
+  const segment = (index: number): Uint8Array => {
+    const at = table + index * 8;
+    const start = bytes + frame.readUInt32LE(at);
+    // A copy: the frame may be a buffer the next call writes over.
+    return new Uint8Array(frame.subarray(start, start + frame.readUInt32LE(at + 4)));
+  };
+  return { value, segment };
 }
 
-function uuid(bytes: Uint8Array | string): string {
-  if (typeof bytes === "string") return bytes;
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+/** `result` with its byte strings (keys, values, vectors) taken from their segments. */
+export function bytesOf(result: WireResult, segment: (index: number) => Uint8Array): WireResult {
+  if (!("Ok" in result)) return result;
+  const response = result.Ok;
+  const entry = (kv: WireKvEntry) => {
+    kv.key = segment(kv.key as unknown as number);
+    kv.value = segment(kv.value as unknown as number);
+  };
+  if (response.type === "kv" && response.value) entry(response.value);
+  else if (response.type === "kv_page") response.value.forEach(entry);
+  else if (response.type === "vector" && response.value) response.value.data = segment(response.value.data as unknown as number);
+  return result;
 }
 
 /** The error the protocol reports, as a `LiliaError`. */
@@ -417,7 +449,7 @@ export function wireError(error: WireError): LiliaError {
     message: error.message,
     retryable: error.retryable,
     details: error.details,
-    request_id: uuid(error.request_id),
+    request_id: error.request_id,
   });
 }
 

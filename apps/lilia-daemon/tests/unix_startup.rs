@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use lilia_protocol::{Codec, Operation, Request, Response, ResponseValue};
+use lilia_protocol::{read_frame, write_frame, Codec, Operation, Request, Response, ResponseValue};
 
 struct ChildGuard(Child);
 
@@ -40,17 +40,12 @@ async fn request(directory: &Path, token: &str, operation: Operation) -> Respons
         deadline_ms: Some(5_000),
         operation,
     };
-    Codec::Rkyv
-        .write_request(&mut stream, &request)
-        .await
-        .unwrap();
-    let response: Response = tokio::time::timeout(
-        Duration::from_secs(5),
-        Codec::Rkyv.read_response(&mut stream),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    write_frame(&mut stream, &request).await.unwrap();
+    let response: Response =
+        tokio::time::timeout(Duration::from_secs(5), read_frame::<Response>(&mut stream))
+            .await
+            .unwrap()
+            .unwrap();
     response.result.unwrap()
 }
 
