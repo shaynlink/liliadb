@@ -11,7 +11,7 @@ import {
   type TextStyle,
 } from 'react-native';
 import { useFts } from '../../hooks.js';
-import type { FtsHit } from '../../types.js';
+import type { FtsHit } from '@liliadb/client';
 import type { LiliaDatabase } from '../../database.js';
 
 export interface LiliaSearchBarProps {
@@ -27,7 +27,7 @@ export interface LiliaSearchBarProps {
 }
 
 /**
- * Idiomatic full-text search input connected directly to LiliaDB FTS5.
+ * Idiomatic full-text search input connected directly to LiliaDB full-text search.
  * Features built-in debouncing, clear button, and live search activity spinner.
  */
 export function LiliaSearchBar({

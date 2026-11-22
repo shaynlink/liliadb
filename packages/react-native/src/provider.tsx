@@ -1,67 +1,36 @@
-import React, { useState, useEffect } from 'react';
-import { LiliaContext } from './context.js';
-import { LiliaDatabase } from './database.js';
-import type { LiliaProviderProps } from './types.js';
+import React from "react";
+import { LiliaContext } from "./context.js";
+import { useLiliaDatabase } from "./hooks.js";
+import type { LiliaDatabase } from "./database.js";
+import type { LiliaProviderProps, OpenDatabaseOptions } from "./types.js";
 
+/** Opens the database of `options` while it is mounted. */
+function OpenedProvider(props: {
+  options: OpenDatabaseOptions;
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+  errorFallback?: (error: Error) => React.ReactNode;
+}): React.ReactElement {
+  const { db, error } = useLiliaDatabase(props.options);
+  if (error) {
+    if (props.errorFallback) return <>{props.errorFallback(error)}</>;
+    throw error;
+  }
+  if (!db) return <>{props.fallback ?? null}</>;
+  return <LiliaContext.Provider value={db}>{props.children}</LiliaContext.Provider>;
+}
+
+/**
+ * Gives its children a database: `database`, or the one it opens from `options` (showing
+ * `fallback` meanwhile) and closes when it unmounts.
+ */
 export function LiliaProvider(props: LiliaProviderProps): React.ReactElement {
-  // Mode 1: Externally provided database
-  if ('database' in props && props.database) {
-    return (
-      <LiliaContext.Provider value={props.database}>
-        {props.children}
-      </LiliaContext.Provider>
-    );
+  if (props.database) {
+    return <LiliaContext.Provider value={props.database as LiliaDatabase}>{props.children}</LiliaContext.Provider>;
   }
-
-  // Mode 2: Auto-managed options
-  const { options, fallback, errorFallback, children } = props;
-  const [db, setDb] = useState<LiliaDatabase | null>(null);
-  const [error, setError] = useState<Error | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let active = true;
-    let databaseInstance: LiliaDatabase | null = null;
-
-    setIsLoading(true);
-    setError(null);
-
-    LiliaDatabase.open(options)
-      .then((database) => {
-        if (active) {
-          databaseInstance = database;
-          setDb(database);
-          setIsLoading(false);
-        } else {
-          database.close().catch(() => {});
-        }
-      })
-      .catch((err) => {
-        if (active) {
-          setError(err instanceof Error ? err : new Error(String(err)));
-          setIsLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-      if (databaseInstance) {
-        databaseInstance.close().catch(() => {});
-      }
-    };
-  }, [options.path, options.profile, options.useSecureStorage, options.passphrase]);
-
-  if (error && errorFallback) {
-    return <>{errorFallback(error)}</>;
-  }
-
-  if (isLoading) {
-    return <>{fallback ?? null}</>;
-  }
-
   return (
-    <LiliaContext.Provider value={db}>
-      {children}
-    </LiliaContext.Provider>
+    <OpenedProvider options={props.options} fallback={props.fallback} errorFallback={props.errorFallback}>
+      {props.children}
+    </OpenedProvider>
   );
 }

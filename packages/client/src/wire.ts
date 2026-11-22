@@ -463,6 +463,23 @@ export function wireError(error: WireError): LiliaError {
   });
 }
 
+/**
+ * `error` as a `LiliaError` when it is a native error whose message is the JSON of an engine
+ * error (how the native bindings fail an `open` or a `close`); `error` itself otherwise.
+ */
+export function nativeError(error: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  try {
+    const shape = JSON.parse(error.message) as { code?: unknown; message?: unknown };
+    if (typeof shape.code === "string" && typeof shape.message === "string") {
+      return new LiliaError(shape as ConstructorParameters<typeof LiliaError>[0]);
+    }
+  } catch {
+    return error;
+  }
+  return error;
+}
+
 /** The value of a result; its error, thrown. */
 export function unwrap(result: WireResult): ResponseValue {
   if ("Err" in result) throw wireError(result.Err);

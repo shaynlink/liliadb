@@ -1,672 +1,408 @@
-import { useState, useEffect, useCallback, useRef, type DependencyList } from 'react';
-import { LiliaDatabase } from './database.js';
-import { useDatabase } from './context.js';
+// React hooks over a database. Each reads what it shows, then reads it again after every write
+// of the database that changes it (see `changes.ts`); key/value and document hooks read their
+// first value synchronously through JSI, so the first render already shows it.
+
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import type { FtsHit, JsonValue, SqlQueryResult, StorageStats } from "@liliadb/client";
+import { topics } from "./changes.js";
+import { LiliaContext } from "./context.js";
+import { LiliaDatabase } from "./database.js";
+import { ANY_CHANGE } from "./observer.js";
+import { decodeUtf8 } from "./utf8.js";
 import type {
   OpenDatabaseOptions,
-  UseKvOptions,
-  UseKvReturn,
+  UseDatabaseMaintenanceReturn,
   UseDocumentOptions,
   UseDocumentReturn,
-  UseSqlQueryOptions,
-  UseSqlQueryReturn,
+  UseFtsOptions,
+  UseFtsReturn,
+  UseGraphNeighborsOptions,
+  UseGraphNeighborsReturn,
+  UseKvOptions,
+  UseKvReturn,
   UseMutationOptions,
   UseMutationReturn,
-  UseFtsOptions,
-  UseGraphNeighborsOptions,
-  UseDatabaseMaintenanceReturn,
-  FtsHit,
-  GraphNode,
-  GraphDirection,
-  StorageMetrics,
-  CheckpointMode,
-} from './types.js';
+  UseSqlQueryOptions,
+  UseSqlQueryReturn,
+} from "./types.js";
 
-/**
- * Safe dynamic integration with React Navigation and Expo Router.
- * Subscribes to screen 'focus' events when `refreshOnFocus: true`.
- */
-function useFocusListener(callback: () => void, enabled?: boolean) {
-  const cbRef = useRef(callback);
-  cbRef.current = callback;
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
 
-  useEffect(() => {
-    if (!enabled) return;
+function notOpen(): Error {
+  return new Error("[LiliaDB] the database is not open yet");
+}
 
-    try {
-      // Dynamic require avoids hard dependency on @react-navigation/native
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const nav = require('@react-navigation/native');
-      if (typeof nav?.useNavigation === 'function') {
-        const navigation = nav.useNavigation();
-        if (navigation && typeof navigation.addListener === 'function') {
-          return navigation.addListener('focus', () => {
-            cbRef.current();
-          });
-        }
-      }
-    } catch {
-      // Navigation is not installed or not in navigation context: transparent no-op
-    }
-  }, [enabled]);
+/** `explicit`, else the database of the nearest `<LiliaProvider>`; null while it opens. */
+function useResolvedDatabase(explicit?: LiliaDatabase | null): LiliaDatabase | null {
+  const provided = useContext(LiliaContext);
+  return explicit ?? provided;
+}
+
+interface LiveState<T> {
+  value: T;
+  isLoading: boolean;
+  error: Error | null;
+}
+
+interface Live<T> extends LiveState<T> {
+  reload: () => Promise<void>;
+  /** Shows `value` until the next read. */
+  show: (value: T) => void;
 }
 
 /**
- * React hook to open and manage a LiliaDB database lifecycle in a component.
+ * The value `load` reads from `db`, read again after each write that changes `watched`. `peek`
+ * reads it synchronously, for the first render and when `key` (what is read) changes.
  */
-export function useLiliaDatabase(options: OpenDatabaseOptions) {
+function useLive<T>(
+  db: LiliaDatabase | null,
+  key: string,
+  watched: string | readonly string[],
+  load: (db: LiliaDatabase) => Promise<T>,
+  fallback: T,
+  peek?: (db: LiliaDatabase) => T
+): Live<T> {
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
+  const read = (database: LiliaDatabase | null): LiveState<T> => {
+    if (!database || !peek) return { value: fallback, isLoading: true, error: null };
+    try {
+      return { value: peek(database), isLoading: false, error: null };
+    } catch (error) {
+      return { value: fallback, isLoading: false, error: asError(error) };
+    }
+  };
+
+  const [state, setState] = useState<LiveState<T>>(() => read(db));
+  /** What the first state was peeked for: it needs no read until the next change. */
+  const peeked = useRef<{ db: LiliaDatabase; key: string } | null>(db && peek ? { db, key } : null);
+  const sequence = useRef(0);
+
+  const reload = useCallback(async () => {
+    if (!db) return;
+    const run = ++sequence.current;
+    try {
+      const value = await loadRef.current(db);
+      if (run === sequence.current) setState({ value, isLoading: false, error: null });
+    } catch (error) {
+      if (run === sequence.current) setState((current) => ({ ...current, isLoading: false, error: asError(error) }));
+    }
+  }, [db, key]);
+
+  const watchedKey = typeof watched === "string" ? watched : watched.join("\n");
+  useEffect(() => {
+    if (!db) return;
+    if (peeked.current?.db === db && peeked.current.key === key) {
+      peeked.current = null;
+    } else if (peek) {
+      setState(read(db));
+    } else {
+      void reload();
+    }
+    const unsubscribe = db.subscribe(watched, () => void reload());
+    return () => {
+      unsubscribe();
+      // Reads still running belong to the previous key or database.
+      sequence.current++;
+    };
+    // `watched` is compared by `watchedKey`; `read` and `peek` change with `key`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db, key, watchedKey, reload]);
+
+  const show = useCallback((value: T) => {
+    sequence.current++;
+    setState({ value, isLoading: false, error: null });
+  }, []);
+
+  return { ...state, reload, show };
+}
+
+/** Opens a database for the component's lifetime and closes it when the component unmounts. */
+export function useLiliaDatabase(options: OpenDatabaseOptions): { db: LiliaDatabase | null; isLoading: boolean; error: Error | null } {
   const [db, setDb] = useState<LiliaDatabase | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const optionsKey = JSON.stringify(options);
 
   useEffect(() => {
     let active = true;
-    let databaseInstance: LiliaDatabase | null = null;
-
-    setIsLoading(true);
+    let opened: LiliaDatabase | null = null;
+    setDb(null);
     setError(null);
-
-    LiliaDatabase.open(options)
-      .then((database) => {
-        if (active) {
-          databaseInstance = database;
-          setDb(database);
-          setIsLoading(false);
-        } else {
-          database.close().catch(() => {});
-        }
-      })
-      .catch((err) => {
-        if (active) {
-          setError(err instanceof Error ? err : new Error(String(err)));
-          setIsLoading(false);
-        }
-      });
-
+    LiliaDatabase.open(options).then(
+      (database) => {
+        opened = database;
+        if (active) setDb(database);
+        else void database.close();
+      },
+      (failure: unknown) => {
+        if (active) setError(asError(failure));
+      }
+    );
     return () => {
       active = false;
-      if (databaseInstance) {
-        databaseInstance.close().catch(() => {});
-      }
+      if (opened) void opened.close();
     };
-  }, [options.path, options.name, options.profile, options.useSecureStorage, options.passphrase]);
+    // The options are compared by their JSON.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optionsKey]);
 
-  return { db, isLoading, error };
+  return { db, isLoading: db === null && error === null, error };
 }
 
 // ==========================================
-// 1. KEY / VALUE HOOKS (ZERO FOUC)
+// KEY / VALUE
 // ==========================================
 
-export function useKv<T = string>(
-  namespace: string,
-  key: string,
-  options?: UseKvOptions<T>
-): UseKvReturn<T>;
-export function useKv<T = string>(
-  db: LiliaDatabase | null,
-  namespace: string,
-  key: string,
-  options?: UseKvOptions<T>
-): UseKvReturn<T>;
-
-export function useKv<T = string>(
-  arg1: string | LiliaDatabase | null,
-  arg2: string,
-  arg3?: string | UseKvOptions<T>,
-  arg4?: UseKvOptions<T>
-): UseKvReturn<T> {
-  let explicitDb: LiliaDatabase | null | undefined;
-  let namespace: string;
-  let key: string;
-  let options: UseKvOptions<T> | undefined;
-
-  if (typeof arg1 === 'string') {
-    namespace = arg1;
-    key = arg2;
-    options = arg3 as UseKvOptions<T> | undefined;
-  } else {
-    explicitDb = arg1;
-    namespace = arg2;
-    key = arg3 as string;
-    options = arg4;
-  }
-
-  let db: LiliaDatabase | null = null;
+/** The value of JSON text; text that is not JSON (written by other code) as it is. */
+function defaultDeserialize<T>(raw: string): T {
   try {
-    db = useDatabase(explicitDb ?? options?.db);
+    return JSON.parse(raw) as T;
   } catch {
-    db = explicitDb ?? null;
+    return raw as T;
   }
+}
 
-  const defaultValue = options?.defaultValue as T;
+function defaultSerialize<T>(value: T): string {
+  return JSON.stringify(value);
+}
 
-  const deserialize = useCallback(
-    (raw: string): T => {
-      if (options?.deserialize) return options.deserialize(raw);
-      try {
-        return JSON.parse(raw) as T;
-      } catch {
-        return raw as unknown as T;
-      }
-    },
-    [options?.deserialize]
+/**
+ * The value of `key` in `namespace`, stored as text through `options.serialize` and
+ * `options.deserialize` (JSON by default), with its setter.
+ */
+export function useKv<T = string>(namespace: string, key: string, options: UseKvOptions<T> = {}): UseKvReturn<T> {
+  const db = useResolvedDatabase(options.db);
+  const deserialize = options.deserialize ?? defaultDeserialize<T>;
+  const serialize = options.serialize ?? defaultSerialize<T>;
+  const defaultValue = options.defaultValue as T;
+  const decode = (entry: { value: Uint8Array } | undefined): T => (entry ? deserialize(decodeUtf8(entry.value)) : defaultValue);
+
+  const live = useLive<T>(
+    db,
+    `${namespace}\n${key}`,
+    topics.kv(namespace, key),
+    async (database) => decode(await database.kv.get(namespace, key)),
+    defaultValue,
+    (database) => decode(database.sync.kv.get(namespace, key))
   );
-
-  const serialize = useCallback(
-    (val: T): string => {
-      if (options?.serialize) return options.serialize(val);
-      if (typeof val === 'string') return val;
-      return JSON.stringify(val);
-    },
-    [options?.serialize]
-  );
-
-  // Instant synchronous initial value (Zero FOUC via JSI / in-memory cache)
-  const initialSyncVal = (() => {
-    if (!db) return defaultValue;
-    const peeked = db.sync.kv.peek(namespace, key);
-    return peeked != null ? deserialize(peeked) : defaultValue;
-  })();
-
-  const [value, setValueState] = useState<T>(initialSyncVal);
-  const [isLoading, setIsLoading] = useState(initialSyncVal === defaultValue);
-  const [error, setError] = useState<Error | null>(null);
-
-  const fetchValue = useCallback(async () => {
-    if (!db) return;
-    try {
-      const entry = await db.kv.get(namespace, key);
-      if (entry) {
-        const rawStr = new TextDecoder().decode(entry.value);
-        setValueState(deserialize(rawStr));
-      } else {
-        setValueState(defaultValue);
-      }
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [db, namespace, key, deserialize, defaultValue]);
-
-  useEffect(() => {
-    fetchValue();
-    if (!db) return;
-
-    const pattern = `kv:${namespace}:${key}`;
-    return db.subscribe(pattern, () => {
-      fetchValue();
-    });
-  }, [db, namespace, key, fetchValue]);
-
-  useFocusListener(fetchValue, options?.refreshOnFocus);
+  const latest = useRef(live.value);
+  latest.current = live.value;
 
   const setValue = useCallback(
-    async (newValueOrUpdater: T | ((prev: T) => T), expiresAtMs?: number) => {
-      if (!db) throw new Error('[LiliaDB] Database is not initialized');
-
-      let resolvedVal: T;
-      if (typeof newValueOrUpdater === 'function') {
-        resolvedVal = (newValueOrUpdater as (prev: T) => T)(value);
-      } else {
-        resolvedVal = newValueOrUpdater;
-      }
-
-      const str = serialize(resolvedVal);
-      // Synchronous instant update in JSI + async disk commit
-      db.sync.kv.set(namespace, key, str, expiresAtMs);
-      await db.kv.set(namespace, key, str, expiresAtMs);
-      setValueState(resolvedVal);
+    async (next: T | ((previous: T) => T), expiresAtMs?: number) => {
+      if (!db) throw notOpen();
+      const value = typeof next === "function" ? (next as (previous: T) => T)(latest.current) : next;
+      await db.kv.set(namespace, key, serialize(value), { expiresAtMs });
+      live.show(value);
     },
-    [db, namespace, key, value, serialize]
+    // `serialize` may be a new function each render; the namespace and key name the value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db, namespace, key, live.show]
   );
 
   const remove = useCallback(async () => {
-    if (!db) throw new Error('[LiliaDB] Database is not initialized');
-    db.sync.kv.delete(namespace, key);
+    if (!db) throw notOpen();
     await db.kv.delete(namespace, key);
-    setValueState(defaultValue);
-  }, [db, namespace, key, defaultValue]);
+    live.show(defaultValue);
+  }, [db, namespace, key, live.show, defaultValue]);
 
-  const meta = {
-    value,
-    setValue,
-    isLoading,
-    error,
-    remove,
-    reload: fetchValue,
-  };
-
-  const tuple = [value, setValue, meta] as UseKvReturn<T>;
-  Object.assign(tuple, meta);
-  return tuple;
+  const meta = { value: live.value, setValue, isLoading: live.isLoading, error: live.error, remove, reload: live.reload };
+  return Object.assign([live.value, setValue, meta] as [T, typeof setValue, typeof meta], meta);
 }
 
+/** `useKv` as `useState`: the value and its setter. */
 export function useKvState<T>(
   namespace: string,
   key: string,
   defaultValue: T,
-  options?: UseKvOptions<T>
-): [T, (newValue: T | ((prev: T) => T)) => Promise<void>] {
-  const [val, setVal] = useKv<T>(namespace, key, { ...options, defaultValue });
-  return [val, setVal];
+  options: Omit<UseKvOptions<T>, "defaultValue"> = {}
+): [T, (next: T | ((previous: T) => T)) => Promise<void>] {
+  const [value, setValue] = useKv<T>(namespace, key, { ...options, defaultValue });
+  return [value, setValue];
 }
 
 // ==========================================
-// 2. JSON DOCUMENT HOOKS (ZERO FOUC)
+// JSON DOCUMENTS
 // ==========================================
 
-export function useDocument<T = unknown>(
-  space: string,
-  id: string,
-  options?: UseDocumentOptions<T>
-): UseDocumentReturn<T>;
-export function useDocument<T = unknown>(
-  db: LiliaDatabase | null,
-  space: string,
-  id: string,
-  options?: UseDocumentOptions<T>
-): UseDocumentReturn<T>;
-
-export function useDocument<T = unknown>(
-  arg1: string | LiliaDatabase | null,
-  arg2: string,
-  arg3?: string | UseDocumentOptions<T>,
-  arg4?: UseDocumentOptions<T>
-): UseDocumentReturn<T> {
-  let explicitDb: LiliaDatabase | null | undefined;
-  let space: string;
-  let id: string;
-  let options: UseDocumentOptions<T> | undefined;
-
-  if (typeof arg1 === 'string') {
-    space = arg1;
-    id = arg2;
-    options = arg3 as UseDocumentOptions<T> | undefined;
-  } else {
-    explicitDb = arg1;
-    space = arg2;
-    id = arg3 as string;
-    options = arg4;
-  }
-
-  let db: LiliaDatabase | null = null;
-  try {
-    db = useDatabase(explicitDb ?? options?.db);
-  } catch {
-    db = explicitDb ?? null;
-  }
-
-  const initialSyncDoc = (() => {
-    if (!db) return options?.defaultValue ?? null;
-    const syncDoc = db.sync.json.get<T>(space, id);
-    return syncDoc ?? (options?.defaultValue ?? null);
-  })();
-
-  const [data, setData] = useState<T | null>(initialSyncDoc);
-  const [isLoading, setIsLoading] = useState(initialSyncDoc == null);
-  const [error, setError] = useState<Error | null>(null);
-
-  const fetchDoc = useCallback(async () => {
-    if (!db) return;
-    try {
-      const doc = await db.json.get<T>(space, id);
-      setData(doc?.value ?? (options?.defaultValue ?? null));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [db, space, id, options?.defaultValue]);
-
-  useEffect(() => {
-    fetchDoc();
-    if (!db) return;
-
-    const pattern = `json:${space}:${id}`;
-    return db.subscribe(pattern, () => {
-      fetchDoc();
-    });
-  }, [db, space, id, fetchDoc]);
-
-  useFocusListener(fetchDoc, options?.refreshOnFocus);
+/** The document `id` of `space`, with an `update` that merges partial objects. */
+export function useDocument<T = JsonValue>(space: string, id: string, options: UseDocumentOptions<T> = {}): UseDocumentReturn<T> {
+  const db = useResolvedDatabase(options.db);
+  const fallback = options.defaultValue ?? null;
+  const live = useLive<T | null>(
+    db,
+    `${space}\n${id}`,
+    topics.json(space, id),
+    async (database) => (await database.json.get<T>(space, id))?.value ?? fallback,
+    fallback,
+    (database) => database.sync.json.get<T>(space, id)?.value ?? fallback
+  );
+  const latest = useRef(live.value);
+  latest.current = live.value;
 
   const update = useCallback(
-    async (updater: Partial<T> | T | ((prev: T | null) => T)) => {
-      if (!db) throw new Error('[LiliaDB] Database is not initialized');
-
-      let nextVal: T;
-      if (typeof updater === 'function') {
-        nextVal = (updater as (prev: T | null) => T)(data);
-      } else if (data && typeof data === 'object' && typeof updater === 'object') {
-        nextVal = { ...data, ...updater } as T;
-      } else {
-        nextVal = updater as T;
-      }
-
-      db.sync.json.put(space, id, nextVal);
-      await db.json.put(space, id, nextVal);
-      setData(nextVal);
+    async (updater: Partial<T> | T | ((previous: T | null) => T)) => {
+      if (!db) throw notOpen();
+      const previous = latest.current;
+      const next =
+        typeof updater === "function"
+          ? (updater as (previous: T | null) => T)(previous)
+          : previous !== null && typeof previous === "object" && !Array.isArray(previous) && typeof updater === "object" && updater !== null && !Array.isArray(updater)
+            ? ({ ...previous, ...updater } as T)
+            : (updater as T);
+      await db.json.put(space, id, next);
+      live.show(next);
     },
-    [db, space, id, data]
+    [db, space, id, live.show]
   );
 
   const remove = useCallback(async () => {
-    if (!db) throw new Error('[LiliaDB] Database is not initialized');
-    db.sync.json.delete(space, id);
+    if (!db) throw notOpen();
     await db.json.delete(space, id);
-    setData(null);
-  }, [db, space, id]);
+    live.show(null);
+  }, [db, space, id, live.show]);
 
-  const meta = {
-    data,
-    update,
-    isLoading,
-    error,
-    remove,
-    reload: fetchDoc,
-  };
-
-  const tuple = [data, update, meta] as UseDocumentReturn<T>;
-  Object.assign(tuple, meta);
-  return tuple;
+  const meta = { data: live.value, update, isLoading: live.isLoading, error: live.error, remove, reload: live.reload };
+  return Object.assign([live.value, update, meta] as [T | null, typeof update, typeof meta], meta);
 }
 
 export const useJson = useDocument;
 
 // ==========================================
-// 3. GRAPH HOOKS
+// GRAPH
 // ==========================================
 
-export function useGraphNeighbors(
-  graph: string,
-  node: string,
-  options?: UseGraphNeighborsOptions
-) {
-  let db: LiliaDatabase | null = null;
-  try {
-    db = useDatabase(options?.db);
-  } catch {
-    db = options?.db ?? null;
-  }
-
-  const [neighbors, setNeighbors] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  const fetchNeighbors = useCallback(async () => {
-    if (!db) return;
-    try {
-      const res = await db.graph.neighbors(
-        graph,
-        node,
-        options?.direction ?? 'out',
-        options?.kindFilter
-      );
-      setNeighbors(res);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [db, graph, node, options?.direction, options?.kindFilter]);
-
-  useEffect(() => {
-    fetchNeighbors();
-    if (!db) return;
-
-    return db.subscribe(`graph:${graph}`, () => {
-      fetchNeighbors();
-    });
-  }, [db, graph, fetchNeighbors]);
-
-  useFocusListener(fetchNeighbors, options?.refreshOnFocus);
-
-  return { neighbors, isLoading, error, reload: fetchNeighbors };
+/** The neighbors of `node` in `graph`. */
+export function useGraphNeighbors(graph: string, node: string, options: UseGraphNeighborsOptions = {}): UseGraphNeighborsReturn {
+  const db = useResolvedDatabase(options.db);
+  const { direction, kind } = options;
+  const live = useLive<string[]>(
+    db,
+    JSON.stringify([graph, node, direction, kind]),
+    topics.graph(graph),
+    (database) => database.graph.neighbors(graph, node, { direction, kind }),
+    []
+  );
+  return { neighbors: live.value, isLoading: live.isLoading, error: live.error, reload: live.reload };
 }
 
 // ==========================================
-// 4. FULL-TEXT SEARCH (DEBOUNCED)
+// FULL-TEXT SEARCH
 // ==========================================
 
-export function useFts(
-  collection: string,
-  query: string,
-  options?: UseFtsOptions
-) {
-  let db: LiliaDatabase | null = null;
-  try {
-    db = useDatabase(options?.db);
-  } catch {
-    db = options?.db ?? null;
-  }
-
-  const [hits, setHits] = useState<FtsHit[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
-
-  const runSearch = useCallback(async () => {
-    if (!db || !query.trim()) {
-      setHits([]);
-      setIsSearching(false);
-      return;
-    }
-
-    try {
-      const results = await db.fts.search(collection, query, options?.limit ?? 20);
-      setHits(results);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      setIsSearching(false);
-    }
-  }, [db, collection, query, options?.limit]);
-
+/** The hits of `query` in `collection`, searched once the query stops changing for `debounceMs`. */
+export function useFts(collection: string, query: string, options: UseFtsOptions = {}): UseFtsReturn {
+  const db = useResolvedDatabase(options.db);
+  const { limit = 20, debounceMs = 200 } = options;
+  const [debounced, setDebounced] = useState(query);
   useEffect(() => {
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    const timer = setTimeout(() => setDebounced(query), debounceMs);
+    return () => clearTimeout(timer);
+  }, [query, debounceMs]);
 
-    if (!query.trim()) {
-      setHits([]);
-      setIsSearching(false);
-      return;
-    }
-
-    setIsSearching(true);
-    debounceTimer.current = setTimeout(runSearch, options?.debounceMs ?? 200);
-
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
-  }, [query, runSearch, options?.debounceMs]);
-
-  useFocusListener(runSearch, options?.refreshOnFocus);
-
-  return { hits, isSearching, error };
+  const text = debounced.trim();
+  const live = useLive<FtsHit[]>(
+    db,
+    JSON.stringify([collection, text, limit]),
+    topics.fts(collection),
+    async (database) => (text === "" ? [] : database.fts.search(collection, text, { limit })),
+    []
+  );
+  return { hits: live.value, isSearching: live.isLoading || debounced !== query, error: live.error };
 }
 
 // ==========================================
-// 5. SQL ANALYTICS HOOK
+// SQL
 // ==========================================
 
-export function useSqlQuery<T = Record<string, unknown>>(
-  sql: string,
-  params?: unknown[],
-  options?: UseSqlQueryOptions
-): UseSqlQueryReturn<T>;
-export function useSqlQuery<T = Record<string, unknown>>(
-  db: LiliaDatabase | null,
-  sql: string,
-  params?: unknown[],
-  deps?: DependencyList
-): UseSqlQueryReturn<T>;
-
-export function useSqlQuery<T = Record<string, unknown>>(
-  arg1: string | LiliaDatabase | null,
-  arg2?: string | unknown[],
-  arg3?: unknown[] | DependencyList | UseSqlQueryOptions,
-  arg4?: DependencyList
-): UseSqlQueryReturn<T> {
-  let explicitDb: LiliaDatabase | null | undefined;
-  let sql: string;
-  let params: unknown[] | undefined;
-  let options: UseSqlQueryOptions | undefined;
-  let deps: DependencyList = [];
-
-  if (typeof arg1 === 'string') {
-    sql = arg1;
-    params = Array.isArray(arg2) ? arg2 : undefined;
-    options = arg3 as UseSqlQueryOptions | undefined;
-    deps = options?.deps ?? [];
-  } else {
-    explicitDb = arg1;
-    sql = arg2 as string;
-    params = Array.isArray(arg3) ? arg3 : undefined;
-    deps = arg4 ?? [];
-  }
-
-  let db: LiliaDatabase | null = null;
-  try {
-    db = useDatabase(explicitDb ?? options?.db);
-  } catch {
-    db = explicitDb ?? null;
-  }
-
-  // Instant synchronous first query if JSI is available
-  const initialSyncResult = (() => {
-    if (!db || options?.enabled === false) return null;
-    try {
-      return db.sync.sql.query<T>(sql, params);
-    } catch {
-      return null;
-    }
-  })();
-
-  const [data, setData] = useState<T[]>(initialSyncResult?.rows ?? []);
-  const [columns, setColumns] = useState<string[]>(initialSyncResult?.columns ?? []);
-  const [isLoading, setIsLoading] = useState(initialSyncResult == null);
+/**
+ * The records of the read-only SQL query `sql` (parameters `$1`, `$2`... from `params`), run
+ * again after writes to `options.tables`, or after any write when none are given.
+ */
+export function useSqlQuery<T = Record<string, unknown>>(sql: string, params: JsonValue[] = [], options: UseSqlQueryOptions = {}): UseSqlQueryReturn<T> {
+  const db = useResolvedDatabase(options.db);
+  const enabled = options.enabled ?? true;
+  const empty: SqlQueryResult<T> = { columns: [], rows: [], rowsAffected: 0, records: [] };
   const [isRefetching, setIsRefetching] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-
-  const fetchQuery = useCallback(
-    async (isRefetch = false) => {
-      if (!db || options?.enabled === false) return;
-      if (isRefetch) setIsRefetching(true);
-      else setIsLoading(true);
-
-      try {
-        const res = await db.sql.query<T>(sql, params);
-        setData(res.rows);
-        setColumns(res.columns);
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err : new Error(String(err)));
-      } finally {
-        setIsLoading(false);
-        setIsRefetching(false);
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db, sql, JSON.stringify(params), options?.enabled, ...deps]
+  const live = useLive<SqlQueryResult<T>>(
+    enabled ? db : null,
+    JSON.stringify([sql, params, options.deps ?? []]),
+    options.tables?.map(topics.table) ?? ANY_CHANGE,
+    (database) => database.sql.raw<T>(sql, params),
+    empty
   );
 
-  useEffect(() => {
-    fetchQuery();
-
-    if (!db || !options?.tables || options.tables.length === 0) return;
-
-    const unsubs = options.tables.map((table) =>
-      db!.subscribe(`table:${table}`, () => {
-        fetchQuery(true);
-      })
-    );
-
-    return () => {
-      unsubs.forEach((unsub) => unsub());
-    };
-  }, [db, fetchQuery, options?.tables]);
-
-  useFocusListener(() => fetchQuery(true), options?.refreshOnFocus);
+  const refetch = useCallback(async () => {
+    setIsRefetching(true);
+    try {
+      await live.reload();
+    } finally {
+      setIsRefetching(false);
+    }
+  }, [live.reload]);
 
   return {
-    data,
-    rows: data,
-    columns,
-    isLoading,
+    data: live.value.records,
+    rows: live.value.records,
+    columns: live.value.columns,
+    isLoading: enabled && live.isLoading,
     isRefetching,
-    error,
-    refetch: () => fetchQuery(true),
+    error: live.error,
+    refetch,
   };
 }
 
 // ==========================================
-// 6. TANSTACK QUERY STYLE USE MUTATION
+// MUTATIONS
 // ==========================================
 
+/**
+ * `mutationFn` with its pending state, result and error. The hooks that read what it writes run
+ * again by themselves.
+ */
 export function useMutation<TData = unknown, TVariables = void>(
   mutationFn: (variables: TVariables, db: LiliaDatabase) => Promise<TData>,
-  options?: UseMutationOptions<TData, TVariables>
+  options: UseMutationOptions<TData, TVariables> = {}
 ): UseMutationReturn<TData, TVariables> {
-  let db: LiliaDatabase | null = null;
-  try {
-    db = useDatabase(options?.db);
-  } catch {
-    db = options?.db ?? null;
-  }
-
+  const db = useResolvedDatabase(options.db);
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [data, setData] = useState<TData | undefined>(undefined);
+  const callbacks = useRef({ mutationFn, options });
+  callbacks.current = { mutationFn, options };
 
   const mutateAsync = useCallback(
     async (variables: TVariables): Promise<TData> => {
-      if (!db) throw new Error('[LiliaDB] Database is not initialized for mutation');
+      if (!db) throw notOpen();
+      const { mutationFn: run, options: hooks } = callbacks.current;
       setIsPending(true);
       setError(null);
-
       try {
-        const result = await mutationFn(variables, db);
+        const result = await run(variables, db);
         setData(result);
-
-        if (options?.invalidateTables) {
-          for (const table of options.invalidateTables) {
-            db.notifyChange({ type: 'table', table });
-          }
-        }
-        if (options?.invalidateKeys) {
-          for (const item of options.invalidateKeys) {
-            db.notifyChange({ type: 'kv', namespace: item.namespace, key: item.key, op: 'set' });
-          }
-        }
-        if (options?.invalidateSpaces) {
-          for (const space of options.invalidateSpaces) {
-            db.notifyChange({ type: 'json', space, id: '*', op: 'put' });
-          }
-        }
-
-        await options?.onSuccess?.(result, variables);
-        await options?.onSettled?.(result, null, variables);
+        await hooks.onSuccess?.(result, variables);
+        await hooks.onSettled?.(result, null, variables);
         return result;
-      } catch (err) {
-        const errObj = err instanceof Error ? err : new Error(String(err));
-        setError(errObj);
-        await options?.onError?.(errObj, variables);
-        await options?.onSettled?.(undefined, errObj, variables);
-        throw errObj;
+      } catch (failure) {
+        const thrown = asError(failure);
+        setError(thrown);
+        await hooks.onError?.(thrown, variables);
+        await hooks.onSettled?.(undefined, thrown, variables);
+        throw thrown;
       } finally {
         setIsPending(false);
       }
     },
-    [db, mutationFn, options]
+    [db]
   );
 
   const mutate = useCallback(
     (variables: TVariables) => {
-      mutateAsync(variables).catch(() => {});
+      // The error is in `error`, and given to `onError`.
+      mutateAsync(variables).catch(() => undefined);
     },
     [mutateAsync]
   );
@@ -677,71 +413,28 @@ export function useMutation<TData = unknown, TVariables = void>(
     setData(undefined);
   }, []);
 
-  return {
-    mutate,
-    mutateAsync,
-    isPending,
-    error,
-    data,
-    reset,
-  };
+  return { mutate, mutateAsync, isPending, error, data, reset };
 }
 
 // ==========================================
-// 7. MAINTENANCE & STORAGE METRICS HOOK
+// MAINTENANCE
 // ==========================================
 
-export function useDatabaseMaintenance(dbOverride?: LiliaDatabase | null): UseDatabaseMaintenanceReturn {
-  let db: LiliaDatabase | null = null;
-  try {
-    db = useDatabase(dbOverride);
-  } catch {
-    db = dbOverride ?? null;
-  }
+/** The storage statistics of the database, kept current, with its maintenance calls. */
+export function useDatabaseMaintenance(explicitDb?: LiliaDatabase | null): UseDatabaseMaintenanceReturn {
+  const db = useResolvedDatabase(explicitDb);
+  const live = useLive<StorageStats | null>(db, "storage", ANY_CHANGE, (database) => database.storageStats(), null);
 
-  const [metrics, setMetrics] = useState<StorageMetrics | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  const checkpoint = useCallback(async () => {
+    if (!db) throw notOpen();
+    await db.checkpoint();
+    await live.reload();
+  }, [db, live.reload]);
 
-  const refresh = useCallback(async () => {
-    if (!db) return;
-    setIsLoading(true);
-    try {
-      const res = await db.maintenance.getFileSize();
-      setMetrics(res);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      setIsLoading(false);
-    }
+  const integrityCheck = useCallback(async () => {
+    if (!db) throw notOpen();
+    return db.integrityCheck();
   }, [db]);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  const vacuum = useCallback(async () => {
-    if (!db) throw new Error('[LiliaDB] Database is not initialized');
-    await db.maintenance.vacuum();
-    await refresh();
-  }, [db, refresh]);
-
-  const checkpoint = useCallback(
-    async (mode?: CheckpointMode) => {
-      if (!db) throw new Error('[LiliaDB] Database is not initialized');
-      await db.maintenance.checkpoint(mode);
-      await refresh();
-    },
-    [db, refresh]
-  );
-
-  return {
-    metrics,
-    isLoading,
-    error,
-    vacuum,
-    checkpoint,
-    refresh,
-  };
+  return { stats: live.value, isLoading: live.isLoading, error: live.error, checkpoint, integrityCheck, refresh: live.reload };
 }

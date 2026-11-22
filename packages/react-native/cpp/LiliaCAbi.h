@@ -1,7 +1,12 @@
+// The C ABI of liblilia_ffi (crates/lilia-ffi/src/c_abi.rs): open a database, run operations,
+// close it. An operation goes in as MessagePack (encoding 0) or JSON (1); its result comes out
+// as a JS frame: [u32 JSON length][JSON][u32 segment count][(u32 offset, u32 length) per
+// segment][segment bytes], all little-endian, the JSON being {"Ok": ...} or {"Err": ...}.
+
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -9,77 +14,25 @@ extern "C" {
 
 typedef struct LiliaHandle LiliaHandle;
 
-// Memory management
-void lilia_c_free_string(char* ptr);
-void lilia_c_free_bytes(uint8_t* ptr, size_t len);
-void lilia_c_free_handle(LiliaHandle* handle);
+/// Opens the database `options_json` describes ({"path": ..., "durability": ..., "profile":
+/// ..., "ledger": ..., "history_retention_ms": ..., "undo_depth": ...}, all but path
+/// optional). Null on failure, with the error's JSON through `out_err`.
+LiliaHandle *lilia_c_open(const char *options_json, char **out_err);
 
-// Lifecycle & Database creation
-LiliaHandle* lilia_c_open(
-    const char* path,
-    int profile_code,
-    const uint8_t* key_bytes,
-    size_t key_len,
-    const char* passphrase,
-    char** out_err
-);
-int lilia_c_close(LiliaHandle* handle, uint64_t timeout_ms);
-int lilia_c_prepare_for_background(LiliaHandle* handle);
-int lilia_c_checkpoint(LiliaHandle* handle);
-int lilia_c_vacuum(LiliaHandle* handle);
-int lilia_c_get_file_size(LiliaHandle* handle, uint64_t* out_main, uint64_t* out_wal, uint64_t* out_shm);
-int lilia_c_backup(LiliaHandle* handle, const char* dest);
+/// Runs the operation `request` holds and returns the JS frame of its result, with its length
+/// through `out_len`; free it with lilia_c_free_bytes. Null only past 4 GiB.
+uint8_t *lilia_c_execute(const LiliaHandle *handle, const uint8_t *request, size_t len,
+                         int encoding, size_t *out_len);
 
-// Key / Value
-uint8_t* lilia_c_kv_get(
-    LiliaHandle* handle,
-    const char* ns,
-    const uint8_t* key,
-    size_t key_len,
-    size_t* out_val_len,
-    uint64_t* out_version,
-    int64_t* out_expires
-);
-int lilia_c_kv_set(
-    LiliaHandle* handle,
-    const char* ns,
-    const uint8_t* key,
-    size_t key_len,
-    const uint8_t* val,
-    size_t val_len,
-    int64_t expires_at_ms,
-    uint64_t* out_version
-);
-int lilia_c_kv_delete(
-    LiliaHandle* handle,
-    const char* ns,
-    const uint8_t* key,
-    size_t key_len,
-    int* out_deleted
-);
+/// Closes the database once its running calls return (waiting at most `timeout_ms`) and frees
+/// the handle. 0 on success; -1 with the error's JSON through `out_err`.
+int lilia_c_close(LiliaHandle *handle, uint64_t timeout_ms, char **out_err);
 
-// JSON Document
-char* lilia_c_json_get(LiliaHandle* handle, const char* space, const char* id, uint64_t* out_version);
-int lilia_c_json_put(LiliaHandle* handle, const char* space, const char* id, const char* val_json, uint64_t* out_version);
-int lilia_c_json_delete(LiliaHandle* handle, const char* space, const char* id, int* out_deleted);
-int lilia_c_json_find(LiliaHandle* handle, const char* space, const char* query_json, const char* after_id, uint32_t limit, char** out_json);
+/// Frees a frame from lilia_c_execute.
+void lilia_c_free_bytes(uint8_t *bytes, size_t len);
 
-// Graph
-int lilia_c_graph_set_node(LiliaHandle* handle, const char* graph, const char* id, const char* kind, const char* metadata_json);
-int lilia_c_graph_get_node(LiliaHandle* handle, const char* graph, const char* id, char** out_json);
-int lilia_c_graph_delete_node(LiliaHandle* handle, const char* graph, const char* id, int* out_deleted);
-int lilia_c_graph_add_edge(LiliaHandle* handle, const char* graph, const char* source, const char* target, const char* kind);
-int lilia_c_graph_remove_edge(LiliaHandle* handle, const char* graph, const char* source, const char* target, const char* kind, int* out_deleted);
-int lilia_c_graph_neighbors(LiliaHandle* handle, const char* graph, const char* node, int direction, const char* kind, char** out_json);
-int lilia_c_graph_reachability(LiliaHandle* handle, const char* graph, const char* start_nodes_json, int direction, char** out_json);
-
-// FTS5
-int lilia_c_fts_index(LiliaHandle* handle, const char* collection, const char* doc_id, const char* content);
-int lilia_c_fts_delete(LiliaHandle* handle, const char* collection, const char* doc_id, int* out_deleted);
-int lilia_c_fts_search(LiliaHandle* handle, const char* collection, const char* query, uint32_t limit, char** out_json);
-
-// SQL
-int lilia_c_sql_query(LiliaHandle* handle, const char* sql, const char* params_json, char** out_cols_json, char** out_rows_json, uint64_t* out_affected);
+/// Frees an error string from lilia_c_open or lilia_c_close.
+void lilia_c_free_string(char *message);
 
 #ifdef __cplusplus
 }

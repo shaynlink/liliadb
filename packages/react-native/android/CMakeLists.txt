@@ -1,25 +1,27 @@
 cmake_minimum_required(VERSION 3.13)
-project(LiliaReactNativeJsi)
+project(lilia_react_native)
 
-set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-include_directories(
-    ../cpp
-    ${REACT_NATIVE_DIR}/ReactCommon
-    ${REACT_NATIVE_DIR}/ReactCommon/jsi
-)
+find_package(ReactAndroid REQUIRED CONFIG)
+find_package(fbjni REQUIRED CONFIG)
 
-add_library(
-    lilia_react_native_jsi
-    SHARED
-    ../cpp/LiliaJsiHostObject.cpp
-    ../cpp/LiliaJsiInstaller.cpp
-)
+# The engine's C ABI (liblilia_ffi), built by tools/mobile/build-android.sh. It has no soname:
+# it is linked by name, so the app finds it among its own libraries.
+add_library(lilia_ffi SHARED IMPORTED)
+set_target_properties(lilia_ffi PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/../../../release/android/jniLibs/${ANDROID_ABI}/liblilia_ffi.so"
+    IMPORTED_NO_SONAME TRUE)
 
-find_library(LOG_LIB log)
+add_library(lilia_react_native SHARED
+    ../cpp/LiliaJsi.cpp
+    src/main/cpp/LiliaJni.cpp)
 
-target_link_libraries(
-    lilia_react_native_jsi
-    ${LOG_LIB}
-)
+target_include_directories(lilia_react_native PRIVATE ../cpp)
+
+target_link_libraries(lilia_react_native
+    lilia_ffi
+    ReactAndroid::jsi
+    ReactAndroid::reactnative
+    fbjni::fbjni)

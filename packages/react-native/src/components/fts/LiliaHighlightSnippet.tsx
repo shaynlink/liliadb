@@ -19,8 +19,8 @@ interface SnippetPart {
 }
 
 /**
- * Idiomatic text component parsing SQLite FTS5 snippet tags (<b>match</b>)
- * and applying customizable highlight styling to matched terms.
+ * Idiomatic text component showing the snippet of a full-text hit, whose matches the engine
+ * wraps in <b>match</b>, with customizable highlight styling for the matched terms.
  */
 export function LiliaHighlightSnippet({
   snippet,
@@ -45,7 +45,7 @@ export function LiliaHighlightSnippet({
         });
       }
       result.push({
-        text: match[1],
+        text: match[1] ?? '',
         isHighlight: true,
       });
       lastIndex = regex.lastIndex;

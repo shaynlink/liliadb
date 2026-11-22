@@ -36,6 +36,10 @@ jobs:
           cp target/release/liblilia_node_native.so packages/node-linux-x64-gnu/lilia_node_native.node
       - name: Run Node test suite
         run: node --test packages/node/dist/**/*.test.js
+      - name: Run React Native suite (its JSI binding emulated over the native addon)
+        run: |
+          pnpm --filter "@liliadb/react-native..." build
+          pnpm --filter @liliadb/react-native test
 
   bun:
     name: Bun 1.x

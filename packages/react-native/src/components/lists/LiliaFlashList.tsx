@@ -1,11 +1,12 @@
 import React, { useMemo } from 'react';
 import { FlatList, RefreshControl, type ListRenderItem } from 'react-native';
+import type { JsonValue } from '@liliadb/client';
 import { useSqlQuery } from '../../hooks.js';
 import type { LiliaDatabase } from '../../database.js';
 
 export interface LiliaFlashListProps<T> {
   sql?: string;
-  sqlParams?: unknown[];
+  sqlParams?: JsonValue[];
   tables?: string[];
   data?: T[];
   estimatedItemSize: number;

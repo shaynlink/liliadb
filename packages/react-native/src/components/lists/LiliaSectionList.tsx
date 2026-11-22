@@ -6,6 +6,7 @@ import {
   type SectionListData,
   View,
 } from 'react-native';
+import type { JsonValue } from '@liliadb/client';
 import { useSqlQuery } from '../../hooks.js';
 import type { LiliaDatabase } from '../../database.js';
 
@@ -18,7 +19,7 @@ export interface LiliaSectionData<T> {
 export interface LiliaSectionListProps<T = Record<string, unknown>>
   extends Omit<SectionListProps<T, LiliaSectionData<T>>, 'sections'> {
   sql: string;
-  sqlParams?: unknown[];
+  sqlParams?: JsonValue[];
   tables?: string[];
   groupBy: (item: T) => string;
   sortSections?: (a: string, b: string) => number;

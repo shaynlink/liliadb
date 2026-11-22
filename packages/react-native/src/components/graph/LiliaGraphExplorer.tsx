@@ -10,14 +10,15 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useGraphNeighbors } from '../../hooks.js';
-import type { GraphDirection } from '../../types.js';
+import type { GraphDirection } from '@liliadb/client';
 import type { LiliaDatabase } from '../../database.js';
 
 export interface LiliaGraphExplorerProps {
   graph: string;
   rootNode: string;
   direction?: GraphDirection;
-  kindFilter?: string;
+  /** Follows only the edges of this kind. */
+  kind?: string;
   renderNode?: (nodeId: string, isCurrent: boolean) => React.ReactNode;
   onNodePress?: (nodeId: string) => void;
   containerStyle?: StyleProp<ViewStyle>;
@@ -30,8 +31,8 @@ export interface LiliaGraphExplorerProps {
 export function LiliaGraphExplorer({
   graph,
   rootNode,
-  direction = 'out',
-  kindFilter,
+  direction = 'outgoing',
+  kind,
   renderNode,
   onNodePress,
   containerStyle,
@@ -42,7 +43,7 @@ export function LiliaGraphExplorer({
 
   const { neighbors, isLoading, error } = useGraphNeighbors(graph, currentNode, {
     direction,
-    kindFilter,
+    kind,
     db,
   });
 
@@ -56,8 +57,8 @@ export function LiliaGraphExplorer({
   );
 
   const handleBack = useCallback(() => {
-    if (history.length === 0) return;
     const prev = history[history.length - 1];
+    if (prev === undefined) return;
     setHistory((h) => h.slice(0, -1));
     setCurrentNode(prev);
     onNodePress?.(prev);

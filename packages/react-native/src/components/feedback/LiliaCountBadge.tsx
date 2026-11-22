@@ -7,12 +7,13 @@ import {
   type ViewStyle,
   type TextStyle,
 } from 'react-native';
+import type { JsonValue } from '@liliadb/client';
 import { useSqlQuery } from '../../hooks.js';
 import type { LiliaDatabase } from '../../database.js';
 
 export interface LiliaCountBadgeProps {
   sql?: string;
-  sqlParams?: unknown[];
+  sqlParams?: JsonValue[];
   tables?: string[];
   count?: number;
   maxDisplay?: number;
@@ -45,10 +46,11 @@ export function LiliaCountBadge({
 
   const resolvedCount = useMemo(() => {
     if (sql) {
-      if (queryResult.data.length > 0) {
-        const row = queryResult.data[0];
+      const row = queryResult.data[0];
+      if (row) {
         const val = Object.values(row)[0];
         if (typeof val === 'number') return val;
+        if (typeof val === 'bigint') return Number(val);
         if (typeof val === 'string') {
           const parsed = parseInt(val, 10);
           return isNaN(parsed) ? 0 : parsed;

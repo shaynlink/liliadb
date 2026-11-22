@@ -472,7 +472,7 @@ To provide cross-platform database support without JVM or V8 overhead, `crates/l
 - **Zero-Copy Handle Lifecycle**: Thread-safe pointer wrapping for `Database` instances with synchronized mutex admission.
 - **Apple Ecosystem (`packages/apple-spm`)**: Swift Package Manager module with universal XCFramework support for iOS, macOS, watchOS, and tvOS (`tools/mobile/build-apple.sh`).
 - **Android SDK (`packages/android-sdk`)**: Kotlin bindings with JNI/NDK prebuilts targeting `aarch64-linux-android` and `armv7-linux-androideabi` (`tools/mobile/build-android.sh`).
-- **React Native (`packages/react-native`)**: Native C++ JSI bindings for high-performance direct execution on iOS and Android without bridge serialization bottlenecks.
+- **React Native (`packages/react-native`)**: A TurboModule installs a C++ JSI binding over the C ABI (`lilia_c_execute`): MessagePack operations in, JS frames out (the JSON text for Hermes' `JSON.parse`, the bytes as an `ArrayBuffer` over the engine's memory), asynchronous calls on native worker threads. The calls are those of `@liliadb/client`, shared with `@liliadb/node`.
 - **Flutter (`packages/flutter`)**: Dart FFI plugin delivering direct native execution across mobile platforms.
 
 ## Visual Studio Code Extension (`apps/lilia-vscode`)

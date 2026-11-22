@@ -12,6 +12,7 @@ export {
   encodeWire,
   expect,
   frameJsonLength,
+  nativeError,
   readFrame,
   unwrap,
   wireError,

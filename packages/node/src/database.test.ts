@@ -18,7 +18,8 @@ import {
   type JsonEntry,
   type KvEntry,
 } from "./index.js";
-import { tryLoadNative, type Transport } from "./transport.js";
+import { tryLoadNative } from "./native.js";
+import type { Transport } from "./transport.js";
 import type { Operation, ResponseValue } from "@liliadb/client";
 
 const native = tryLoadNative();
