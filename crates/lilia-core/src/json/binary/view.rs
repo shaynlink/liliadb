@@ -1,4 +1,4 @@
-//! Zero-copy borrowed view references into BinaryDoc data.
+//! Zero-copy borrowed view references into `BinaryDoc` data.
 
 use std::fmt;
 

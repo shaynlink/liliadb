@@ -23,9 +23,6 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      # The analytics engine is an opt-in feature: lint and test it explicitly.
-      - run: cargo clippy -p lilia-storage-sqlite --features analytics --all-targets -- -D warnings
-      - run: cargo test -p lilia-storage-sqlite --features analytics
       - name: Windows cross-account IPC denial
         if: runner.os == 'Windows'
         shell: pwsh

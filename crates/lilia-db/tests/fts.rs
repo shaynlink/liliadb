@@ -114,12 +114,6 @@ fn reindexing_and_deleting_keep_the_index_exact() {
         f.search("quick", 10).unwrap().is_empty(),
         "content without words removes the document"
     );
-    f.index("enc", "visible ENC:secret").unwrap();
-    assert_eq!(ids(&f.search("visible", 10).unwrap()), ["enc"]);
-    assert!(
-        f.search("secret", 10).unwrap().is_empty(),
-        "encrypted words are not indexed"
-    );
     db.close().unwrap();
     let db = open(dir.path(), false);
     assert_eq!(

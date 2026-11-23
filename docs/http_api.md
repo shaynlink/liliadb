@@ -459,7 +459,7 @@ curl -s -X POST http://127.0.0.1:4444/v1/graph/reachability \
 
 ### Full-Text Search Endpoints (FTS5)
 
-High-performance text search backed by SQLite's FTS5 extension with BM25 ranking.
+Full-text search with BM25 ranking, typo-tolerant suggestions and fuzzy search, and phonetic matching.
 
 #### `POST /v1/fts/index`
 Index or update text content for a document in a search collection.
@@ -512,6 +512,41 @@ curl -s -X POST http://127.0.0.1:4444/v1/fts/search \
   ]
 }
 ```
+
+#### `POST /v1/fts/suggest`
+Terms of the collection's vocabulary close to a prefix, within `max_distance` edits (1 by default).
+
+**Request:**
+```bash
+curl -s -X POST http://127.0.0.1:4444/v1/fts/suggest \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"collection": "articles", "prefix": "multimod", "max_distance": 1, "limit": 5}'
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "ok": true,
+  "suggestions": [
+    { "term": "multimodel", "distance": 0, "doc_count": 3, "exact_prefix": true }
+  ]
+}
+```
+
+#### `POST /v1/fts/fuzzy-search`
+Search that tolerates up to `max_distance` edits per query word (1 by default).
+
+**Request:**
+```bash
+curl -s -X POST http://127.0.0.1:4444/v1/fts/fuzzy-search \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"collection": "articles", "query": "multimodle", "max_distance": 1, "limit": 5}'
+```
+
+**Response (`200 OK`):** `{"ok": true, "hits": [...]}`, each hit as in `/v1/fts/search` plus
+`edit_distance` and `matched_terms`.
 
 #### `POST /v1/fts/phonetic`
 Phonetic search matching documents based on phonetic pronunciation (Double Metaphone and Soundex algorithms), tolerating typos, spelling mistakes, and transliteration differences.
@@ -672,36 +707,6 @@ curl -s -X POST http://127.0.0.1:4444/v1/hybrid/search \
 
 ---
 
-### Real-Time Change Data Capture (SSE Stream)
-
-#### `GET /v1/watch`
-Subscribe to live change events in real time via Server-Sent Events (SSE).
-
-**Query Parameters:**
-- `namespace`: Optional filter string to receive events for a specific KV namespace, JSON space, or collection.
-- `token`: Optional Bearer token parameter if the HTTP `Authorization` header cannot be set (e.g. standard browser `EventSource`).
-
-**Request:**
-```bash
-curl -N -s http://127.0.0.1:4444/v1/watch?namespace=users \
-  -H "Authorization: Bearer my-secret-token" \
-  -H "Accept: text/event-stream"
-```
-
-**Stream Output:**
-```
-event: mutation
-data: {"type":"json_put","space":"users","id":"alice","version":"1","deleted":false}
-
-event: mutation
-data: {"type":"json_delete","space":"users","id":"bob","version":"2","deleted":true}
-
-event: mutation
-data: {"type":"vector_mutated","collection":"embeddings","id":"doc_1","deleted":false}
-```
-
----
-
 ### Batch & Transactions
 
 #### `POST /v1/batch`
@@ -767,7 +772,7 @@ curl -s -X POST http://127.0.0.1:4444/v1/batch \
 ### SQL Analytics
 
 #### `POST /v1/sql`
-Execute SQLite queries across structured multi-model views (`lilia_json`, `lilia_kv`, `lilia_graph_nodes`, `lilia_graph_edges`).
+Run read-only SQL (DataFusion) over the tables of the models: `lilia_kv`, `lilia_json`, `lilia_graph_nodes`, `lilia_graph_edges`, `lilia_timeseries`, and one table per JSON space. Parameters are `$1`, `$2`...; JSON fields are read with `value->>'field'` and `json_get_int` / `json_get_float` / `json_get_str`.
 
 **Request:**
 ```bash
@@ -797,7 +802,7 @@ curl -s -X POST http://127.0.0.1:4444/v1/sql \
 ### Maintenance & Diagnostics
 
 #### `GET /v1/doctor`
-Run SQLite database integrity verification.
+Read every stored entry back (verifying every block checksum, then the ledger when the database keeps one).
 
 **Request:**
 ```bash
@@ -810,24 +815,6 @@ curl -s -X GET http://127.0.0.1:4444/v1/doctor \
 {
   "ok": true,
   "integrity": true
-}
-```
-
-#### `POST /v1/backup`
-Trigger an online snapshot backup to destination path.
-
-**Request:**
-```bash
-curl -s -X POST http://127.0.0.1:4444/v1/backup \
-  -H "Authorization: Bearer my-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"destination": "/tmp/lilia_snapshot.lilia"}'
-```
-
-**Response (`200 OK`):**
-```json
-{
-  "ok": true
 }
 ```
 

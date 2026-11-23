@@ -39,10 +39,6 @@ fn binary_versions_remain_native_u64_and_json_versions_are_decimal() {
         let result = MutationResult {
             version: Some(value),
             deleted: false,
-            hlc: None,
-            conflict_detected: None,
-            tier: lilia_core::StorageTier::Disk,
-            buffered: false,
         };
         let res_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&result).unwrap();
         let archived_res =

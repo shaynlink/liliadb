@@ -1641,10 +1641,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_drop_index_sync() != 39824.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_find() != 19143.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_find() != 47533.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_find_sync() != 41258.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_find_sync() != 65322.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_get() != 18997.toShort()) {
@@ -2374,14 +2374,16 @@ public interface LiliaDatabaseInterface {
     fun `jsonDropIndexSync`(`space`: kotlin.String, `name`: kotlin.String): kotlin.Boolean
     
     /**
-     * The documents whose indexes hold the values of `query_json` (an object of index names and
-     * values), after `after_id`, at most `limit` (every one when 0).
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
      */
     suspend fun `jsonFind`(`space`: kotlin.String, `queryJson`: kotlin.String, `afterId`: kotlin.String?, `limit`: kotlin.UInt): List<FfiJsonEntry>
     
     /**
-     * The documents whose indexes hold the values of `query_json` (an object of index names and
-     * values), after `after_id`, at most `limit` (every one when 0).
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
      */
     fun `jsonFindSync`(`space`: kotlin.String, `queryJson`: kotlin.String, `afterId`: kotlin.String?, `limit`: kotlin.UInt): List<FfiJsonEntry>
     
@@ -3539,8 +3541,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
 
     
     /**
-     * The documents whose indexes hold the values of `query_json` (an object of index names and
-     * values), after `after_id`, at most `limit` (every one when 0).
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
      */
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -3564,8 +3567,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
 
     
     /**
-     * The documents whose indexes hold the values of `query_json` (an object of index names and
-     * values), after `after_id`, at most `limit` (every one when 0).
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
      */
     @Throws(LiliaFfiException::class)override fun `jsonFindSync`(`space`: kotlin.String, `queryJson`: kotlin.String, `afterId`: kotlin.String?, `limit`: kotlin.UInt): List<FfiJsonEntry> {
             return FfiConverterSequenceTypeFfiJsonEntry.lift(
@@ -5236,14 +5240,6 @@ sealed class LiliaFfiException: kotlin.Exception() {
             get() = "v1=${ v1 }"
     }
     
-    class ConstraintViolation(
-        
-        val v1: kotlin.String
-        ) : LiliaFfiException() {
-        override val message
-            get() = "v1=${ v1 }"
-    }
-    
     class Closed(
         
         val v1: kotlin.String
@@ -5304,19 +5300,16 @@ public object FfiConverterTypeLiliaFfiError : FfiConverterRustBuffer<LiliaFfiExc
             4 -> LiliaFfiException.Conflict(
                 FfiConverterString.read(buf),
                 )
-            5 -> LiliaFfiException.ConstraintViolation(
+            5 -> LiliaFfiException.Closed(
                 FfiConverterString.read(buf),
                 )
-            6 -> LiliaFfiException.Closed(
+            6 -> LiliaFfiException.Timeout(
                 FfiConverterString.read(buf),
                 )
-            7 -> LiliaFfiException.Timeout(
+            7 -> LiliaFfiException.Unsupported(
                 FfiConverterString.read(buf),
                 )
-            8 -> LiliaFfiException.Unsupported(
-                FfiConverterString.read(buf),
-                )
-            9 -> LiliaFfiException.Generic(
+            8 -> LiliaFfiException.Generic(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -5341,11 +5334,6 @@ public object FfiConverterTypeLiliaFfiError : FfiConverterRustBuffer<LiliaFfiExc
                 + FfiConverterString.allocationSize(value.v1)
             )
             is LiliaFfiException.Conflict -> (
-                // Add the size for the Int that specifies the variant plus the size needed for all fields
-                4UL
-                + FfiConverterString.allocationSize(value.v1)
-            )
-            is LiliaFfiException.ConstraintViolation -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
                 + FfiConverterString.allocationSize(value.v1)
@@ -5395,28 +5383,23 @@ public object FfiConverterTypeLiliaFfiError : FfiConverterRustBuffer<LiliaFfiExc
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is LiliaFfiException.ConstraintViolation -> {
+            is LiliaFfiException.Closed -> {
                 buf.putInt(5)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is LiliaFfiException.Closed -> {
+            is LiliaFfiException.Timeout -> {
                 buf.putInt(6)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is LiliaFfiException.Timeout -> {
+            is LiliaFfiException.Unsupported -> {
                 buf.putInt(7)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is LiliaFfiException.Unsupported -> {
-                buf.putInt(8)
-                FfiConverterString.write(value.v1, buf)
-                Unit
-            }
             is LiliaFfiException.Generic -> {
-                buf.putInt(9)
+                buf.putInt(8)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }

@@ -265,18 +265,6 @@ pub enum BatchOperation {
         #[serde(with = "serde_bytes")]
         state: Vec<u8>,
     },
-    JsonPutHlc {
-        space: String,
-        id: String,
-        #[rkyv(with = crate::zero_copy::AsJsonString)]
-        value: Value,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hlc: Option<crate::hlc::Hlc>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_hlc: Option<crate::hlc::Hlc>,
-        #[serde(default)]
-        strategy: crate::hlc::ConflictResolutionStrategy,
-    },
     BitemporalPut {
         space: String,
         id: String,
@@ -305,17 +293,5 @@ pub struct MutationResult {
     #[serde(default, with = "crate::version::optional")]
     pub version: Option<u64>,
     pub deleted: bool,
-    #[serde(default, skip_serializing_if = "crate::StorageTier::is_disk")]
-    pub tier: crate::StorageTier,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub buffered: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hlc: Option<crate::hlc::Hlc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conflict_detected: Option<bool>,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
-const fn is_false(value: &bool) -> bool {
-    !*value
-}

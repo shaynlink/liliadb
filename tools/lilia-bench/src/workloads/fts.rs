@@ -110,37 +110,41 @@ pub fn run(engine: &str, settings: &Settings, emit: &mut dyn FnMut(Line)) -> Res
 #[cfg(feature = "lilia")]
 mod lilia {
     use lilia_core::BatchOperation;
+    use lilia_protocol::{Operation, ResponseValue};
 
-    use crate::engines::lilia::{info, Lilia};
-    use crate::engines::Result;
+    use crate::engines::lilia_db::LiliaDb;
+    use crate::engines::{Engine, Result};
     use crate::record::EngineInfo;
 
     const COLLECTION: &str = "corpus";
 
-    pub struct Index(Lilia);
+    pub struct Index(LiliaDb);
 
     impl Index {
         pub fn open(dir: &std::path::Path) -> Result<Self> {
-            Ok(Self(Lilia::open("lilia", dir)?))
+            Ok(Self(LiliaDb::open("lilia", dir)?))
         }
     }
 
     impl super::TextIndex for Index {
         fn info(&self) -> EngineInfo {
-            info("lilia")
+            self.0.info()
         }
 
         fn index(&mut self, docs: &[(String, String)]) -> Result<()> {
-            let ops: Vec<_> = docs
+            let ops = docs
                 .iter()
                 .map(|(id, content)| BatchOperation::FtsIndex { collection: COLLECTION.into(), doc_id: id.clone(), content: content.clone() })
                 .collect();
-            self.0.database().batch(&ops)?;
-            Ok(())
+            self.0.batch(ops)
         }
 
         fn search(&mut self, query: &str, k: usize) -> Result<usize> {
-            Ok(self.0.database().fts_search(COLLECTION, query, u32::try_from(k)?)?.len())
+            let search = Operation::FtsSearch { collection: COLLECTION.into(), query: query.to_owned(), limit: u32::try_from(k)? };
+            Ok(match self.0.run(search)? {
+                ResponseValue::FtsHits(hits) => hits.len(),
+                other => return Err(format!("fts_search answered {}", other.name()).into()),
+            })
         }
     }
 }

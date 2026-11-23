@@ -1,7 +1,8 @@
 //! Built-in text embedding backend for `LiliaDB`, running sentence-transformer models on candle.
 //!
-//! The application ships the model files and hands the folder to [`CandleEmbedder::load`]; the
-//! result is registered with `DatabaseOptions::with_embedder`. Nothing is downloaded at runtime.
+//! The application ships the model files and hands the folder to [`CandleEmbedder::load`];
+//! nothing is downloaded at runtime. The vectors it computes are stored and searched with the
+//! vector model of `lilia-db` (`examples/semantic_search.rs`).
 //!
 //! ```no_run
 //! use std::sync::Arc;
@@ -24,7 +25,9 @@ use candle_transformers::models::bert::{BertModel, Config, DTYPE};
 use lilia_core::{ErrorCode, LiliaError};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-pub use lilia_core::{BuiltinModel, Embedder};
+mod model;
+
+pub use model::{BuiltinModel, Embedder};
 
 #[cfg(feature = "onnx")]
 pub mod ort_backend;

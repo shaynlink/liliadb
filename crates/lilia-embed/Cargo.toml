@@ -26,7 +26,7 @@ tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-
 ort = { version = "=2.0.0-rc.9", optional = true }
 
 [dev-dependencies]
-lilia-storage-sqlite = { path = "../lilia-storage-sqlite" }
+lilia-db = { path = "../lilia-db" }
 tempfile = "3.27.0"
 
 [lints]

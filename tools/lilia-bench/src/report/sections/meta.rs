@@ -157,7 +157,7 @@ pub fn summary(data: &Data) -> String {
     }
     let lilia_class = data.records.iter().find(|r| r.engine.id == "lilia").map_or("", |r| data.class(&r.engine));
     format!(
-        "## Summary\n\nLiliaDB (default configuration: `Durability::Durable`, ledger on) against the fastest \
+        "## Summary\n\nLiliaDB (default configuration: `Durability::Durable`, a week of history, no ledger) against the fastest \
          other engine of its sync class (`{lilia_class}`), and against the fastest power-safe engine. \
          A ratio below 1 means LiliaDB is slower (or, for lower-is-better rows, smaller).\n\n{}",
         t.render()
@@ -181,8 +181,8 @@ pub fn method(data: &Data) -> String {
     let get = |k: &str| s.get(k).map_or_else(|| "?".into(), ToString::to_string);
     format!(
         "## Method\n\n\
-         - **Harness.** `tools/lilia-bench` builds one binary per engine group (LiliaDB and SQLite each \
-         embed a SQLite amalgamation, so they cannot share one) and runs every workload group of every \
+         - **Harness.** `tools/lilia-bench` builds one binary per engine group (no engine's native \
+         libraries are linked into another's measurements) and runs every workload group of every \
          engine in its own process. Each write workload starts from an empty database directory.\n\
          - **Data.** 16-byte keys whose first 8 bytes are a hash (inserts land at random positions in \
          every ordered index), {value} B values of mixed text, {records} records for reads and YCSB.\n\

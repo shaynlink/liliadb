@@ -40,14 +40,11 @@ run without results, never silently skipped.
 
 | Id | Engine | Commit sync |
 | :--- | :--- | :--- |
-| `lilia` | LiliaDB, `Durability::Durable`, ledger on (defaults) | as LiliaDB configures SQLite |
-| `lilia-noledger` | LiliaDB, ledger off | same |
-| `lilia-aes` | LiliaDB, AES-256-GCM value codec | same |
-| `lilia-engine` | v0.2 native engine (`crates/lilia-engine`), `Durability::Durable` | `F_FULLFSYNC` on Apple (`File::sync_data`) |
+| `lilia` | LiliaDB: the data models (`crates/lilia-db`) over `lilia-engine`, defaults (a week of history, no ledger), `Durability::Durable`; the key-value workloads use its key-value model, the model workloads run the protocol's operations | `F_FULLFSYNC` on Apple |
+| `lilia-ledger` | same, ledger on | same |
+| `lilia-nohistory` | same, no history window | same |
+| `lilia-engine` | the storage engine alone (`crates/lilia-engine`), `Durability::Durable` | `F_FULLFSYNC` on Apple (`File::sync_data`) |
 | `lilia-engine-balanced` | same, `Durability::Balanced` | `F_BARRIERFSYNC` on Apple |
-| `lilia-db` | v0.2 data models (`crates/lilia-db`) over `lilia-engine`, key-value model, defaults (a week of history, no ledger), `Durability::Durable` | `F_FULLFSYNC` on Apple |
-| `lilia-db-ledger` | same, ledger on | same |
-| `lilia-db-nohistory` | same, no history window | same |
 | `sqlite` | SQLite WAL, `synchronous=FULL` (via `rusqlite`) | `fsync` |
 | `sqlite-fullfsync` | same, plus `fullfsync` and `checkpoint_fullfsync` | `F_FULLFSYNC` on Apple |
 | `redb` | redb, `Durability::Immediate` | `File::sync_data` |
@@ -77,7 +74,7 @@ Rust's `File::sync_all`/`sync_data` issue `F_FULLFSYNC` on Apple platforms. On L
 
 - `src/engines/`: one adapter per engine behind `Engine`/`Session`.
 - `src/workloads/`: one module per group; every group runs in its own process.
-- `src/suite.rs`: builds the engine binaries (LiliaDB and SQLite each embed a SQLite
-  amalgamation, so they live in separate binaries), runs the plan, writes the results.
+- `src/suite.rs`: builds the engine binaries (one per group of engines, so that no engine's native
+  libraries are linked into another's measurements), runs the plan, writes the results.
 - `src/report/`: renders the Markdown report from the result lines; no text depends on a
   particular outcome.

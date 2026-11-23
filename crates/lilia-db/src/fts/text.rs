@@ -1,11 +1,10 @@
 //! Tokenization: the same rule for indexing, queries and snippets.
 //!
 //! A token is a maximal run of alphanumeric characters, lowercased. Text containing CJK is first
-//! segmented into words and bigrams separated by spaces ([`lilia_core::prepare_cjk_for_indexing`]),
-//! and words carrying a field-level encryption envelope (`ENC:` prefix) are not indexed.
+//! segmented into words and bigrams separated by spaces ([`lilia_core::prepare_cjk_for_indexing`]).
 
 use lilia_core::cjk::cjk_query_words;
-use lilia_core::{contains_cjk, prepare_cjk_for_indexing, ENC_PREFIX};
+use lilia_core::{contains_cjk, prepare_cjk_for_indexing};
 
 /// One token of a text: its lowercased form and its byte range in the text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,18 +43,9 @@ pub fn tokens(text: &str) -> Vec<Token> {
     out
 }
 
-/// The text a document is indexed from: encrypted words removed, CJK segmented.
+/// The text a document is indexed from: CJK segmented.
 pub fn prepare(content: &str) -> String {
-    let clean = if content.contains(ENC_PREFIX) {
-        content
-            .split_whitespace()
-            .filter(|w| !w.starts_with(ENC_PREFIX))
-            .collect::<Vec<_>>()
-            .join(" ")
-    } else {
-        content.to_owned()
-    };
-    prepare_cjk_for_indexing(&clean)
+    prepare_cjk_for_indexing(content)
 }
 
 /// The token sequences one query word stands for: one sequence for an ordinary word (several
@@ -95,7 +85,6 @@ mod tests {
             ]
         );
         assert_eq!(tokens("  ,; "), Vec::<Token>::new());
-        assert_eq!(prepare("secret ENC:abcd visible"), "secret visible");
         assert_eq!(
             query_word("E-Mail"),
             [vec!["e".to_owned(), "mail".to_owned()]]

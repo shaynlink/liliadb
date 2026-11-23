@@ -12,8 +12,6 @@ pub enum LiliaFfiError {
     NotFound(String),
     #[error("Conflict: {0}")]
     Conflict(String),
-    #[error("Constraint violation: {0}")]
-    ConstraintViolation(String),
     #[error("Closed: {0}")]
     Closed(String),
     #[error("Timeout: {0}")]
@@ -31,7 +29,6 @@ impl From<LiliaError> for LiliaFfiError {
             ErrorCode::InvalidInput => LiliaFfiError::InvalidInput(err.message),
             ErrorCode::NotFound => LiliaFfiError::NotFound(err.message),
             ErrorCode::Conflict => LiliaFfiError::Conflict(err.message),
-            ErrorCode::ConstraintViolation => LiliaFfiError::ConstraintViolation(err.message),
             ErrorCode::Closed => LiliaFfiError::Closed(err.message),
             ErrorCode::Timeout => LiliaFfiError::Timeout(err.message),
             ErrorCode::Unsupported => LiliaFfiError::Unsupported(err.message),

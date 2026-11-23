@@ -765,7 +765,6 @@ All operations throw `LiliaFfiError`, an enum with a `String` payload per case:
 | `LiliaFfiError.InvalidInput`  | Malformed JSON, invalid key length, bad arguments                    |
 | `LiliaFfiError.NotFound`      | Requested entry does not exist                                       |
 | `LiliaFfiError.Conflict`      | Optimistic concurrency or busy conflict                              |
-| `LiliaFfiError.ConstraintViolation` | A write a policy or constraint refuses                         |
 | `LiliaFfiError.Closed`        | The database is closed                                               |
 | `LiliaFfiError.Timeout`       | `close` still waiting for calls after its timeout                    |
 | `LiliaFfiError.Unsupported`   | An operation this engine version does not have                       |
@@ -827,7 +826,7 @@ Every method exists as an `async` function and as a `*Sync` blocking variant.
 | `FfiDurability`                   | `.durable`, `.balanced`, `.performance`                                                        |
 | `FfiDirection`                    | `.outgoing`, `.incoming`, `.both`                                                              |
 | `FfiDownsampleAggregation`        | `.avg`, `.min`, `.max`, `.sum`, `.first`, `.last`, `.count`                                    |
-| `LiliaFfiError`                   | `Storage`, `InvalidInput`, `NotFound`, `Conflict`, `ConstraintViolation`, `Closed`, `Timeout`, `Unsupported`, `Generic` |
+| `LiliaFfiError`                   | `Storage`, `InvalidInput`, `NotFound`, `Conflict`, `Closed`, `Timeout`, `Unsupported`, `Generic` |
 
 ---
 

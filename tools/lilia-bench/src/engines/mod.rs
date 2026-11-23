@@ -12,9 +12,7 @@ use crate::record::SyncPrimitive;
 #[cfg(feature = "kvs")]
 mod fjall;
 #[cfg(feature = "lilia")]
-pub mod lilia;
-#[cfg(feature = "lilia")]
-mod lilia_db;
+pub mod lilia_db;
 #[cfg(feature = "lilia")]
 mod lilia_engine;
 #[cfg(feature = "kvs")]
@@ -56,8 +54,6 @@ pub trait Session {
 pub fn available() -> Vec<&'static str> {
     let groups: &[&[&'static str]] = &[
         #[cfg(feature = "lilia")]
-        &lilia::IDS,
-        #[cfg(feature = "lilia")]
         &lilia_engine::IDS,
         #[cfg(feature = "lilia")]
         &lilia_db::IDS,
@@ -73,10 +69,6 @@ pub fn available() -> Vec<&'static str> {
 
 /// Opens (creating) engine `id` in the empty or previously used directory `dir`.
 pub fn open(id: &str, dir: &Path) -> Result<Box<dyn Engine>> {
-    #[cfg(feature = "lilia")]
-    if lilia::IDS.contains(&id) {
-        return Ok(Box::new(lilia::Lilia::open(id, dir)?));
-    }
     #[cfg(feature = "lilia")]
     if lilia_engine::IDS.contains(&id) {
         return Ok(Box::new(lilia_engine::LiliaEngine::open(id, dir)?));

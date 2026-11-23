@@ -7,8 +7,8 @@ license = "Apache-2.0"
 publish = false
 description = "Comparative read/write benchmark suite: LiliaDB against embedded storage engines"
 
-# Standalone: competitor engines (RocksDB, DuckDB, LMDB) must never enter the published
-# workspace build, and LiliaDB's vendored SQLite collides with rusqlite's at link time.
+# Standalone: competitor engines (RocksDB, DuckDB, LMDB, SQLite) must never enter the published
+# workspace build.
 [workspace]
 
 [[bin]]
@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [features]
 # Each feature group is compiled into its own binary by `lilia-bench suite`.
-lilia = ["dep:lilia-core", "dep:lilia-storage-sqlite", "dep:lilia-engine", "dep:lilia-db"]
+lilia = ["dep:lilia-core", "dep:lilia-engine", "dep:lilia-db", "dep:lilia-protocol"]
 sqlite = ["dep:rusqlite"]
 kvs = ["dep:redb", "dep:fjall", "dep:heed"]
 rocksdb = ["dep:rocksdb"]
@@ -33,7 +33,7 @@ tempfile = "3.27.0"
 lilia-core = { path = "../../crates/lilia-core", optional = true }
 lilia-db = { path = "../../crates/lilia-db", optional = true }
 lilia-engine = { path = "../../crates/lilia-engine", optional = true }
-lilia-storage-sqlite = { path = "../../crates/lilia-storage-sqlite", default-features = false, features = ["analytics"], optional = true }
+lilia-protocol = { path = "../../crates/lilia-protocol", optional = true }
 rusqlite = { version = "=0.40.2", features = ["bundled"], optional = true }
 redb = { version = "5.0.0", optional = true }
 fjall = { version = "3.1.13", optional = true }

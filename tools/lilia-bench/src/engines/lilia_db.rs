@@ -1,17 +1,21 @@
-//! `lilia-db`: the v0.2 data-model layer over `lilia-engine`, through its key-value model, to
-//! measure what the model layer (record envelopes, planning, the ledger) costs over the engine.
+//! LiliaDB: `lilia-db`, the data models over `lilia-engine`. The key-value workloads go through
+//! its key-value model, to measure what the model layer (record envelopes, planning, the ledger)
+//! costs over the engine; the model workloads (JSON, full-text, vectors, analytics) run the
+//! protocol's operations, as the daemon and the bindings do.
 
 use std::path::Path;
 
+use lilia_core::BatchOperation;
 use lilia_db::{Batch, Database, Options, Scan};
 use lilia_engine::Durability;
+use lilia_protocol::{Operation, ResponseValue};
 
 use super::{std_file_sync, Engine, Result, Session};
 use crate::record::EngineInfo;
 
-/// `lilia-db`: the defaults (a week of history, no ledger). `lilia-db-ledger`: every commit also
-/// appended to the ledger. `lilia-db-nohistory`: no history window. All durable.
-pub const IDS: [&str; 3] = ["lilia-db", "lilia-db-ledger", "lilia-db-nohistory"];
+/// `lilia`: the defaults (a week of history, no ledger). `lilia-ledger`: every commit also
+/// appended to the ledger. `lilia-nohistory`: no history window. All durable.
+pub const IDS: [&str; 3] = ["lilia", "lilia-ledger", "lilia-nohistory"];
 
 const NAMESPACE: &str = "bench";
 
@@ -23,27 +27,38 @@ pub struct LiliaDb {
 
 impl LiliaDb {
     pub fn open(id: &str, dir: &Path) -> Result<Self> {
-        let mut options = Options { ledger: id == "lilia-db-ledger", ..Options::default() };
-        if id == "lilia-db-nohistory" {
+        let mut options = Options { ledger: id == "lilia-ledger", ..Options::default() };
+        if id == "lilia-nohistory" {
             options.history_retention = std::time::Duration::ZERO;
         }
         options.engine.durability = Durability::Durable;
         let db = Database::open(dir.join("db"), options)?;
         Ok(Self { id: id.to_owned(), db })
     }
+
+    /// Runs `operation` as the daemon and the bindings run it.
+    pub fn run(&self, operation: Operation) -> Result<ResponseValue> {
+        Ok(lilia_protocol::execute(&self.db, operation)?)
+    }
+
+    /// Commits `operations` as one batch.
+    pub fn batch(&self, operations: Vec<BatchOperation>) -> Result<()> {
+        self.run(Operation::Batch { operations })?;
+        Ok(())
+    }
 }
 
 impl Engine for LiliaDb {
     fn info(&self) -> EngineInfo {
         let name = match self.id.as_str() {
-            "lilia-db-ledger" => "lilia-db (v0.2, Durable, ledger)",
-            "lilia-db-nohistory" => "lilia-db (v0.2, Durable, no history)",
-            _ => "lilia-db (v0.2, Durable)",
+            "lilia-ledger" => "LiliaDB (Durable, ledger)",
+            "lilia-nohistory" => "LiliaDB (Durable, no history)",
+            _ => "LiliaDB (Durable)",
         };
         EngineInfo {
             id: self.id.clone(),
             name: name.into(),
-            version: env!("LILIA_BENCH_LILIA_VERSION").split(' ').next().unwrap_or("unknown").to_owned(),
+            version: env!("LILIA_BENCH_LILIA_VERSION").to_owned(),
             sync: std_file_sync(),
         }
     }

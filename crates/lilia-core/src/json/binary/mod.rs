@@ -19,8 +19,6 @@ pub use builder::BinaryDocBuilder;
 pub use view::{BinaryArrayRef, BinaryObjectRef, BinaryValueRef};
 
 pub const MAGIC: &[u8; 4] = b"LBJ\x01";
-pub const MAGIC_ZSTD: &[u8; 4] = b"LBZ\x02";
-pub const MAGIC_ZSTD_V1: &[u8; 4] = b"LBZ\x01";
 
 pub const TAG_NULL: u8 = 0x00;
 pub const TAG_BOOL_FALSE: u8 = 0x01;

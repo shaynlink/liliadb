@@ -449,7 +449,7 @@ fn map_error(error: LiliaError) -> Failure {
     let status = match error.code {
         ErrorCode::InvalidInput => StatusCode::BAD_REQUEST,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
-        ErrorCode::Conflict | ErrorCode::ConstraintViolation => StatusCode::CONFLICT,
+        ErrorCode::Conflict => StatusCode::CONFLICT,
         ErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
         ErrorCode::Unsupported => StatusCode::NOT_IMPLEMENTED,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -1380,12 +1380,12 @@ mod error_mapping_tests {
     use super::*;
 
     #[test]
-    fn constraint_violation_maps_to_conflict_and_keeps_details() {
-        let error = LiliaError::new(ErrorCode::ConstraintViolation, "rejected", false)
-            .details(json!({ "kind": "check", "constraint": "check:accounts" }));
+    fn a_conflict_maps_to_409_and_keeps_its_details() {
+        let error = LiliaError::new(ErrorCode::Conflict, "version conflict", true)
+            .details(json!({ "expected": 3, "found": 5 }));
         let (status, Json(body)) = map_error(error);
         assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["error"]["code"], "CONSTRAINT_VIOLATION");
-        assert_eq!(body["error"]["details"]["kind"], "check");
+        assert_eq!(body["error"]["code"], "CONFLICT");
+        assert_eq!(body["error"]["details"]["found"], 5);
     }
 }

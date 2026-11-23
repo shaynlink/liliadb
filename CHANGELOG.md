@@ -88,6 +88,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `doctor` reports the integrity check and the storage; `ledger prove-*` take no version (the
   current one is proven) and `ledger verify-proof` checks against `--expected-root` or the
   proof's own root.
+- **Conformance** (`tools/conformance`): the Rust surface is `lilia_protocol::execute`
+  (`crates/lilia-protocol/tests/conformance.rs`). The oracle names versions (`"$kv_a1"`)
+  instead of stating SQLite's per-record counters: a version is the engine's sequence number of a
+  write, and a delete has one. An empty batch commits nothing and answers `[]`. The precision
+  suite that rewrote SQLite rows to versions above 2^53 is gone; the `u64` round trips stay
+  tested by the protocol and client codec tests.
+- **`lilia-bench`**: `lilia` is `lilia-db` (`lilia`, `lilia-ledger`, `lilia-nohistory`); the
+  model workloads run the protocol's operations, and analytics is DataFusion over the JSON space.
+  SQLite remains a competitor engine.
 - **`lilia-zk`**: `DocumentWitness` holds a document's `balance`, `age` and salt; its
   `commitment` and `prove` share them, so a proof answers for the commitment published before it
   (commit and prove used to resolve a textual salt differently). `lilia zk prove` takes
@@ -106,6 +115,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `benches/query_jit.rs` (interpreted, JIT single, JIT batch).
 - `docs/benchmarks_comparison.md` and `tools/benchmarks/run_comparative_suite.mjs`, whose analysis
   text was written by hand and contradicted their own tables.
+- **The SQLite engine**: `lilia-storage-sqlite`, `lilia-sqlite-native` (the vendored
+  amalgamation), `lilia-shm`, `lilia-plugin-api` and the `plugins/` (`kv`, `json`, `sql`,
+  `codec`). Every binding runs on `lilia-db`.
+- From `lilia-core`, the modules only the SQLite engine used: aggregation pipelines, index
+  autotuning, content-addressed blobs, value codecs and envelope encryption, field-level
+  encryption (AES-GCM, AES-SIV, Paillier), compression dictionaries, dataflow views, energy and
+  flash-wear heuristics, invertible Bloom filters, the Markov prefetcher, Reed-Solomon parity,
+  rules, sharding, storage tiers, hybrid logical clocks, integrity contracts (`CHECK`,
+  references), the Cranelift JIT, and the old ledger accumulator; with them the
+  `jit` and `zk` features, eight dependencies of the crate and twenty-two of the workspace.
+  `MutationResult` keeps `version` and `deleted`; `BatchOperation::JsonPutHlc` and the
+  `CONSTRAINT_VIOLATION`, `TAMPER_DETECTED` and plugin error codes are gone (as is
+  `LiliaFfiError.ConstraintViolation`). The deletion took `lilia-core` from 125 clippy
+  warnings to 13.
+- `lilia-embed` no longer depends on `lilia-core`'s embedding configuration: `BuiltinModel` and
+  the `Embedder` trait are its own, and its example stores and searches the vectors with
+  `lilia-db`.
 - `lilia` commands retired with SQLite: `backup`, `blob`, `integrity` (references and checks),
   `json create-collection` and `json set-check`, `plugin` and the global `--plugin` (the daemon no
   longer loads plugins), and `zk setup --template` (one circuit).

@@ -47,10 +47,7 @@ where
     D: Fallible + ?Sized,
     D::Error: Source,
 {
-    fn deserialize_with(
-        field: &ArchivedString,
-        _: &mut D,
-    ) -> Result<serde_json::Value, D::Error> {
+    fn deserialize_with(field: &ArchivedString, _: &mut D) -> Result<serde_json::Value, D::Error> {
         serde_json::from_str(field.as_str()).map_err(Source::new)
     }
 }

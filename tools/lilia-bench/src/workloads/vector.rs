@@ -154,27 +154,28 @@ fn search_loop(
 #[cfg(feature = "lilia")]
 mod lilia {
     use lilia_core::{BatchOperation, HnswConfig, VectorElementType, VectorMetric};
+    use lilia_protocol::{Operation, ResponseValue};
 
-    use crate::engines::lilia::{info, Lilia};
-    use crate::engines::Result;
+    use crate::engines::lilia_db::LiliaDb;
+    use crate::engines::{Engine, Result};
     use crate::record::EngineInfo;
 
     const COLLECTION: &str = "embeddings";
 
     pub struct Index {
-        lilia: Lilia,
+        db: LiliaDb,
         dim: u32,
     }
 
     impl Index {
         pub fn open(dir: &std::path::Path, dim: usize) -> Result<Self> {
-            let lilia = Lilia::open("lilia", dir)?;
+            let db = LiliaDb::open("lilia", dir)?;
             let dim = u32::try_from(dim)?;
-            lilia.database().vector_create_index(
-                COLLECTION,
-                HnswConfig { dim, metric: VectorMetric::Cosine, element_type: VectorElementType::Float32, ..HnswConfig::default() },
-            )?;
-            Ok(Self { lilia, dim })
+            db.run(Operation::VectorCreateIndex {
+                collection: COLLECTION.into(),
+                config: HnswConfig { dim, metric: VectorMetric::Cosine, element_type: VectorElementType::Float32, ..HnswConfig::default() },
+            })?;
+            Ok(Self { db, dim })
         }
     }
 
@@ -184,13 +185,13 @@ mod lilia {
 
     impl super::VectorIndex for Index {
         fn info(&self) -> EngineInfo {
-            let mut info = info("lilia");
+            let mut info = self.db.info();
             info.name = "LiliaDB (HNSW, M=16, ef_c=64)".into();
             info
         }
 
         fn insert(&mut self, rows: &[(u64, &[f32])]) -> Result<()> {
-            let ops: Vec<_> = rows
+            let ops = rows
                 .iter()
                 .map(|(id, v)| BatchOperation::VectorSet {
                     collection: COLLECTION.into(),
@@ -200,19 +201,21 @@ mod lilia {
                     vector: bytes(v),
                 })
                 .collect();
-            self.lilia.database().batch(&ops)?;
-            Ok(())
+            self.db.batch(ops)
         }
 
         fn search(&mut self, query: &[f32], k: usize) -> Result<Vec<u64>> {
-            let hits = self.lilia.database().vector_search(
-                COLLECTION,
-                &bytes(query),
-                self.dim,
-                VectorElementType::Float32,
-                VectorMetric::Cosine,
-                u32::try_from(k)?,
-            )?;
+            let search = Operation::VectorSearch {
+                collection: COLLECTION.into(),
+                vector: bytes(query),
+                dim: self.dim,
+                element_type: VectorElementType::Float32,
+                metric: VectorMetric::Cosine,
+                limit: u32::try_from(k)?,
+            };
+            let ResponseValue::VectorHits(hits) = self.db.run(search)? else {
+                return Err("vector_search answered another response".into());
+            };
             hits.iter()
                 .map(|hit| hit.id.strip_prefix('v').and_then(|n| n.parse().ok()).ok_or_else(|| format!("unexpected vector id {}", hit.id).into()))
                 .collect()

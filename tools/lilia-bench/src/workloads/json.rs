@@ -153,50 +153,57 @@ fn timed(
 #[cfg(feature = "lilia")]
 mod lilia {
     use lilia_core::BatchOperation;
+    use lilia_protocol::{Operation, ResponseValue};
     use serde_json::Value;
 
-    use crate::engines::lilia::{info, Lilia};
-    use crate::engines::Result;
+    use crate::engines::lilia_db::LiliaDb;
+    use crate::engines::{Engine, Result};
     use crate::record::EngineInfo;
 
     const SPACE: &str = "docs";
 
-    pub struct Store(Lilia);
+    pub struct Store(LiliaDb);
 
     impl Store {
         pub fn open(dir: &std::path::Path) -> Result<Self> {
-            let lilia = Lilia::open("lilia", dir)?;
-            lilia.database().create_json_index(SPACE, "by_city", "$.city")?;
-            Ok(Self(lilia))
+            let db = LiliaDb::open("lilia", dir)?;
+            db.run(Operation::JsonCreateIndex { space: SPACE.into(), name: "by_city".into(), path: "$.city".into(), filter: None })?;
+            Ok(Self(db))
         }
     }
 
     impl super::DocStore for Store {
         fn info(&self) -> EngineInfo {
-            info("lilia")
+            self.0.info()
         }
 
         fn put(&mut self, docs: &[(String, Value)]) -> Result<()> {
-            let ops: Vec<_> = docs
+            let ops = docs
                 .iter()
                 .map(|(id, value)| BatchOperation::JsonPut { space: SPACE.into(), id: id.clone(), value: value.clone(), if_version: None })
                 .collect();
-            self.0.database().batch(&ops)?;
-            Ok(())
+            self.0.batch(ops)
         }
 
         fn get(&mut self, id: &str) -> Result<bool> {
-            Ok(self.0.database().json_get(SPACE, id)?.is_some())
+            let found = self.0.run(Operation::JsonGet { space: SPACE.into(), id: id.to_owned() })?;
+            Ok(matches!(found, ResponseValue::Json(Some(_))))
         }
 
         fn extract_name(&mut self, id: &str) -> Result<Option<String>> {
-            Ok(self.0.database().json_extract(SPACE, id, "$.user.name")?.and_then(|v| v.as_str().map(str::to_owned)))
+            let path = "$.user.name".to_owned();
+            Ok(match self.0.run(Operation::JsonExtract { space: SPACE.into(), id: id.to_owned(), path })? {
+                ResponseValue::JsonExtracted(Some(Value::String(name))) => Some(name),
+                _ => None,
+            })
         }
 
         fn find_city(&mut self, city: &str, limit: usize) -> Result<usize> {
-            let mut query = serde_json::Map::new();
-            query.insert("city".into(), Value::String(city.to_owned()));
-            Ok(self.0.database().json_find(SPACE, &query, None, u32::try_from(limit)?)?.len())
+            let query = serde_json::json!({ "by_city": city });
+            Ok(match self.0.run(Operation::JsonFind { space: SPACE.into(), query, after: None, limit: u32::try_from(limit)? })? {
+                ResponseValue::JsonPage(documents) => documents.len(),
+                other => return Err(format!("json_find answered {}", other.name()).into()),
+            })
         }
     }
 }

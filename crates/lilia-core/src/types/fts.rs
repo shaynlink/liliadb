@@ -31,25 +31,6 @@ pub struct FtsFuzzyHit {
     pub matched_terms: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FtsFuzzyOptions {
-    pub max_distance: u8,
-    pub prefix: bool,
-    pub damerau: bool,
-    pub limit: u32,
-}
-
-impl Default for FtsFuzzyOptions {
-    fn default() -> Self {
-        Self {
-            max_distance: 1,
-            prefix: true,
-            damerau: true,
-            limit: 10,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct FtsPhoneticHit {
@@ -61,10 +42,3 @@ pub struct FtsPhoneticHit {
     pub phonetic_codes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum PhoneticAlgorithm {
-    Soundex,
-    DoubleMetaphone,
-    #[default]
-    All,
-}

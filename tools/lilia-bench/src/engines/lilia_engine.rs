@@ -32,7 +32,7 @@ impl Engine for LiliaEngine {
         EngineInfo {
             id: self.id.clone(),
             name: if balanced { "lilia-engine (v0.2, Balanced)" } else { "lilia-engine (v0.2, Durable)" }.into(),
-            version: env!("LILIA_BENCH_LILIA_VERSION").split(' ').next().unwrap_or("unknown").to_owned(),
+            version: env!("LILIA_BENCH_LILIA_VERSION").to_owned(),
             sync: if balanced && cfg!(any(target_os = "macos", target_os = "ios")) { SyncPrimitive::Barrier } else { std_file_sync() },
         }
     }

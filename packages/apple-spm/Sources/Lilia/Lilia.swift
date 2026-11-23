@@ -709,14 +709,16 @@ public protocol LiliaDatabaseProtocol : AnyObject {
     func jsonDropIndexSync(space: String, name: String) throws  -> Bool
     
     /**
-     * The documents whose indexes hold the values of `query_json` (an object of index names and
-     * values), after `after_id`, at most `limit` (every one when 0).
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
      */
     func jsonFind(space: String, queryJson: String, afterId: String?, limit: UInt32) async throws  -> [FfiJsonEntry]
     
     /**
-     * The documents whose indexes hold the values of `query_json` (an object of index names and
-     * values), after `after_id`, at most `limit` (every one when 0).
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
      */
     func jsonFindSync(space: String, queryJson: String, afterId: String?, limit: UInt32) throws  -> [FfiJsonEntry]
     
@@ -1645,8 +1647,9 @@ open func jsonDropIndexSync(space: String, name: String)throws  -> Bool {
 }
     
     /**
-     * The documents whose indexes hold the values of `query_json` (an object of index names and
-     * values), after `after_id`, at most `limit` (every one when 0).
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
      */
 open func jsonFind(space: String, queryJson: String, afterId: String?, limit: UInt32)async throws  -> [FfiJsonEntry] {
     return
@@ -1666,8 +1669,9 @@ open func jsonFind(space: String, queryJson: String, afterId: String?, limit: UI
 }
     
     /**
-     * The documents whose indexes hold the values of `query_json` (an object of index names and
-     * values), after `after_id`, at most `limit` (every one when 0).
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
      */
 open func jsonFindSync(space: String, queryJson: String, afterId: String?, limit: UInt32)throws  -> [FfiJsonEntry] {
     return try  FfiConverterSequenceTypeFfiJsonEntry.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
@@ -4119,8 +4123,6 @@ public enum LiliaFfiError {
     )
     case Conflict(String
     )
-    case ConstraintViolation(String
-    )
     case Closed(String
     )
     case Timeout(String
@@ -4157,19 +4159,16 @@ public struct FfiConverterTypeLiliaFfiError: FfiConverterRustBuffer {
         case 4: return .Conflict(
             try FfiConverterString.read(from: &buf)
             )
-        case 5: return .ConstraintViolation(
+        case 5: return .Closed(
             try FfiConverterString.read(from: &buf)
             )
-        case 6: return .Closed(
+        case 6: return .Timeout(
             try FfiConverterString.read(from: &buf)
             )
-        case 7: return .Timeout(
+        case 7: return .Unsupported(
             try FfiConverterString.read(from: &buf)
             )
-        case 8: return .Unsupported(
-            try FfiConverterString.read(from: &buf)
-            )
-        case 9: return .Generic(
+        case 8: return .Generic(
             try FfiConverterString.read(from: &buf)
             )
 
@@ -4204,28 +4203,23 @@ public struct FfiConverterTypeLiliaFfiError: FfiConverterRustBuffer {
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .ConstraintViolation(v1):
+        case let .Closed(v1):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Closed(v1):
+        case let .Timeout(v1):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Timeout(v1):
+        case let .Unsupported(v1):
             writeInt(&buf, Int32(7))
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Unsupported(v1):
-            writeInt(&buf, Int32(8))
-            FfiConverterString.write(v1, into: &buf)
-            
-        
         case let .Generic(v1):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(8))
             FfiConverterString.write(v1, into: &buf)
             
         }
@@ -5075,10 +5069,10 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_drop_index_sync() != 39824) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_find() != 19143) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_find() != 47533) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_find_sync() != 41258) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_find_sync() != 65322) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_get() != 18997) {

@@ -131,36 +131,50 @@ pub fn run(engine: &str, settings: &Settings, emit: &mut dyn FnMut(Line)) -> Res
 #[cfg(feature = "lilia")]
 mod lilia {
     use lilia_core::BatchOperation;
-    use lilia_storage_sqlite::{doc, Aggregate, ColumnType, ColumnarTableSpec};
+    use lilia_protocol::{Operation, ResponseValue};
     use serde_json::json;
 
     use super::{age, amount, city, Query};
-    use crate::engines::lilia::{info, Lilia};
-    use crate::engines::Result;
+    use crate::engines::lilia_db::LiliaDb;
+    use crate::engines::{Engine, Result};
     use crate::record::EngineInfo;
 
-    pub struct Events(Lilia);
+    /// The queries over the JSON space `events`, whose fields the JSON functions read.
+    const fn sql(query: Query) -> &'static str {
+        match query {
+            Query::FilterAggregate => {
+                "SELECT count(*), sum(json_get_float(value, 'amount')), avg(json_get_float(value, 'amount')) \
+                 FROM events WHERE json_get_int(value, 'age') > 40"
+            }
+            Query::GroupBy => {
+                "SELECT json_get_str(value, 'city') AS city, count(*), avg(json_get_float(value, 'amount')) \
+                 FROM events GROUP BY json_get_str(value, 'city')"
+            }
+        }
+    }
+
+    pub struct Events(LiliaDb);
 
     impl Events {
         pub fn open(dir: &std::path::Path) -> Result<Self> {
-            Ok(Self(Lilia::open("lilia", dir)?))
+            Ok(Self(LiliaDb::open("lilia", dir)?))
         }
     }
 
     impl super::Analytic for Events {
         fn info(&self) -> EngineInfo {
-            info("lilia")
+            self.0.info()
         }
 
         fn modes(&self) -> Vec<&'static str> {
-            vec!["aggregation pipeline (JSON)", "columnar (DataFusion)"]
+            vec!["SQL over JSON (DataFusion)"]
         }
 
         fn load(&mut self, rows: u64) -> Result<()> {
             let mut start = 0;
             while start < rows {
                 let end = (start + 1_000).min(rows);
-                let ops: Vec<_> = (start..end)
+                let ops = (start..end)
                     .map(|i| BatchOperation::JsonPut {
                         space: "events".into(),
                         id: format!("e{i:010}"),
@@ -168,49 +182,23 @@ mod lilia {
                         if_version: None,
                     })
                     .collect();
-                self.0.database().batch(&ops)?;
+                self.0.batch(ops)?;
                 start = end;
             }
             Ok(())
         }
 
-        fn prepare(&mut self, mode: usize) -> Result<bool> {
-            if mode == 0 {
-                return Ok(false);
-            }
-            self.0.database().analytics()?.create_table(
-                ColumnarTableSpec::json("events", "events")
-                    .column("age", "$.age", ColumnType::Int64)
-                    .column("city", "$.city", ColumnType::Utf8)
-                    .column("amount", "$.amount", ColumnType::Float64),
-            )?;
-            Ok(true)
+        fn prepare(&mut self, _mode: usize) -> Result<bool> {
+            Ok(false)
         }
 
-        fn run(&mut self, mode: usize, query: Query) -> Result<u64> {
-            let db = self.0.database();
-            if mode == 1 {
-                let result = db.analytics()?.query_json(query.sql())?;
-                return Ok(match query {
-                    Query::FilterAggregate => result.rows.first().and_then(|r| r.first()).and_then(serde_json::Value::as_u64).unwrap_or(0),
-                    Query::GroupBy => result.rows.len() as u64,
-                });
-            }
+        fn run(&mut self, _mode: usize, query: Query) -> Result<u64> {
+            let ResponseValue::Sql(result) = self.0.run(Operation::SqlQuery { sql: sql(query).to_owned(), params: Vec::new() })? else {
+                return Err("sql_query answered another response".into());
+            };
             Ok(match query {
-                Query::FilterAggregate => db
-                    .aggregate_json("events")
-                    .filter(doc! { "age": { "$gt": 40 } })
-                    .aggregate_all(vec![Aggregate::count("n"), Aggregate::sum("amount", "total"), Aggregate::avg("amount", "mean")])
-                    .execute()?
-                    .first()
-                    .and_then(|r| r.get("n"))
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0),
-                Query::GroupBy => db
-                    .aggregate_json("events")
-                    .group_by("city", vec![Aggregate::count("n"), Aggregate::avg("amount", "mean")])
-                    .execute()?
-                    .len() as u64,
+                Query::FilterAggregate => result.rows.first().and_then(|r| r.first()).and_then(serde_json::Value::as_u64).unwrap_or(0),
+                Query::GroupBy => result.rows.len() as u64,
             })
         }
     }

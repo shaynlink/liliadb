@@ -7,8 +7,7 @@ fn main() {
     let root = Path::new(&manifest_dir);
     let workspace = root.join("../../Cargo.toml");
     let lock = root.join("Cargo.lock");
-    let sqlite_header = root.join("../../crates/lilia-sqlite-native/sqlite3/sqlite3.h");
-    for path in [&workspace, &lock, &sqlite_header] {
+    for path in [&workspace, &lock] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
     println!("cargo:rerun-if-env-changed=LILIA_BENCH_ROCKSDB_FULLFSYNC");
@@ -21,14 +20,7 @@ fn main() {
             Some(line.split('"').nth(1)?.to_owned())
         })
         .unwrap_or_else(|| "unknown".into());
-    let sqlite = std::fs::read_to_string(&sqlite_header)
-        .ok()
-        .and_then(|text| {
-            let line = text.lines().find(|l| l.starts_with("#define SQLITE_VERSION "))?.to_owned();
-            Some(line.split('"').nth(1)?.to_owned())
-        })
-        .unwrap_or_else(|| "unknown".into());
-    println!("cargo:rustc-env=LILIA_BENCH_LILIA_VERSION={lilia} (SQLite {sqlite})");
+    println!("cargo:rustc-env=LILIA_BENCH_LILIA_VERSION={lilia}");
 
     let locked = std::fs::read_to_string(&lock).unwrap_or_default();
     for (crate_name, var) in [

@@ -3,7 +3,7 @@
 //! through these conversions, so a batch means the same thing in each of them.
 
 use lilia_core::crdt::LwwJsonDocument;
-use lilia_core::{BatchOperation, BinaryDoc, BitemporalInterval, MutationResult, StorageTier};
+use lilia_core::{BatchOperation, BinaryDoc, BitemporalInterval, MutationResult};
 
 use crate::batch::{Batch, Outcome, Write};
 use crate::bitemporal::BitemporalWrite;
@@ -38,10 +38,6 @@ pub fn results(outcomes: &[Outcome]) -> Vec<MutationResult> {
         .map(|outcome| MutationResult {
             version: outcome.version,
             deleted: outcome.deleted,
-            tier: StorageTier::Disk,
-            buffered: false,
-            hlc: None,
-            conflict_detected: None,
         })
         .collect()
 }
@@ -253,11 +249,6 @@ fn write(operation: &BatchOperation, now: i64) -> Result<Write> {
                 .map_err(|e| Error::InvalidArgument(format!("merged CRDT state: {e}")))?;
             Write::Crdt(CrdtWrite::DocMerge { space, id, state })
         }
-        BatchOperation::JsonPutHlc { .. } => {
-            return Err(Error::Unsupported(
-                "hybrid logical clocks and their conflicts are not available in v0.2".into(),
-            ))
-        }
         BatchOperation::BitemporalPut {
             space,
             id,
@@ -367,20 +358,6 @@ mod tests {
             system_time: None,
         };
         assert!(matches!(batch(&[refused]), Err(Error::InvalidArgument(_))));
-        let hlc = BatchOperation::JsonPutHlc {
-            space: "s".into(),
-            id: "i".into(),
-            value: json!({}),
-            hlc: None,
-            parent_hlc: None,
-            strategy: lilia_core::hlc::ConflictResolutionStrategy::default(),
-        };
-        let error = batch(&[hlc]).unwrap_err();
-        assert!(matches!(error, Error::Unsupported(_)));
-        assert_eq!(
-            lilia_core::LiliaError::from(error).code,
-            lilia_core::ErrorCode::Unsupported
-        );
     }
 
     #[test]

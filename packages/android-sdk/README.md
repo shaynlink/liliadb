@@ -456,7 +456,6 @@ message payload:
 | `LiliaFfiException.InvalidInput` | Malformed JSON, invalid key length, bad arguments                    |
 | `LiliaFfiException.NotFound`     | Requested entry does not exist                                       |
 | `LiliaFfiException.Conflict`     | Optimistic concurrency or busy conflict                              |
-| `LiliaFfiException.ConstraintViolation` | A write a policy or constraint refuses                        |
 | `LiliaFfiException.Closed`       | The database is closed                                               |
 | `LiliaFfiException.Timeout`      | `close` still waiting for calls after its timeout                    |
 | `LiliaFfiException.Unsupported`  | An operation this engine version does not have                       |
