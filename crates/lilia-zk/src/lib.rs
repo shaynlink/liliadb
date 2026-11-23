@@ -9,6 +9,7 @@
 )]
 
 pub mod circuits;
+pub mod document;
 pub mod error;
 pub mod keys;
 pub mod poseidon;
@@ -17,6 +18,7 @@ pub mod prover;
 pub mod verifier;
 
 pub use circuits::SoldeAgePredicateCircuit;
+pub use document::DocumentWitness;
 pub use error::{Result, ZkError};
 pub use keys::{
     default_solde_age_keys, deserialize_pk, deserialize_vk, generate_circuit_keys, hex_to_vk,

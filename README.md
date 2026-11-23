@@ -89,22 +89,24 @@ npm install @liliadb/wasm
 
 ### CLI (Command-Line Interface)
 ```sh
-# Initialize database and insert JSON document
-lilia --database ./demo.lilia json put users ada '{"name":"Ada Lovelace","active":true}' --output json
+# Create the database (a directory) and put a JSON document
+lilia --database ./demo.lilia json put users ada '{"name":"Ada Lovelace","balance":1500,"age":25}' --output json
 
-# Query document
+# Read it back, index a field, find by it
 lilia --database ./demo.lilia json get users ada --output json
+lilia --database ./demo.lilia json create-index users by_age '$.age'
+lilia --database ./demo.lilia json find users '{"by_age": 25}'
 
-# Query using SQL analytics
-lilia --database ./demo.lilia sql "SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'users'"
+# Read-only SQL: every JSON space is a table
+lilia --database ./demo.lilia sql "SELECT id, value->>'name' AS name FROM users WHERE json_get_int(value, 'age') > \$1" --param 18
 
-# Embedded Zero-Knowledge Proof (prove balance >= 1000 and age >= 18 without revealing data)
-lilia --database ./demo.lilia zk commit users ada '{"balance": 1500, "age": 25}'
-lilia --database ./demo.lilia zk prove users ada --min-balance 1000 --min-age 18 --out-proof proof.json
+# Zero-knowledge proof: balance >= 1000 and age >= 18, without revealing either
+lilia --database ./demo.lilia zk commit users ada
+lilia --database ./demo.lilia zk prove users ada --condition "balance >= 1000 AND age >= 18" --output json > proof.json
 lilia zk verify --proof proof.json
 
-# Create atomic online backup snapshot
-lilia --database ./demo.lilia backup ./snapshots/demo.lilia --output json
+# Check the database and show its storage
+lilia --database ./demo.lilia doctor --deep
 ```
 
 ### Node.js / Bun / Deno SDK (`@liliadb/node`)

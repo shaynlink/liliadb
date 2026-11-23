@@ -78,6 +78,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   benchmark numbers.
 - JavaScript benchmark drivers moved out of the published `@liliadb/node` package into
   `tools/benchmarks/sdk/`, one process per surface, with read workloads added.
+- **`lilia-cli`** runs on `lilia-db`: the commands the protocol has are operations of
+  `lilia_protocol::execute`, as for the daemon and the bindings, and print what their response
+  carries; bitemporal reads and the ledger use the database itself. The database is a directory;
+  `--durability`, `--profile`, `--ledger`, `--history-retention-ms` and `--undo-depth` open it
+  (and are passed on to `lilia daemon start`). New: `json find`, `json create-index`,
+  `json drop-index`, `json indexes`, `graph edge --weight`, `vector create-index --dim`.
+  Directions are `outgoing`, `incoming`, `both`; element types `float32`, `int8`, `bit`.
+  `doctor` reports the integrity check and the storage; `ledger prove-*` take no version (the
+  current one is proven) and `ledger verify-proof` checks against `--expected-root` or the
+  proof's own root.
+- **`lilia-zk`**: `DocumentWitness` holds a document's `balance`, `age` and salt; its
+  `commitment` and `prove` share them, so a proof answers for the commitment published before it
+  (commit and prove used to resolve a textual salt differently). `lilia zk prove` takes
+  `--condition "balance >= 1000 AND age >= 18"` and refuses other claims.
 
 ### Fixed
 - **`lilia-engine`**: a run moved to the next level unchanged had its file deleted once the moved
@@ -92,6 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `benches/query_jit.rs` (interpreted, JIT single, JIT batch).
 - `docs/benchmarks_comparison.md` and `tools/benchmarks/run_comparative_suite.mjs`, whose analysis
   text was written by hand and contradicted their own tables.
+- `lilia` commands retired with SQLite: `backup`, `blob`, `integrity` (references and checks),
+  `json create-collection` and `json set-check`, `plugin` and the global `--plugin` (the daemon no
+  longer loads plugins), and `zk setup --template` (one circuit).
 
 ---
 

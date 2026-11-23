@@ -16,12 +16,12 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
-use crate::args::DaemonCommand;
+use crate::args::{DaemonCommand, OpenArgs};
 
 pub(crate) fn execute(
     command: DaemonCommand,
     database: &Path,
-    plugin: Option<&Path>,
+    options: &OpenArgs,
 ) -> anyhow::Result<Value> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -34,7 +34,7 @@ pub(crate) fn execute(
         } => {
             let endpoint = endpoint.unwrap_or_else(|| default_endpoint(database));
             let token_file = token_file.unwrap_or_else(|| default_token(database));
-            start(database, &endpoint, &token_file, foreground, plugin)?;
+            start(database, &endpoint, &token_file, foreground, options)?;
             if foreground {
                 return Ok(json!({"started": true, "foreground": true}));
             }
@@ -82,7 +82,7 @@ fn start(
     endpoint: &Path,
     token_file: &Path,
     foreground: bool,
-    plugin: Option<&Path>,
+    options: &OpenArgs,
 ) -> anyhow::Result<()> {
     let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
         "lilia-daemon.exe"
@@ -103,10 +103,8 @@ fn start(
         .arg(endpoint)
         .args(["--token-file"])
         .arg(token_file)
+        .args(options.daemon_arguments())
         .stdin(Stdio::null());
-    if let Some(plugin) = plugin {
-        command.args(["--plugin"]).arg(plugin);
-    }
     if foreground {
         let status = command.status()?;
         if !status.success() {

@@ -874,7 +874,7 @@ Private Document (e.g. {"balance": 3500, "age": 28})
 - In CLI:
   ```sh
   lilia --database ./app.lilia zk commit users alice
-  lilia --database ./app.lilia zk prove users alice --condition "balance >= 1000 AND age >= 18" --out-proof proof.json
+  lilia --database ./app.lilia zk prove users alice --condition "balance >= 1000 AND age >= 18" --output json > proof.json
   lilia zk verify --proof proof.json
   ```
 

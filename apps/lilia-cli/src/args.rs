@@ -1,18 +1,72 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use lilia_protocol::OpenOptions;
 
 #[derive(Debug, Parser)]
 #[command(name = "lilia", version, about = "Local-first multimodel database")]
 pub(crate) struct Arguments {
     #[arg(long, global = true, default_value = "human")]
     pub(crate) output: Output,
+    /// Directory of the database; created if missing.
     #[arg(long, global = true, default_value = "lilia.lilia")]
     pub(crate) database: PathBuf,
-    #[arg(long = "plugin", global = true)]
-    pub(crate) plugin: Option<PathBuf>,
+    #[command(flatten)]
+    pub(crate) open: OpenArgs,
     #[command(subcommand)]
     pub(crate) command: Command,
+}
+
+/// How the database opens: the options of the daemon and the bindings.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct OpenArgs {
+    /// `durable` (default), `balanced` or `performance`.
+    #[arg(long, global = true)]
+    pub(crate) durability: Option<String>,
+    /// `server` (default), `mobile` or `constrained`.
+    #[arg(long, global = true)]
+    pub(crate) profile: Option<String>,
+    /// Keep a tamper-evident ledger of every record write; a database that keeps one must
+    /// always be opened with it.
+    #[arg(long, global = true)]
+    pub(crate) ledger: bool,
+    /// How long old versions stay readable, in milliseconds (a week by default).
+    #[arg(long, global = true)]
+    pub(crate) history_retention_ms: Option<u64>,
+    /// Commits that can be undone (none by default).
+    #[arg(long, global = true, default_value_t = 0)]
+    pub(crate) undo_depth: u32,
+}
+
+impl OpenArgs {
+    pub(crate) fn options(&self) -> OpenOptions {
+        OpenOptions {
+            durability: self.durability.clone(),
+            profile: self.profile.clone(),
+            ledger: self.ledger,
+            history_retention_ms: self.history_retention_ms,
+            undo_depth: self.undo_depth,
+        }
+    }
+
+    /// The same options as `lilia-daemon` arguments.
+    pub(crate) fn daemon_arguments(&self) -> Vec<String> {
+        let mut arguments = Vec::new();
+        if let Some(durability) = &self.durability {
+            arguments.extend(["--durability".to_owned(), durability.clone()]);
+        }
+        if let Some(profile) = &self.profile {
+            arguments.extend(["--profile".to_owned(), profile.clone()]);
+        }
+        if self.ledger {
+            arguments.push("--ledger".to_owned());
+        }
+        if let Some(retention) = self.history_retention_ms {
+            arguments.extend(["--history-retention-ms".to_owned(), retention.to_string()]);
+        }
+        arguments.extend(["--undo-depth".to_owned(), self.undo_depth.to_string()]);
+        arguments
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -22,6 +76,7 @@ pub(crate) enum Output {
     Jsonl,
 }
 
+/// How a key, value or cursor given on the command line encodes its bytes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub(crate) enum Encoding {
     #[default]
@@ -32,17 +87,31 @@ pub(crate) enum Encoding {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    Init,
-    Doctor {
-        #[arg(long)]
-        deep: bool,
-    },
-    Backup {
-        destination: PathBuf,
-    },
+    /// The database's daemon, which serves it to other processes.
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
+    },
+    /// Zero-knowledge proofs on documents.
+    Zk {
+        #[command(subcommand)]
+        command: ZkCommand,
+    },
+    #[command(flatten)]
+    Database(DatabaseCommand),
+}
+
+/// The commands that open the database.
+#[derive(Debug, Subcommand)]
+pub(crate) enum DatabaseCommand {
+    /// Create the database if missing.
+    Init,
+    /// Check the database's integrity and show its storage.
+    Doctor {
+        /// Read every stored entry back (and verify the ledger strictly) rather than checking
+        /// the ledger alone.
+        #[arg(long)]
+        deep: bool,
     },
     Kv {
         #[command(subcommand)]
@@ -52,17 +121,13 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: JsonCommand,
     },
-    Batch {
-        file: PathBuf,
-    },
+    /// Commit the operations of a JSON file atomically.
+    Batch { file: PathBuf },
+    /// Run a read-only SQL query; `--param` binds `$1`, `$2`... (JSON, or text).
     Sql {
         query: String,
         #[arg(long = "param")]
         params: Vec<String>,
-    },
-    Plugin {
-        #[command(subcommand)]
-        command: PluginCommand,
     },
     Graph {
         #[command(subcommand)]
@@ -88,21 +153,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: CrdtCommand,
     },
-    Blob {
-        #[command(subcommand)]
-        command: BlobCommand,
-    },
-    Integrity {
-        #[command(subcommand)]
-        command: IntegrityCommand,
-    },
     Ledger {
         #[command(subcommand)]
         command: LedgerCommand,
-    },
-    Zk {
-        #[command(subcommand)]
-        command: ZkCommand,
     },
 }
 
@@ -137,8 +190,6 @@ pub(crate) enum KvCommand {
         key: String,
         #[arg(long, default_value = "text")]
         encoding: Encoding,
-        #[arg(long)]
-        key_encoding: Option<Encoding>,
     },
     Set {
         namespace: String,
@@ -148,6 +199,8 @@ pub(crate) enum KvCommand {
         if_version: Option<u64>,
         #[arg(long)]
         expires_at_ms: Option<i64>,
+        /// Encoding of the key and the value, unless `--key-encoding` or `--value-encoding`
+        /// says otherwise.
         #[arg(long, default_value = "text")]
         encoding: Encoding,
         #[arg(long)]
@@ -162,19 +215,16 @@ pub(crate) enum KvCommand {
         if_version: Option<u64>,
         #[arg(long, default_value = "text")]
         encoding: Encoding,
-        #[arg(long)]
-        key_encoding: Option<Encoding>,
     },
     Scan {
         namespace: String,
+        /// Starts after this key.
         #[arg(long)]
         after: Option<String>,
         #[arg(long, default_value_t = 100)]
         limit: u32,
         #[arg(long, default_value = "text")]
         encoding: Encoding,
-        #[arg(long)]
-        key_encoding: Option<Encoding>,
     },
 }
 
@@ -204,101 +254,78 @@ pub(crate) enum JsonCommand {
         #[arg(long, default_value_t = 100)]
         limit: u32,
     },
-    CreateCollection {
+    /// Documents whose fields (paths, or index names) equal the values of a JSON object.
+    Find {
         space: String,
+        query: String,
         #[arg(long)]
-        check: Option<String>,
+        after: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
     },
-    SetCheck {
+    /// Index the values of `path` (`$.a.b`, or an expression) under `name`.
+    CreateIndex {
         space: String,
+        name: String,
+        path: String,
+        /// Index only the documents this expression holds for.
         #[arg(long)]
-        check: Option<String>,
+        filter: Option<String>,
     },
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum IntegrityCommand {
-    AddGraphRef {
-        graph: String,
-        target: String,
-        #[arg(long)]
-        name: Option<String>,
-        #[arg(long, default_value = "cascade")]
-        on_delete: String,
-        #[arg(long)]
-        required: bool,
-    },
-    AddKvRef {
-        namespace: String,
-        target: String,
-        #[arg(long)]
-        name: Option<String>,
-        #[arg(long, default_value = "restrict")]
-        on_delete: String,
-        #[arg(long)]
-        prefix_separator: Option<char>,
-    },
-    DropRef {
+    DropIndex {
+        space: String,
         name: String,
     },
-    ListRefs,
-    ListChecks,
+    Indexes {
+        space: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum LedgerCommand {
-    /// Show the current 32-byte cryptographic Merkle Root (BLAKE3) of the database
+    /// The Merkle root of the ledger.
     Root,
-    /// Show the latest commit block recorded in the Merkle Ledger
+    /// The latest commit of the ledger.
     Latest,
-    /// Export a cryptographic Inclusion Proof for a JSON document
-    ProveDoc {
-        space: String,
-        id: String,
-        #[arg(long)]
-        version: Option<u64>,
-    },
-    /// Export a cryptographic Inclusion Proof for a KV key
+    /// A proof that the current version of a JSON document is in the ledger.
+    ProveDoc { space: String, id: String },
+    /// A proof that the current version of a key is in the ledger.
     ProveKv {
         namespace: String,
         key: String,
         #[arg(long, default_value = "text")]
         encoding: Encoding,
-        #[arg(long)]
-        version: Option<u64>,
     },
-    /// Export a cryptographic Inclusion Proof for a commit sequence number
-    ProveCommit { commit_seq: u64 },
-    /// Mathematically verify a JSON inclusion proof against the current root or an expected root
+    /// A proof that commit `sequence` (from 1) is in the ledger.
+    ProveCommit { sequence: u64 },
+    /// Verify a proof file against the current root, or `--expected-root` (hex).
     VerifyProof {
         proof_file: PathBuf,
         #[arg(long)]
         expected_root: Option<String>,
     },
-    /// Verify the entire Merkle DAG and live records, checking for tampering or corruption
+    /// Verify the whole ledger against the live records.
     VerifyDb,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ZkCommand {
-    /// Generate a cryptographic proving key (PK) and verifying key (VK) for circuit templates
+    /// Generate the proving and verifying keys of the `solde_age` circuit.
     Setup {
-        #[arg(long, default_value = "solde_age")]
-        template: String,
         #[arg(long)]
         out_pk: PathBuf,
         #[arg(long)]
         out_vk: PathBuf,
     },
-    /// Export the Poseidon cryptographic commitment anchor for a document
+    /// The Poseidon commitment to a document's `balance`, `age` and salt.
     Commit {
         space: String,
         id: String,
         #[arg(long)]
         salt: Option<String>,
     },
-    /// Generate a Zero-Knowledge Proof certifying a condition (e.g. "balance >= 1000 AND age >= 18")
-    /// on a private document without revealing the private values
+    /// Prove a condition on a document without revealing it, such as
+    /// "balance >= 1000 AND age >= 18".
     Prove {
         space: String,
         id: String,
@@ -309,7 +336,7 @@ pub(crate) enum ZkCommand {
         #[arg(long)]
         pk: Option<PathBuf>,
     },
-    /// Verify a Zero-Knowledge Proof mathematically in < 1 ms without seeing private data
+    /// Verify a proof, with the circuit's default keys or `--vk`.
     Verify {
         #[arg(long)]
         proof: PathBuf,
@@ -321,16 +348,16 @@ pub(crate) enum ZkCommand {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub(crate) enum DirectionArg {
     #[default]
-    Outbound,
-    Inbound,
+    Outgoing,
+    Incoming,
     Both,
 }
 
 impl From<DirectionArg> for lilia_core::Direction {
     fn from(arg: DirectionArg) -> Self {
         match arg {
-            DirectionArg::Outbound => Self::Outbound,
-            DirectionArg::Inbound => Self::Inbound,
+            DirectionArg::Outgoing => Self::Outbound,
+            DirectionArg::Incoming => Self::Inbound,
             DirectionArg::Both => Self::Both,
         }
     }
@@ -343,6 +370,7 @@ pub(crate) enum GraphCommand {
         id: String,
         #[arg(long, default_value = "default")]
         kind: String,
+        /// JSON metadata.
         #[arg(long)]
         metadata: Option<String>,
     },
@@ -352,6 +380,8 @@ pub(crate) enum GraphCommand {
         target: String,
         #[arg(long, default_value = "edge")]
         kind: String,
+        #[arg(long, default_value_t = 1.0)]
+        weight: f64,
     },
     Neighbors {
         graph: String,
@@ -426,10 +456,30 @@ impl From<VectorMetricArg> for lilia_core::VectorMetric {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ElementTypeArg {
+    #[default]
+    Float32,
+    Int8,
+    Bit,
+}
+
+impl From<ElementTypeArg> for lilia_core::VectorElementType {
+    fn from(arg: ElementTypeArg) -> Self {
+        match arg {
+            ElementTypeArg::Float32 => Self::Float32,
+            ElementTypeArg::Int8 => Self::Int8,
+            ElementTypeArg::Bit => Self::Bit,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum VectorCommand {
     CreateIndex {
         collection: String,
+        #[arg(long)]
+        dim: u32,
         #[arg(long, default_value_t = 16)]
         m: usize,
         #[arg(long, default_value_t = 64)]
@@ -438,10 +488,8 @@ pub(crate) enum VectorCommand {
         ef_search: usize,
         #[arg(long, value_enum, default_value = "cosine")]
         metric: VectorMetricArg,
-        #[arg(long, default_value = "f32")]
-        element_type: String,
-        #[arg(long, default_value_t = 0)]
-        dim: u32,
+        #[arg(long, value_enum, default_value = "float32")]
+        element_type: ElementTypeArg,
     },
     IndexInfo {
         collection: String,
@@ -449,12 +497,13 @@ pub(crate) enum VectorCommand {
     DropIndex {
         collection: String,
     },
+    /// Store a vector: a JSON array, comma-separated numbers, or base64 of its bytes.
     Set {
         collection: String,
         id: String,
         vector: String,
-        #[arg(long, default_value = "f32")]
-        element_type: String,
+        #[arg(long, value_enum, default_value = "float32")]
+        element_type: ElementTypeArg,
     },
     Get {
         collection: String,
@@ -471,10 +520,12 @@ pub(crate) enum VectorCommand {
         limit: u32,
         #[arg(long, value_enum, default_value = "cosine")]
         metric: VectorMetricArg,
-        #[arg(long, default_value = "f32")]
-        element_type: String,
-        #[arg(long)]
+        #[arg(long, value_enum, default_value = "float32")]
+        element_type: ElementTypeArg,
+        /// Search only the nodes reachable from `<graph>:<node>`.
+        #[arg(long, conflicts_with = "by_json_index")]
         in_graph_neighbors: Option<String>,
+        /// Search only the documents of `<space>:<index>:<value>`.
         #[arg(long)]
         by_json_index: Option<String>,
     },
@@ -498,104 +549,8 @@ pub(crate) enum HybridCommand {
         vector_weight: f64,
         #[arg(long, value_enum, default_value = "cosine")]
         metric: VectorMetricArg,
-        #[arg(long, default_value = "f32")]
-        element_type: String,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum CapabilityArg {
-    Kv,
-    Json,
-    Sql,
-    Document,
-    Graph,
-    Codec,
-}
-
-impl From<CapabilityArg> for lilia_plugin_api::Capability {
-    fn from(arg: CapabilityArg) -> Self {
-        match arg {
-            CapabilityArg::Kv => Self::Kv,
-            CapabilityArg::Json => Self::Json,
-            CapabilityArg::Sql => Self::Sql,
-            CapabilityArg::Document => Self::Document,
-            CapabilityArg::Graph => Self::Graph,
-            CapabilityArg::Codec => Self::Codec,
-        }
-    }
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum PluginCommand {
-    Keygen {
-        #[arg(long, default_value = ".")]
-        out_dir: PathBuf,
-        #[arg(long, default_value = "plugin-signer")]
-        name: String,
-        #[arg(long)]
-        force: bool,
-    },
-    Pack {
-        library: PathBuf,
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        version: String,
-        #[arg(long = "capability", value_enum)]
-        capabilities: Vec<CapabilityArg>,
-        #[arg(long)]
-        engine_requirement: Option<String>,
-        #[arg(long)]
-        target: Option<String>,
-        #[arg(long)]
-        out_dir: Option<PathBuf>,
-    },
-    Sign {
-        package: PathBuf,
-        #[arg(long)]
-        key: String,
-    },
-    Trust {
-        #[command(subcommand)]
-        command: TrustCommand,
-    },
-    Verify {
-        package: PathBuf,
-        #[arg(long = "trusted-key")]
-        trusted_keys: Vec<String>,
-        #[arg(long)]
-        allow_unsigned: bool,
-        /// Explicitly enable development-only plugin policy exceptions.
-        #[arg(long)]
-        development: bool,
-    },
-    Install {
-        package: PathBuf,
-        #[arg(long)]
-        root: Option<PathBuf>,
-        #[arg(long)]
-        force: bool,
-        #[arg(long = "trusted-key")]
-        trusted_keys: Vec<String>,
-        #[arg(long)]
-        allow_unsigned: bool,
-        /// Explicitly enable development-only plugin policy exceptions.
-        #[arg(long)]
-        development: bool,
-    },
-    List {
-        #[arg(long)]
-        root: Option<PathBuf>,
-        #[arg(long)]
-        development: bool,
-    },
-    Remove {
-        installed_name: String,
-        #[arg(long)]
-        root: Option<PathBuf>,
-        #[arg(long)]
-        development: bool,
+        #[arg(long, value_enum, default_value = "float32")]
+        element_type: ElementTypeArg,
     },
 }
 
@@ -690,34 +645,10 @@ pub(crate) enum CrdtJsonCommand {
     },
 }
 
-#[derive(Debug, Subcommand)]
-pub(crate) enum TrustCommand {
-    Add {
-        key: String,
-        #[arg(long)]
-        yes: bool,
-        #[arg(long)]
-        root: Option<PathBuf>,
-        #[arg(long)]
-        development: bool,
-    },
-    List {
-        #[arg(long)]
-        root: Option<PathBuf>,
-        #[arg(long)]
-        development: bool,
-    },
-    Remove {
-        fingerprint: String,
-        #[arg(long)]
-        root: Option<PathBuf>,
-        #[arg(long)]
-        development: bool,
-    },
-}
-
+/// Times are ISO 8601 dates or date-times, or `now`, `infinity`, `-infinity`.
 #[derive(Debug, Subcommand)]
 pub(crate) enum BitempCommand {
+    /// Record a JSON value valid from `--from` to `--to` (inclusive days).
     Put {
         space: String,
         id: String,
@@ -726,9 +657,11 @@ pub(crate) enum BitempCommand {
         vt_from: String,
         #[arg(long = "to")]
         vt_to: String,
+        /// Record it at this transaction time instead of now.
         #[arg(long = "system-time")]
         system_time: Option<String>,
     },
+    /// The value valid at `--for-vt`, as known at `--as-of-tt`.
     Get {
         space: String,
         id: String,
@@ -737,44 +670,22 @@ pub(crate) enum BitempCommand {
         #[arg(long = "for-vt", default_value = "now")]
         for_vt: String,
     },
+    /// Every interval of the entity, as known at `--as-of-tt`.
     Timeline {
         space: String,
         id: String,
         #[arg(long = "as-of-tt", default_value = "now")]
         as_of_tt: String,
     },
-    History {
-        space: String,
-        id: String,
-    },
+    /// Every version ever recorded of the entity.
+    History { space: String, id: String },
+    /// End the entity's validity, over `--from`..`--to` or entirely.
     Delete {
         space: String,
         id: String,
-        #[arg(long = "from")]
+        #[arg(long = "from", requires = "vt_to")]
         vt_from: Option<String>,
-        #[arg(long = "to")]
+        #[arg(long = "to", requires = "vt_from")]
         vt_to: Option<String>,
     },
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum BlobCommand {
-    /// Store a local file in the Content Addressable Storage (CAS)
-    Put {
-        file: PathBuf,
-        #[arg(long)]
-        mime_type: Option<String>,
-    },
-    /// Retrieve a blob by its cryptographic hash
-    Get {
-        hash: String,
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
-    /// Print the local physical file path of a stored blob
-    Path { hash: String },
-    /// Check whether a blob exists in the CAS store
-    Exists { hash: String },
-    /// Trigger atomic garbage collection of orphaned blobs
-    Gc,
 }

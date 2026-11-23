@@ -1,7 +1,7 @@
 mod args;
 mod daemon;
 mod models;
-mod plugins;
+mod zk;
 
 use clap::Parser;
 use serde_json::json;
@@ -33,11 +33,13 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let arguments = Arguments::parse();
     let value = match arguments.command {
-        Command::Plugin { command } => plugins::execute(command, arguments.output)?,
         Command::Daemon { command } => {
-            daemon::execute(command, &arguments.database, arguments.plugin.as_deref())?
+            daemon::execute(command, &arguments.database, &arguments.open)?
         }
-        command => models::execute(command, &arguments.database, arguments.plugin.as_deref())?,
+        Command::Zk { command } => zk::execute(command, &arguments.database, &arguments.open)?,
+        Command::Database(command) => {
+            models::execute(command, &arguments.database, &arguments.open)?
+        }
     };
     print_value(arguments.output, &value)?;
     Ok(())
