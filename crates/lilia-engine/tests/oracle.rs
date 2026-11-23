@@ -17,12 +17,26 @@ fn check_range(db: &Db, model: &Model, rng: &mut Rng) {
     let a = key(rng.below(400));
     let b = key(rng.below(400));
     let (low, high) = if a <= b { (a, b) } else { (b, a) };
-    let start = if rng.below(2) == 0 { Bound::Included(&low[..]) } else { Bound::Excluded(&low[..]) };
-    let end = if rng.below(2) == 0 { Bound::Included(&high[..]) } else { Bound::Excluded(&high[..]) };
-    let got: Vec<(Vec<u8>, Vec<u8>, u64)> =
-        db.range(start, end).unwrap().map(|e| e.unwrap()).map(|e| (e.key.to_vec(), e.value.to_vec(), e.version)).collect();
-    let expected: Vec<(Vec<u8>, Vec<u8>, u64)> =
-        model.range::<[u8], _>((start, end)).map(|(k, (v, version))| (k.clone(), v.clone(), *version)).collect();
+    let start = if rng.below(2) == 0 {
+        Bound::Included(&low[..])
+    } else {
+        Bound::Excluded(&low[..])
+    };
+    let end = if rng.below(2) == 0 {
+        Bound::Included(&high[..])
+    } else {
+        Bound::Excluded(&high[..])
+    };
+    let got: Vec<(Vec<u8>, Vec<u8>, u64)> = db
+        .range(start, end)
+        .unwrap()
+        .map(|e| e.unwrap())
+        .map(|e| (e.key.to_vec(), e.value.to_vec(), e.version))
+        .collect();
+    let expected: Vec<(Vec<u8>, Vec<u8>, u64)> = model
+        .range::<[u8], _>((start, end))
+        .map(|(k, (v, version))| (k.clone(), v.clone(), *version))
+        .collect();
     assert_eq!(got, expected, "range {start:?}..{end:?}");
 }
 
@@ -35,10 +49,18 @@ enum Store {
 
 impl Store {
     fn pool(slots: usize) -> Self {
-        Self::Pool((0..slots).map(|_| Arc::new(MemSlot::default()) as Arc<dyn Slot>).collect())
+        Self::Pool(
+            (0..slots)
+                .map(|_| Arc::new(MemSlot::default()) as Arc<dyn Slot>)
+                .collect(),
+        )
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one randomized run: the operations, then the oracle's checks after each reopen"
+)]
 fn run(seed: u64, operations: u64, background_threads: bool, store: &Store) {
     let mem: Arc<dyn Vfs> = Arc::new(MemVfs::new(seed));
     let vfs = || -> Arc<dyn Vfs> {
@@ -47,7 +69,10 @@ fn run(seed: u64, operations: u64, background_threads: bool, store: &Store) {
             Store::Pool(slots) => Arc::new(PoolVfs::new(slots.clone()).unwrap()),
         }
     };
-    let options = Options { background_threads, ..small_options(Durability::Durable) };
+    let options = Options {
+        background_threads,
+        ..small_options(Durability::Durable)
+    };
     let mut db = Db::open_with(vfs(), "/oracle", options.clone()).unwrap();
     let mut rng = Rng(seed);
     let mut model = Model::new();
@@ -64,7 +89,11 @@ fn run(seed: u64, operations: u64, background_threads: bool, store: &Store) {
                         batch.delete(k.clone());
                         staged.remove(&k);
                     } else {
-                        let value = format!("{op}-{}", "v".repeat(usize::try_from(rng.below(120)).unwrap())).into_bytes();
+                        let value = format!(
+                            "{op}-{}",
+                            "v".repeat(usize::try_from(rng.below(120)).unwrap())
+                        )
+                        .into_bytes();
                         batch.put(k.clone(), value.clone());
                         staged.insert(k, (value, 0));
                     }
@@ -81,9 +110,15 @@ fn run(seed: u64, operations: u64, background_threads: bool, store: &Store) {
             55..=64 => {
                 let k = key(rng.below(400));
                 let current = model.get(&k).map(|(_, v)| *v);
-                let expected = if rng.below(3) == 0 { current.map(|v| v + 1) } else { current };
+                let expected = if rng.below(3) == 0 {
+                    current.map(|v| v + 1)
+                } else {
+                    current
+                };
                 let mut batch = WriteBatch::new();
-                batch.expect(k.clone(), expected).put(k.clone(), format!("cas{op}"));
+                batch
+                    .expect(k.clone(), expected)
+                    .put(k.clone(), format!("cas{op}"));
                 match db.write(batch) {
                     Ok(version) => {
                         assert_eq!(expected, current, "a stale expectation was accepted");
@@ -98,15 +133,24 @@ fn run(seed: u64, operations: u64, background_threads: bool, store: &Store) {
             }
             65..=84 => {
                 let k = key(rng.below(400));
-                let got = db.get_versioned(&k).unwrap().map(|v| (v.value.to_vec(), v.version));
-                assert_eq!(got.as_ref(), model.get(&k), "get {}", String::from_utf8_lossy(&k));
+                let got = db
+                    .get_versioned(&k)
+                    .unwrap()
+                    .map(|v| (v.value.to_vec(), v.version));
+                assert_eq!(
+                    got.as_ref(),
+                    model.get(&k),
+                    "get {}",
+                    String::from_utf8_lossy(&k)
+                );
             }
             85..=91 => check_range(&db, &model, &mut rng),
             92..=94 => {
                 if snapshots.len() < 4 {
                     snapshots.push((db.snapshot(), model.clone()));
                 } else {
-                    let (snapshot, frozen) = snapshots.remove(usize::try_from(rng.below(4)).unwrap());
+                    let (snapshot, frozen) =
+                        snapshots.remove(usize::try_from(rng.below(4)).unwrap());
                     let got: Model = db
                         .range_at(&snapshot, Bound::Unbounded, Bound::Unbounded)
                         .unwrap()
@@ -126,7 +170,13 @@ fn run(seed: u64, operations: u64, background_threads: bool, store: &Store) {
     }
     db.wait_for_compactions().unwrap();
     let all = scan(&db);
-    assert_eq!(all, model.iter().map(|(k, (v, _))| (k.clone(), v.clone())).collect::<BTreeMap<_, _>>());
+    assert_eq!(
+        all,
+        model
+            .iter()
+            .map(|(k, (v, _))| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+    );
 }
 
 #[test]

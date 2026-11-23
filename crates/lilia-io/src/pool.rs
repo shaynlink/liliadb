@@ -44,7 +44,9 @@ pub struct MemSlot {
 impl Slot for MemSlot {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
         let data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
-        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(data.len());
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(data.len());
         let n = buf.len().min(data.len() - start);
         buf[..n].copy_from_slice(&data[start..start + n]);
         Ok(n)
@@ -66,7 +68,11 @@ impl Slot for MemSlot {
     }
 
     fn size(&self) -> io::Result<u64> {
-        Ok(self.data.lock().unwrap_or_else(PoisonError::into_inner).len() as u64)
+        Ok(self
+            .data
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len() as u64)
     }
 
     fn truncate(&self, len: u64) -> io::Result<()> {
@@ -80,11 +86,17 @@ impl Slot for MemSlot {
 }
 
 fn too_large() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, "offset beyond the address space")
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "offset beyond the address space",
+    )
 }
 
 fn not_found(path: &Path) -> io::Error {
-    io::Error::new(io::ErrorKind::NotFound, format!("{} does not exist", path.display()))
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("{} does not exist", path.display()),
+    )
 }
 
 /// What a slot's header says.
@@ -127,7 +139,12 @@ fn write_header(slot: &dyn Slot, generation: u64, path: Option<&Path>) -> io::Re
 fn write_all(slot: &dyn Slot, mut buf: &[u8], mut offset: u64) -> io::Result<()> {
     while !buf.is_empty() {
         match slot.write_at(buf, offset)? {
-            0 => return Err(io::Error::new(io::ErrorKind::WriteZero, "a slot accepted no byte")),
+            0 => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "a slot accepted no byte",
+                ))
+            }
             n => {
                 buf = &buf[n..];
                 offset += n as u64;
@@ -155,7 +172,8 @@ struct State {
 
 impl State {
     fn add_dirs(&mut self, path: &Path) {
-        self.dirs.extend(path.ancestors().skip(1).map(Path::to_path_buf));
+        self.dirs
+            .extend(path.ancestors().skip(1).map(Path::to_path_buf));
     }
 
     /// Releases `slot` once nothing uses it.
@@ -217,7 +235,11 @@ impl PoolVfs {
     ///
     /// As [`PoolVfs::new`].
     pub fn add_slots(&self, slots: Vec<Arc<dyn Slot>>) -> io::Result<()> {
-        let mut table = self.shared.slots.write().unwrap_or_else(PoisonError::into_inner);
+        let mut table = self
+            .shared
+            .slots
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
         let mut state = self.shared.state();
         for slot in slots {
             let index = table.len();
@@ -227,7 +249,10 @@ impl PoolVfs {
                     state.generation = state.generation.max(generation);
                     match state.paths.get(&path).copied() {
                         // A rename interrupted by a crash: the newer claim wins.
-                        Some(other) if read_header(table[other].as_ref())?.map(|h| h.0) > Some(generation) => {
+                        Some(other)
+                            if read_header(table[other].as_ref())?.map(|h| h.0)
+                                > Some(generation) =>
+                        {
                             state.free.push(index);
                         }
                         Some(other) => {
@@ -256,7 +281,11 @@ impl PoolVfs {
     /// Slots in the pool.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.shared.slots.read().unwrap_or_else(PoisonError::into_inner).len()
+        self.shared
+            .slots
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
     }
 
     fn handle(&self, state: &mut State, slot: usize) -> Arc<dyn File> {
@@ -279,7 +308,10 @@ impl Vfs for PoolVfs {
             }
             OpenMode::CreateNew => {
                 if state.paths.contains_key(path) {
-                    return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{} exists", path.display())));
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{} exists", path.display()),
+                    ));
                 }
                 if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                     if !state.dirs.contains(parent) {
@@ -287,7 +319,10 @@ impl Vfs for PoolVfs {
                     }
                 }
                 let slot = state.free.pop().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::StorageFull, "every slot of the storage pool is in use")
+                    io::Error::new(
+                        io::ErrorKind::StorageFull,
+                        "every slot of the storage pool is in use",
+                    )
                 })?;
                 let storage = self.shared.slot(slot);
                 let generation = state.next_generation();
@@ -366,7 +401,10 @@ impl Vfs for PoolVfs {
     fn lock(&self, path: &Path) -> io::Result<Box<dyn LockGuard>> {
         let mut state = self.shared.state();
         if !state.locks.insert(path.to_path_buf()) {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("{} is locked", path.display())));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("{} is locked", path.display()),
+            ));
         }
         Ok(Box::new(PoolLock {
             shared: Arc::clone(&self.shared),
@@ -433,108 +471,4 @@ impl Drop for PoolFile {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn slots(n: usize) -> Vec<Arc<dyn Slot>> {
-        (0..n).map(|_| Arc::new(MemSlot::default()) as Arc<dyn Slot>).collect()
-    }
-
-    fn vfs(slots: &[Arc<dyn Slot>]) -> PoolVfs {
-        PoolVfs::new(slots.to_vec()).unwrap()
-    }
-
-    #[test]
-    fn files_are_created_read_written_and_resized() {
-        let pool = vfs(&slots(4));
-        let dir = Path::new("/db");
-        assert_eq!(pool.open(&dir.join("a"), OpenMode::CreateNew).unwrap_err().kind(), io::ErrorKind::NotFound, "no directory yet");
-        pool.create_dir_all(dir).unwrap();
-        let file = pool.open(&dir.join("a"), OpenMode::CreateNew).unwrap();
-        file.write_all_at(b"hello world", 0).unwrap();
-        file.write_all_at(b"W", 6).unwrap();
-        let mut buf = [0u8; 11];
-        file.read_exact_at(&mut buf, 0).unwrap();
-        assert_eq!(&buf, b"hello World");
-        assert_eq!(file.len().unwrap(), 11);
-        file.set_len(5).unwrap();
-        assert_eq!(file.len().unwrap(), 5);
-        assert_eq!(file.read_at(&mut buf, 5).unwrap(), 0, "end of file");
-        assert_eq!(pool.open(&dir.join("a"), OpenMode::CreateNew).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
-        assert_eq!(pool.open(&dir.join("b"), OpenMode::Read).unwrap_err().kind(), io::ErrorKind::NotFound);
-        assert_eq!(pool.list_dir(dir).unwrap(), ["a"]);
-        assert!(pool.exists(dir).unwrap() && pool.exists(&dir.join("a")).unwrap());
-    }
-
-    #[test]
-    fn a_removed_file_keeps_its_slot_while_it_is_open() {
-        let pool = vfs(&slots(2));
-        pool.create_dir_all(Path::new("/d")).unwrap();
-        let old = pool.open(Path::new("/d/old"), OpenMode::CreateNew).unwrap();
-        old.write_all_at(b"kept", 0).unwrap();
-        pool.remove_file(Path::new("/d/old")).unwrap();
-        assert!(!pool.exists(Path::new("/d/old")).unwrap());
-        let other = pool.open(Path::new("/d/x"), OpenMode::CreateNew).unwrap();
-        other.write_all_at(b"other", 0).unwrap();
-        assert_eq!(pool.open(Path::new("/d/y"), OpenMode::CreateNew).unwrap_err().kind(), io::ErrorKind::StorageFull);
-        let mut buf = [0u8; 4];
-        old.read_exact_at(&mut buf, 0).unwrap();
-        assert_eq!(&buf, b"kept", "the removed file's data is intact");
-        drop(old);
-        assert_eq!(pool.free_slots(), 1, "its slot is free once closed");
-        let reused = pool.open(Path::new("/d/y"), OpenMode::CreateNew).unwrap();
-        assert_eq!(reused.len().unwrap(), 0, "a reused slot starts empty");
-    }
-
-    #[test]
-    fn renames_replace_and_the_pool_reopens_from_its_headers() {
-        let storage = slots(4);
-        let pool = vfs(&storage);
-        pool.create_dir_all(Path::new("/db")).unwrap();
-        for (name, data) in [("CURRENT", "old"), ("tmp", "new"), ("000001.sst", "run")] {
-            pool.open(&Path::new("/db").join(name), OpenMode::CreateNew).unwrap().write_all_at(data.as_bytes(), 0).unwrap();
-        }
-        pool.rename(Path::new("/db/tmp"), Path::new("/db/CURRENT")).unwrap();
-        assert_eq!(pool.free_slots(), 2, "the replaced file's slot is free");
-        drop(pool);
-
-        let reopened = vfs(&storage);
-        let mut names = reopened.list_dir(Path::new("/db")).unwrap();
-        names.sort();
-        assert_eq!(names, ["000001.sst", "CURRENT"]);
-        let current = reopened.open(Path::new("/db/CURRENT"), OpenMode::Read).unwrap();
-        let mut buf = vec![0u8; usize::try_from(current.len().unwrap()).unwrap()];
-        current.read_exact_at(&mut buf, 0).unwrap();
-        assert_eq!(buf, b"new");
-        assert_eq!(reopened.free_slots(), 2);
-    }
-
-    #[test]
-    fn of_two_claims_to_a_path_the_newer_wins() {
-        let storage = slots(2);
-        write_header(storage[0].as_ref(), 5, Some(Path::new("/db/CURRENT"))).unwrap();
-        write_all(storage[0].as_ref(), b"older", HEADER_BYTES).unwrap();
-        write_header(storage[1].as_ref(), 9, Some(Path::new("/db/CURRENT"))).unwrap();
-        write_all(storage[1].as_ref(), b"newer", HEADER_BYTES).unwrap();
-        for order in [storage.clone(), storage.iter().rev().cloned().collect()] {
-            let pool = PoolVfs::new(order).unwrap();
-            let file = pool.open(Path::new("/db/CURRENT"), OpenMode::Read).unwrap();
-            let mut buf = [0u8; 5];
-            file.read_exact_at(&mut buf, 0).unwrap();
-            assert_eq!(&buf, b"newer");
-            assert_eq!(pool.free_slots(), 1);
-        }
-    }
-
-    #[test]
-    fn locks_are_exclusive_and_the_pool_grows() {
-        let pool = vfs(&slots(1));
-        let guard = pool.lock(Path::new("/db/LOCK")).unwrap();
-        assert_eq!(pool.lock(Path::new("/db/LOCK")).unwrap_err().kind(), io::ErrorKind::WouldBlock);
-        drop(guard);
-        pool.lock(Path::new("/db/LOCK")).unwrap();
-        pool.add_slots(slots(3)).unwrap();
-        assert_eq!((pool.capacity(), pool.free_slots()), (4, 4));
-        assert!(write_header(&MemSlot::default(), 1, Some(&PathBuf::from("x".repeat(5000)))).is_err());
-    }
-}
+mod tests;

@@ -35,7 +35,11 @@ pub struct VersionEdit {
 impl VersionEdit {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        for (tag, value) in [(LOG_NUMBER, self.log_number), (NEXT_FILE, self.next_file), (LAST_SEQUENCE, self.last_sequence)] {
+        for (tag, value) in [
+            (LOG_NUMBER, self.log_number),
+            (NEXT_FILE, self.next_file),
+            (LAST_SEQUENCE, self.last_sequence),
+        ] {
             if let Some(value) = value {
                 put_varint(&mut out, tag);
                 put_varint(&mut out, value);
@@ -63,7 +67,9 @@ impl VersionEdit {
         let level = |reader: &mut Reader<'_>| -> Result<usize> {
             let level = reader.varint_usize()?;
             if level >= LEVELS {
-                return Err(corruption(format!("manifest record: level {level} out of range")));
+                return Err(corruption(format!(
+                    "manifest record: level {level} out of range"
+                )));
             }
             Ok(level)
         };
@@ -83,7 +89,13 @@ impl VersionEdit {
                     let largest = reader.bytes()?.to_vec();
                     key::check(&smallest)?;
                     key::check(&largest)?;
-                    edit.added.push(NewFile { level, number, size, smallest, largest });
+                    edit.added.push(NewFile {
+                        level,
+                        number,
+                        size,
+                        smallest,
+                        largest,
+                    });
                 }
                 tag => return Err(corruption(format!("manifest record: unknown tag {tag}"))),
             }
@@ -103,7 +115,13 @@ mod tests {
             log_number: Some(4),
             next_file: Some(9),
             last_sequence: Some(1_000),
-            added: vec![NewFile { level: 1, number: 7, size: 4_096, smallest: encode(b"a", 3, Kind::Put), largest: encode(b"z", 1, Kind::Delete) }],
+            added: vec![NewFile {
+                level: 1,
+                number: 7,
+                size: 4_096,
+                smallest: encode(b"a", 3, Kind::Put),
+                largest: encode(b"z", 1, Kind::Delete),
+            }],
             deleted: vec![(0, 5), (0, 6)],
         };
         assert_eq!(VersionEdit::decode(&edit.encode()).unwrap(), edit);

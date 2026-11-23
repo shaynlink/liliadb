@@ -117,7 +117,10 @@ impl TableBuilder {
     }
 
     fn write_block(&mut self, contents: &[u8]) -> Result<Handle> {
-        let handle = Handle { offset: self.offset, size: contents.len() as u64 };
+        let handle = Handle {
+            offset: self.offset,
+            size: contents.len() as u64,
+        };
         let mut framed = Vec::with_capacity(contents.len() + CRC);
         framed.extend_from_slice(contents);
         framed.extend_from_slice(&masked_crc(&[contents]).to_le_bytes());
@@ -147,7 +150,14 @@ impl TableBuilder {
         let index = self.index.finish();
         let index_handle = self.write_block(&index)?;
         let mut footer = Vec::with_capacity(FOOTER);
-        for value in [filter_handle.offset, filter_handle.size, index_handle.offset, index_handle.size, self.entries, MAGIC] {
+        for value in [
+            filter_handle.offset,
+            filter_handle.size,
+            index_handle.offset,
+            index_handle.size,
+            self.entries,
+            MAGIC,
+        ] {
             footer.extend_from_slice(&value.to_le_bytes());
         }
         self.file.write_all_at(&footer, self.offset)?;
@@ -172,46 +182,81 @@ pub struct Table {
 }
 
 fn read_block(file: &dyn File, handle: Handle, what: &str) -> Result<Bytes> {
-    let size = usize::try_from(handle.size).map_err(|_| corruption(format!("{what}: block size overflows")))?;
+    let size = usize::try_from(handle.size)
+        .map_err(|_| corruption(format!("{what}: block size overflows")))?;
     let mut data = vec![0u8; size + CRC];
     file.read_exact_at(&mut data, handle.offset)?;
-    let stored = u32::from_le_bytes(data[size..].try_into().map_err(|_| corruption(what.to_owned()))?);
+    let stored = u32::from_le_bytes(
+        data[size..]
+            .try_into()
+            .map_err(|_| corruption(what.to_owned()))?,
+    );
     data.truncate(size);
     if masked_crc(&[&data]) != stored {
-        return Err(corruption(format!("{what}: checksum mismatch in block at {}", handle.offset)));
+        return Err(corruption(format!(
+            "{what}: checksum mismatch in block at {}",
+            handle.offset
+        )));
     }
     Ok(Bytes::from(data))
 }
 
 impl Table {
-    pub fn open(number: u64, file: Arc<dyn File>, size: u64, cache: Arc<BlockCache>) -> Result<Self> {
+    pub fn open(
+        number: u64,
+        file: Arc<dyn File>,
+        size: u64,
+        cache: Arc<BlockCache>,
+    ) -> Result<Self> {
         let what = format!("table {number}");
         if size < FOOTER as u64 {
-            return Err(corruption(format!("{what}: {size} bytes is shorter than a footer")));
+            return Err(corruption(format!(
+                "{what}: {size} bytes is shorter than a footer"
+            )));
         }
         let mut footer = [0u8; FOOTER];
         file.read_exact_at(&mut footer, size - FOOTER as u64)?;
         let mut reader = Reader::new(&footer, "table footer");
         let mut next = || reader.fixed_u64();
-        let filter = Handle { offset: next()?, size: next()? };
-        let index = Handle { offset: next()?, size: next()? };
+        let filter = Handle {
+            offset: next()?,
+            size: next()?,
+        };
+        let index = Handle {
+            offset: next()?,
+            size: next()?,
+        };
         let _entries = next()?;
         if next()? != MAGIC {
             return Err(corruption(format!("{what}: bad magic number")));
         }
         let filter = read_block(file.as_ref(), filter, &what)?;
         let index = Arc::new(Block::new(read_block(file.as_ref(), index, &what)?)?);
-        Ok(Self { number, file, index, filter, cache })
+        Ok(Self {
+            number,
+            file,
+            index,
+            filter,
+            cache,
+        })
     }
 
     fn data_block(&self, handle_value: &[u8]) -> Result<Arc<Block>> {
         let mut reader = Reader::new(handle_value, "index entry");
-        let handle = Handle { offset: reader.varint()?, size: reader.varint()? };
+        let handle = Handle {
+            offset: reader.varint()?,
+            size: reader.varint()?,
+        };
         if let Some(block) = self.cache.get(self.number, handle.offset) {
             return Ok(block);
         }
-        let block = Arc::new(Block::new(read_block(self.file.as_ref(), handle, &format!("table {}", self.number))?)?);
-        self.cache.insert(self.number, handle.offset, Arc::clone(&block));
+        let block = Arc::new(Block::new(read_block(
+            self.file.as_ref(),
+            handle,
+            &format!("table {}", self.number),
+        )?)?);
+        self.cache
+            .insert(self.number, handle.offset, Arc::clone(&block));
         Ok(block)
     }
 
@@ -232,11 +277,19 @@ impl Table {
         if !cursor.valid() || key::user(cursor.key()) != user {
             return Ok(None);
         }
-        Ok(Some(Found { kind: key::kind(cursor.key())?, sequence: key::sequence(cursor.key()), value: block.slice(cursor.value_range()) }))
+        Ok(Some(Found {
+            kind: key::kind(cursor.key())?,
+            sequence: key::sequence(cursor.key()),
+            value: block.slice(cursor.value_range()),
+        }))
     }
 
     pub fn iter(self: &Arc<Self>) -> TableIter {
-        TableIter { table: Arc::clone(self), index: self.index.iter(), data: None }
+        TableIter {
+            table: Arc::clone(self),
+            index: self.index.iter(),
+            data: None,
+        }
     }
 }
 
@@ -285,7 +338,9 @@ impl InternalIterator for TableIter {
     }
 
     fn next(&mut self) -> Result<()> {
-        let Some(data) = self.data.as_mut() else { return Ok(()) };
+        let Some(data) = self.data.as_mut() else {
+            return Ok(());
+        };
         data.next()?;
         if !data.valid() {
             self.index.next()?;
@@ -303,7 +358,9 @@ impl InternalIterator for TableIter {
     }
 
     fn value_bytes(&self) -> Bytes {
-        self.data.as_ref().map_or_else(Bytes::new, InternalIterator::value_bytes)
+        self.data
+            .as_ref()
+            .map_or_else(Bytes::new, InternalIterator::value_bytes)
     }
 }
 
@@ -320,27 +377,55 @@ mod tests {
     fn tables_round_trip_point_lookups_and_scans() {
         let vfs = MemVfs::new(1);
         vfs.create_dir_all(Path::new("/t")).unwrap();
-        let file = vfs.open(Path::new("/t/1.sst"), OpenMode::CreateNew).unwrap();
+        let file = vfs
+            .open(Path::new("/t/1.sst"), OpenMode::CreateNew)
+            .unwrap();
         let mut builder = TableBuilder::new(Arc::clone(&file), 512, 10);
         let n = 3_000u32;
         for i in 0..n {
             let user = format!("user{i:06}");
-            builder.add(&encode(user.as_bytes(), 10, Kind::Put), format!("new{i}").as_bytes()).unwrap();
-            builder.add(&encode(user.as_bytes(), 5, Kind::Put), format!("old{i}").as_bytes()).unwrap();
+            builder
+                .add(
+                    &encode(user.as_bytes(), 10, Kind::Put),
+                    format!("new{i}").as_bytes(),
+                )
+                .unwrap();
+            builder
+                .add(
+                    &encode(user.as_bytes(), 5, Kind::Put),
+                    format!("old{i}").as_bytes(),
+                )
+                .unwrap();
         }
         assert_eq!(builder.entries(), u64::from(n) * 2);
         let info = builder.finish(SyncLevel::Full).unwrap();
-        let table = Arc::new(Table::open(1, file, info.size, Arc::new(BlockCache::new(1 << 20))).unwrap());
+        let table =
+            Arc::new(Table::open(1, file, info.size, Arc::new(BlockCache::new(1 << 20))).unwrap());
 
         for i in (0..n).step_by(7) {
             let user = format!("user{i:06}");
-            let newest = table.get(&lookup(user.as_bytes(), 20), user.as_bytes()).unwrap().unwrap();
-            assert_eq!((newest.value, newest.sequence), (Bytes::from(format!("new{i}")), 10));
-            let older = table.get(&lookup(user.as_bytes(), 7), user.as_bytes()).unwrap().unwrap();
+            let newest = table
+                .get(&lookup(user.as_bytes(), 20), user.as_bytes())
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (newest.value, newest.sequence),
+                (Bytes::from(format!("new{i}")), 10)
+            );
+            let older = table
+                .get(&lookup(user.as_bytes(), 7), user.as_bytes())
+                .unwrap()
+                .unwrap();
             assert_eq!(older.value, format!("old{i}"));
-            assert!(table.get(&lookup(user.as_bytes(), 4), user.as_bytes()).unwrap().is_none());
+            assert!(table
+                .get(&lookup(user.as_bytes(), 4), user.as_bytes())
+                .unwrap()
+                .is_none());
         }
-        assert!(table.get(&lookup(b"user999999", 20), b"user999999").unwrap().is_none());
+        assert!(table
+            .get(&lookup(b"user999999", 20), b"user999999")
+            .unwrap()
+            .is_none());
 
         let mut iter = table.iter();
         iter.seek_to_first().unwrap();
@@ -359,12 +444,17 @@ mod tests {
     fn a_damaged_block_is_reported_as_corruption() {
         let vfs = MemVfs::new(2);
         vfs.create_dir_all(Path::new("/t")).unwrap();
-        let file = vfs.open(Path::new("/t/2.sst"), OpenMode::CreateNew).unwrap();
+        let file = vfs
+            .open(Path::new("/t/2.sst"), OpenMode::CreateNew)
+            .unwrap();
         let mut builder = TableBuilder::new(Arc::clone(&file), 4096, 10);
         builder.add(&encode(b"k", 1, Kind::Put), b"value").unwrap();
         let info = builder.finish(SyncLevel::Full).unwrap();
         file.write_all_at(b"X", 3).unwrap();
         let table = Table::open(2, file, info.size, Arc::new(BlockCache::new(0))).unwrap();
-        assert!(matches!(table.get(&lookup(b"k", 5), b"k"), Err(crate::Error::Corruption(_))));
+        assert!(matches!(
+            table.get(&lookup(b"k", 5), b"k"),
+            Err(crate::Error::Corruption(_))
+        ));
     }
 }

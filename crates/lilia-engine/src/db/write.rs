@@ -26,13 +26,22 @@ impl Inner {
         }
         let weight = batch.approximate_bytes();
         self.queue
-            .commit(batch, weight, self.options.max_group_bytes, |group| self.commit_group(group))
-            .unwrap_or_else(|| Err(crate::error::corruption("commit leader left a batch without a result")))
+            .commit(batch, weight, self.options.max_group_bytes, |group| {
+                self.commit_group(group);
+            })
+            .unwrap_or_else(|| {
+                Err(crate::error::corruption(
+                    "commit leader left a batch without a result",
+                ))
+            })
     }
 
     /// Newest version of `key` among committed writes; `None` if absent or deleted.
     fn latest_version(current: &SuperVersion, key: &[u8]) -> Result<Option<u64>> {
-        Ok(current.lookup(key, MAX_SEQUENCE)?.filter(|f| f.kind == Kind::Put).map(|f| f.sequence))
+        Ok(current
+            .lookup(key, MAX_SEQUENCE)?
+            .filter(|f| f.kind == Kind::Put)
+            .map(|f| f.sequence))
     }
 
     /// Run by the commit leader: validates, journals and applies a group of batches.
@@ -72,10 +81,12 @@ impl Inner {
 
         let journaled = {
             let mut journal = self.journal.lock();
-            journal.append(records.iter().map(Vec::as_slice)).and_then(|()| match self.options.durability.commit_sync() {
-                Some(level) => journal.sync(level),
-                None => Ok(()),
-            })
+            journal
+                .append(records.iter().map(Vec::as_slice))
+                .and_then(|()| match self.options.durability.commit_sync() {
+                    Some(level) => journal.sync(level),
+                    None => Ok(()),
+                })
         };
         if let Err(error) = journaled {
             // The journal may hold any prefix of this group: nothing can be acknowledged, and no
@@ -99,12 +110,20 @@ impl Inner {
     }
 
     /// Checks one batch of a group: sequence space and expectations.
-    fn admit(current: &SuperVersion, batch: &WriteBatch, written: &HashMap<Bytes, Option<u64>>, next: u64) -> Result<()> {
+    fn admit(
+        current: &SuperVersion,
+        batch: &WriteBatch,
+        written: &HashMap<Bytes, Option<u64>>,
+        next: u64,
+    ) -> Result<()> {
         if next + batch.len() as u64 > MAX_SEQUENCE {
             return Err(Error::InvalidArgument("sequence numbers exhausted".into()));
         }
         if let Some(expected) = batch.position.filter(|&p| p != next) {
-            return Err(Error::SequenceMoved { expected, actual: next });
+            return Err(Error::SequenceMoved {
+                expected,
+                actual: next,
+            });
         }
         for expectation in &batch.expectations {
             let actual = match written.get(&expectation.key) {
@@ -112,7 +131,11 @@ impl Inner {
                 None => Self::latest_version(current, &expectation.key)?,
             };
             if actual != expectation.version {
-                return Err(Error::Conflict { key: expectation.key.to_vec(), expected: expectation.version, actual });
+                return Err(Error::Conflict {
+                    key: expectation.key.to_vec(),
+                    expected: expectation.version,
+                    actual,
+                });
             }
         }
         Ok(())
@@ -169,7 +192,9 @@ impl Inner {
     /// Seals the active memtable for flushing and starts a new one with its own journal.
     fn switch_memtable(&self) -> Result<()> {
         let number = self.versions.lock().new_file_number();
-        let file = self.vfs.open(&files::journal(&self.dir, number), OpenMode::CreateNew)?;
+        let file = self
+            .vfs
+            .open(&files::journal(&self.dir, number), OpenMode::CreateNew)?;
         file.preallocate(self.options.memtable_bytes as u64 + (1 << 20))?;
         // The new journal's directory entry, and the old journal's last writes, must be durable
         // before any write lands in the new journal: replay reads journals in order.
@@ -183,7 +208,11 @@ impl Inner {
         let mut imm = Vec::with_capacity(current.imm.len() + 1);
         imm.push(Arc::clone(&current.mem));
         imm.extend(current.imm.iter().cloned());
-        *current = Arc::new(SuperVersion { mem: Arc::new(Memtable::new(number, self.options.memtable_bytes)), imm, version: Arc::clone(&current.version) });
+        *current = Arc::new(SuperVersion {
+            mem: Arc::new(Memtable::new(number, self.options.memtable_bytes)),
+            imm,
+            version: Arc::clone(&current.version),
+        });
         drop(current);
         self.signal_work();
         Ok(())

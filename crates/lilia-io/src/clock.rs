@@ -8,8 +8,10 @@ pub fn now_ms() -> i64 {
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod platform {
-    // reason: `Date.now()` is a whole number of milliseconds, far inside the `i64` range.
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "`Date.now()` is a whole number of milliseconds, far inside the `i64` range"
+    )]
     pub fn now_ms() -> i64 {
         js_sys::Date::now() as i64
     }

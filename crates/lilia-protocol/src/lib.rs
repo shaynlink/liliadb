@@ -20,10 +20,7 @@ pub use serde_bytes::ByteBuf;
 
 pub use codec::{execute_js, from_msgpack, to_js_frame, to_msgpack, Codec, RequestEncoding};
 pub use execute::{execute, GEO_COLLECTION};
-pub use frame::{
-    read_archived_frame, read_archived_frame_unchecked, read_frame, write_archived_frame,
-    write_frame,
-};
+pub use frame::{read_archived_frame, read_frame, write_archived_frame, write_frame};
 #[cfg(any(unix, windows))]
 pub use lifecycle::open;
 pub use lifecycle::{close, OpenOptions, SharedDatabase};

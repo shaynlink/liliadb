@@ -2,7 +2,10 @@
 
 use crate::error::{corruption, Result};
 
-#[allow(clippy::cast_possible_truncation)] // reason: each byte keeps the low 7 bits by design.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "each byte keeps the low 7 bits by design"
+)]
 pub fn put_varint(out: &mut Vec<u8>, mut value: u64) {
     while value >= 0x80 {
         out.push((value as u8) | 0x80);
@@ -46,34 +49,50 @@ impl<'a> Reader<'a> {
         }
         let mut value = 0u64;
         for shift in (0..64).step_by(7) {
-            let (&byte, rest) = self.data.split_first().ok_or_else(|| corruption(format!("{}: truncated varint", self.what)))?;
+            let (&byte, rest) = self
+                .data
+                .split_first()
+                .ok_or_else(|| corruption(format!("{}: truncated varint", self.what)))?;
             self.data = rest;
             value |= u64::from(byte & 0x7F) << shift;
             if byte < 0x80 {
                 return Ok(value);
             }
         }
-        Err(corruption(format!("{}: varint longer than 64 bits", self.what)))
+        Err(corruption(format!(
+            "{}: varint longer than 64 bits",
+            self.what
+        )))
     }
 
     pub fn varint_usize(&mut self) -> Result<usize> {
-        usize::try_from(self.varint()?).map_err(|_| corruption(format!("{}: length overflows usize", self.what)))
+        usize::try_from(self.varint()?)
+            .map_err(|_| corruption(format!("{}: length overflows usize", self.what)))
     }
 
     pub fn u8(&mut self) -> Result<u8> {
-        let (&byte, rest) = self.data.split_first().ok_or_else(|| corruption(format!("{}: truncated byte", self.what)))?;
+        let (&byte, rest) = self
+            .data
+            .split_first()
+            .ok_or_else(|| corruption(format!("{}: truncated byte", self.what)))?;
         self.data = rest;
         Ok(byte)
     }
 
     pub fn fixed_u64(&mut self) -> Result<u64> {
         let bytes = self.take(8)?;
-        Ok(u64::from_le_bytes(bytes.try_into().map_err(|_| corruption(self.what))?))
+        Ok(u64::from_le_bytes(
+            bytes.try_into().map_err(|_| corruption(self.what))?,
+        ))
     }
 
     pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.data.len() < n {
-            return Err(corruption(format!("{}: needs {n} bytes, {} left", self.what, self.data.len())));
+            return Err(corruption(format!(
+                "{}: needs {n} bytes, {} left",
+                self.what,
+                self.data.len()
+            )));
         }
         let (head, rest) = self.data.split_at(n);
         self.data = rest;
@@ -89,7 +108,9 @@ impl<'a> Reader<'a> {
 /// CRC32C (Castagnoli), hardware-accelerated where the CPU has it, masked so that a checksum
 /// stored inside checksummed data does not checksum to a fixed value.
 pub fn masked_crc(parts: &[&[u8]]) -> u32 {
-    let crc = parts.iter().fold(0, |crc, part| crc32c::crc32c_append(crc, part));
+    let crc = parts
+        .iter()
+        .fold(0, |crc, part| crc32c::crc32c_append(crc, part));
     crc.rotate_right(15).wrapping_add(0xA282_EAD8)
 }
 

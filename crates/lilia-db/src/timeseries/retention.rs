@@ -101,7 +101,10 @@ impl Bucket {
         self.last = value;
     }
 
-    #[allow(clippy::cast_precision_loss)] // bucket counts stay far below 2^53
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "bucket counts stay far below 2^53"
+    )]
     fn point(&self, aggregation: DownsampleAggregation) -> TimeSeriesPoint {
         let value = match aggregation {
             DownsampleAggregation::Avg => self.sum / self.count as f64,

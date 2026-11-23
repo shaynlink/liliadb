@@ -22,7 +22,10 @@ use crate::vectors::{Vector, Vectors};
 /// # Errors
 ///
 /// Invalid names; as [`Vectors::search_within`].
-#[allow(clippy::too_many_arguments)] // reason: the graph part and the vector part each need their own.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the graph part and the vector part each need their own"
+)]
 pub fn vectors_in_graph<C: Context>(
     context: &C,
     collection: &str,
@@ -117,8 +120,10 @@ pub fn hybrid<C: Context>(
         f64::from(fusion.k)
     };
     let candidates = limit.saturating_mul(2);
-    // reason: ranks are below the candidate limit, far below 2^52.
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "ranks are below the candidate limit, far below 2^52"
+    )]
     let contribution = |weight: f64, rank: usize| weight / (k + rank as f64);
     let mut fused: HashMap<String, Fused> = HashMap::new();
     if let Some(text) = text.filter(|t| !t.trim().is_empty()) {

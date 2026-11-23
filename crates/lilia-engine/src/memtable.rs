@@ -43,8 +43,15 @@ impl Memtable {
     /// A memtable sized for about `capacity_bytes`: the Bloom filter gets one bit per 8 bytes,
     /// which is at least 10 bits per entry for entries of 80 bytes or more.
     pub fn new(journal: u64, capacity_bytes: usize) -> Self {
-        let words = (capacity_bytes / 8 / 64).max(64).next_multiple_of(BLOOM_BLOCK_WORDS);
-        Self { map: SkipMap::new(), bytes: AtomicUsize::new(0), bloom: (0..words).map(|_| AtomicU64::new(0)).collect(), journal }
+        let words = (capacity_bytes / 8 / 64)
+            .max(64)
+            .next_multiple_of(BLOOM_BLOCK_WORDS);
+        Self {
+            map: SkipMap::new(),
+            bytes: AtomicUsize::new(0),
+            bloom: (0..words).map(|_| AtomicU64::new(0)).collect(),
+            journal,
+        }
     }
 
     /// Blocked Bloom filter: every probe of a key falls in one 64-byte block (8 words), so a
@@ -66,7 +73,10 @@ impl Memtable {
 
     fn may_contain(&self, user: &[u8]) -> bool {
         let (base, masks) = self.bloom_block(user);
-        masks.iter().enumerate().all(|(i, &mask)| self.bloom[base + i].load(Ordering::Relaxed) & mask == mask)
+        masks
+            .iter()
+            .enumerate()
+            .all(|(i, &mask)| self.bloom[base + i].load(Ordering::Relaxed) & mask == mask)
     }
 
     /// Inserts one write. The commit leader is the only inserter; readers never block.
@@ -83,7 +93,10 @@ impl Memtable {
             word.store(word.load(Ordering::Relaxed) | mask, Ordering::Relaxed);
         }
         let encoded = Bytes::from(key::encode(op.key(), sequence, kind));
-        self.bytes.fetch_add(encoded.len() + value.len() + ENTRY_OVERHEAD, Ordering::Relaxed);
+        self.bytes.fetch_add(
+            encoded.len() + value.len() + ENTRY_OVERHEAD,
+            Ordering::Relaxed,
+        );
         self.map.insert(InternalKey(encoded), value);
     }
 
@@ -115,7 +128,11 @@ impl Memtable {
     }
 
     pub fn iter(self: &Arc<Self>) -> MemtableIter {
-        MemtableIter { table: Arc::clone(self), batch: Vec::with_capacity(ITER_BATCH), at: 0 }
+        MemtableIter {
+            table: Arc::clone(self),
+            batch: Vec::with_capacity(ITER_BATCH),
+            at: 0,
+        }
     }
 }
 
@@ -157,7 +174,9 @@ impl InternalIterator for MemtableIter {
     }
 
     fn seek(&mut self, target: &[u8]) -> Result<()> {
-        self.fill(Bound::Included(&InternalKey(Bytes::copy_from_slice(target))));
+        self.fill(Bound::Included(&InternalKey(Bytes::copy_from_slice(
+            target,
+        ))));
         Ok(())
     }
 
@@ -193,14 +212,41 @@ mod tests {
     #[test]
     fn lookups_respect_sequence_visibility_and_tombstones() {
         let table = Memtable::new(1, 1 << 20);
-        table.insert(1, &Op::Put { key: "k".into(), value: "v1".into() });
+        table.insert(
+            1,
+            &Op::Put {
+                key: "k".into(),
+                value: "v1".into(),
+            },
+        );
         table.insert(2, &Op::Delete { key: "k".into() });
-        table.insert(3, &Op::Put { key: "k".into(), value: "v3".into() });
-        table.insert(4, &Op::Put { key: "k2".into(), value: "x".into() });
-        let at = |user: &[u8], sequence| table.get(user, &InternalKey(Bytes::from(key::lookup(user, sequence))));
+        table.insert(
+            3,
+            &Op::Put {
+                key: "k".into(),
+                value: "v3".into(),
+            },
+        );
+        table.insert(
+            4,
+            &Op::Put {
+                key: "k2".into(),
+                value: "x".into(),
+            },
+        );
+        let at = |user: &[u8], sequence| {
+            table.get(user, &InternalKey(Bytes::from(key::lookup(user, sequence))))
+        };
         assert_eq!(at(b"k", 1).unwrap().value, "v1");
         assert_eq!(at(b"k", 2).unwrap().kind, Kind::Delete);
-        assert_eq!(at(b"k", 10).unwrap(), Found { kind: Kind::Put, sequence: 3, value: "v3".into() });
+        assert_eq!(
+            at(b"k", 10).unwrap(),
+            Found {
+                kind: Kind::Put,
+                sequence: 3,
+                value: "v3".into()
+            }
+        );
         assert!(at(b"k", 0).is_none());
         assert!(at(b"j", 10).is_none());
         assert!(table.approximate_bytes() > 0);
@@ -213,6 +259,14 @@ mod tests {
             seen.push((key::user(iter.key()).to_vec(), key::sequence(iter.key())));
             iter.next().unwrap();
         }
-        assert_eq!(seen, [(b"k".to_vec(), 3), (b"k".to_vec(), 2), (b"k".to_vec(), 1), (b"k2".to_vec(), 4)]);
+        assert_eq!(
+            seen,
+            [
+                (b"k".to_vec(), 3),
+                (b"k".to_vec(), 2),
+                (b"k".to_vec(), 1),
+                (b"k2".to_vec(), 4)
+            ]
+        );
     }
 }

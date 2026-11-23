@@ -54,6 +54,10 @@ struct State {
 const VALID: BitemporalInterval = BitemporalInterval { from: 0, to: 100 };
 
 /// The writes of batch `b` to the models other than documents and key-value records.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one write of each model per batch, in a fixed order the checks replay"
+)]
 fn model_writes(rng: &mut Rng, b: u64, batch: &mut Batch, state: &mut State) {
     let node = format!("n{}", rng.below(12));
     batch.push(Write::Graph(GraphWrite::SetNode {
@@ -101,7 +105,10 @@ fn model_writes(rng: &mut Rng, b: u64, batch: &mut Batch, state: &mut State) {
     }
 
     let id = format!("v{}", rng.below(8));
-    #[allow(clippy::cast_precision_loss)] // reason: batch numbers stay far below 2^24
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "batch numbers stay far below 2^24"
+    )]
     let vector = Vector::from_f32(&[b as f32, 1.0]).unwrap();
     batch.push(Write::Vector(VectorWrite::Set {
         collection: "vec".into(),
@@ -111,7 +118,10 @@ fn model_writes(rng: &mut Rng, b: u64, batch: &mut Batch, state: &mut State) {
     state.vectors.insert(id, vector);
 
     let time = i64::try_from(rng.below(500)).unwrap();
-    #[allow(clippy::cast_precision_loss)] // reason: batch numbers stay far below 2^53
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "batch numbers stay far below 2^53"
+    )]
     let point = TimeSeriesPoint {
         timestamp: time,
         value: b as f64,
@@ -124,7 +134,7 @@ fn model_writes(rng: &mut Rng, b: u64, batch: &mut Batch, state: &mut State) {
     state.points.insert(time, b);
 
     let at = i64::try_from(rng.below(200)).unwrap();
-    #[allow(clippy::cast_precision_loss)] // reason: below 80
+    #[allow(clippy::cast_precision_loss, reason = "below 80")]
     let latitude = (b % 80) as f64;
     let gps = GpsPoint {
         timestamp: at,
@@ -223,8 +233,11 @@ fn read_state(db: &Database) -> State {
     );
     let as_batch = |value: f64| {
         assert!(value.fract() == 0.0 && value >= 0.0);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        // reason: whole and non-negative
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "whole and non-negative"
+        )]
         let batch = value as u64;
         batch
     };
@@ -351,6 +364,10 @@ fn check_indexes(db: &Database, state: &State, seed: u64) {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one crash scenario, from the writes to the checks after recovery"
+)]
 fn iteration(seed: u64) {
     let mut rng = Rng(seed);
     let options = Options {

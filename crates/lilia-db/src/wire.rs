@@ -47,8 +47,10 @@ fn document(value: &serde_json::Value) -> Result<BinaryDoc> {
 }
 
 /// The write of one operation; `now` dates CRDT removals and fields without a time.
-// reason: one arm per operation, each moving its fields into the write of its model.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per operation, each moving its fields into the write of its model"
+)]
 fn write(operation: &BatchOperation, now: i64) -> Result<Write> {
     Ok(match operation.clone() {
         BatchOperation::KvSet {

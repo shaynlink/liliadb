@@ -10,7 +10,7 @@ use lilia_protocol::{Operation, ResponseValue};
 use serde_json::{json, Value};
 
 use super::input::{self, invalid};
-use crate::args::{
+use crate::args::models::{
     CrdtCommand, CrdtCounterCommand, CrdtJsonCommand, CrdtSetCommand, FtsCommand, GraphCommand,
     HybridCommand, JsonCommand, KvCommand, VectorCommand,
 };

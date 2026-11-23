@@ -1,14 +1,10 @@
-#![allow(unsafe_code)]
-
 use std::hint::black_box;
 use std::io::Cursor;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use lilia_core::BatchOperation;
-use lilia_protocol::{
-    read_archived_frame, read_archived_frame_unchecked, read_frame, Operation, Request,
-};
+use lilia_protocol::{read_archived_frame, read_frame, Operation, Request};
 use rkyv::util::AlignedVec;
 use tokio::runtime::Runtime;
 
@@ -37,6 +33,10 @@ fn create_bench_request() -> Request {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one benchmark group: each codec's encode, decode and framed read side by side"
+)]
 fn bench_protocol_framing(c: &mut Criterion) {
     let req = create_bench_request();
 
@@ -47,15 +47,27 @@ fn bench_protocol_framing(c: &mut Criterion) {
 
     // Pre-build stream frame buffers (4-byte length prefix + payload)
     let mut rkyv_framed = Vec::with_capacity(rkyv_bytes.len() + 4);
-    rkyv_framed.extend_from_slice(&(rkyv_bytes.len() as u32).to_be_bytes());
+    rkyv_framed.extend_from_slice(
+        &u32::try_from(rkyv_bytes.len())
+            .expect("a frame fits in u32")
+            .to_be_bytes(),
+    );
     rkyv_framed.extend_from_slice(&rkyv_bytes);
 
     let mut rmp_framed = Vec::with_capacity(rmp_bytes.len() + 4);
-    rmp_framed.extend_from_slice(&(rmp_bytes.len() as u32).to_be_bytes());
+    rmp_framed.extend_from_slice(
+        &u32::try_from(rmp_bytes.len())
+            .expect("a frame fits in u32")
+            .to_be_bytes(),
+    );
     rmp_framed.extend_from_slice(&rmp_bytes);
 
     let mut json_framed = Vec::with_capacity(json_bytes.len() + 4);
-    json_framed.extend_from_slice(&(json_bytes.len() as u32).to_be_bytes());
+    json_framed.extend_from_slice(
+        &u32::try_from(json_bytes.len())
+            .expect("a frame fits in u32")
+            .to_be_bytes(),
+    );
     json_framed.extend_from_slice(&json_bytes);
 
     // ==========================================
@@ -128,15 +140,6 @@ fn bench_protocol_framing(c: &mut Criterion) {
         });
     });
 
-    g2.bench_function("5_rkyv_read_archived_unchecked_0ns", |b| {
-        b.iter(|| {
-            let archived =
-                unsafe { lilia_core::access_archived_unchecked::<Request>(black_box(&rkyv_bytes)) };
-            let token = archived.token.as_str();
-            black_box(token);
-        });
-    });
-
     g2.finish();
 
     // ==========================================
@@ -163,20 +166,6 @@ fn bench_protocol_framing(c: &mut Criterion) {
             let mut cursor = Cursor::new(&rkyv_framed);
             rt.block_on(async {
                 let archived = read_archived_frame::<Request>(&mut cursor, &mut buffer)
-                    .await
-                    .unwrap();
-                let token = archived.token.as_str();
-                black_box(token);
-            });
-        });
-    });
-
-    g3.bench_function("3_async_read_archived_frame_unchecked_0ns", |b| {
-        let mut buffer = AlignedVec::new();
-        b.iter(|| {
-            let mut cursor = Cursor::new(&rkyv_framed);
-            rt.block_on(async {
-                let archived = read_archived_frame_unchecked::<Request>(&mut cursor, &mut buffer)
                     .await
                     .unwrap();
                 let token = archived.token.as_str();

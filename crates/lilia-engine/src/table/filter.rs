@@ -5,7 +5,10 @@
 pub fn hash(key: &[u8]) -> u64 {
     const P0: u64 = 0xA076_1D64_78BD_642F;
     const P1: u64 = 0xE703_7ED1_A0B4_28DB;
-    #[allow(clippy::cast_possible_truncation)] // reason: folding keeps both halves of the product.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "folding keeps both halves of the product"
+    )]
     let fold = |a: u64, b: u64| {
         let product = u128::from(a) * u128::from(b);
         (product as u64) ^ ((product >> 64) as u64)
@@ -42,7 +45,9 @@ pub fn build(hashes: &[u64], bits_per_key: usize) -> Vec<u8> {
 
 /// Whether `h` may be in the set; never false for a key that was added.
 pub fn may_contain(filter: &[u8], h: u64) -> bool {
-    let Some((&probes, bits)) = filter.split_last() else { return true };
+    let Some((&probes, bits)) = filter.split_last() else {
+        return true;
+    };
     if bits.is_empty() || probes == 0 || probes > 30 {
         // Unknown layout: do not risk a false negative.
         return true;
@@ -68,7 +73,12 @@ mod tests {
         let keys: Vec<u64> = (0..10_000u32).map(|i| hash(&i.to_le_bytes())).collect();
         let filter = build(&keys, 10);
         assert!(keys.iter().all(|&h| may_contain(&filter, h)));
-        let false_positives = (10_000..110_000u32).filter(|i| may_contain(&filter, hash(&i.to_le_bytes()))).count();
-        assert!(false_positives < 2_000, "{false_positives} false positives in 100,000");
+        let false_positives = (10_000..110_000u32)
+            .filter(|i| may_contain(&filter, hash(&i.to_le_bytes())))
+            .count();
+        assert!(
+            false_positives < 2_000,
+            "{false_positives} false positives in 100,000"
+        );
     }
 }

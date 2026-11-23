@@ -14,6 +14,7 @@ serde.workspace = true
 serde_bytes.workspace = true
 serde_json.workspace = true
 hex.workspace = true
+lilia-io = { path = "../../crates/lilia-io", features = ["ipc"] }
 lilia-core = { path = "../../crates/lilia-core" }
 lilia-db = { path = "../../crates/lilia-db" }
 lilia-protocol = { path = "../../crates/lilia-protocol" }
@@ -32,9 +33,6 @@ tempfile = "3.27.0"
 http-body-util = "0.1.2"
 tempfile = "3.27.0"
 tower = { version = "0.5.2", features = ["util"] }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
 
 [lints]
 workspace = true

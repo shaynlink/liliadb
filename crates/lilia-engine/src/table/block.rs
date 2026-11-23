@@ -37,17 +37,28 @@ impl Default for BlockBuilder {
 
 impl BlockBuilder {
     pub fn new(interval: usize) -> Self {
-        Self { interval: interval.max(1), buffer: Vec::new(), restarts: Vec::new(), since_restart: 0, last_key: Vec::new() }
+        Self {
+            interval: interval.max(1),
+            buffer: Vec::new(),
+            restarts: Vec::new(),
+            since_restart: 0,
+            last_key: Vec::new(),
+        }
     }
 
     /// Adds an entry; keys must arrive in increasing internal-key order.
     pub fn add(&mut self, key: &[u8], value: &[u8]) {
         let shared = if self.since_restart == self.interval || self.buffer.is_empty() {
-            self.restarts.push(u32::try_from(self.buffer.len()).unwrap_or(u32::MAX));
+            self.restarts
+                .push(u32::try_from(self.buffer.len()).unwrap_or(u32::MAX));
             self.since_restart = 0;
             0
         } else {
-            self.last_key.iter().zip(key).take_while(|(a, b)| a == b).count()
+            self.last_key
+                .iter()
+                .zip(key)
+                .take_while(|(a, b)| a == b)
+                .count()
         };
         put_varint(&mut self.buffer, shared as u64);
         put_varint(&mut self.buffer, (key.len() - shared) as u64);
@@ -73,7 +84,11 @@ impl BlockBuilder {
         for &restart in &self.restarts {
             block.extend_from_slice(&restart.to_le_bytes());
         }
-        block.extend_from_slice(&u32::try_from(self.restarts.len()).unwrap_or(u32::MAX).to_le_bytes());
+        block.extend_from_slice(
+            &u32::try_from(self.restarts.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
         self.restarts.clear();
         self.since_restart = 0;
         self.last_key.clear();
@@ -95,13 +110,21 @@ impl Block {
         if data.len() < 4 {
             return Err(corruption("block shorter than its restart count"));
         }
-        let count = u32::from_le_bytes(data[data.len() - 4..].try_into().map_err(|_| corruption("block"))?) as usize;
+        let count = u32::from_le_bytes(
+            data[data.len() - 4..]
+                .try_into()
+                .map_err(|_| corruption("block"))?,
+        ) as usize;
         let restarts = data
             .len()
             .checked_sub(4 + count * 4)
             .filter(|_| count > 0 || data.len() == 4)
             .ok_or_else(|| corruption("block restart array out of bounds"))?;
-        Ok(Self { data, restarts, count })
+        Ok(Self {
+            data,
+            restarts,
+            count,
+        })
     }
 
     pub fn size(&self) -> usize {
@@ -110,14 +133,22 @@ impl Block {
 
     fn restart(&self, i: usize) -> usize {
         let at = self.restarts + i * 4;
-        u32::from_le_bytes([self.data[at], self.data[at + 1], self.data[at + 2], self.data[at + 3]]) as usize
+        u32::from_le_bytes([
+            self.data[at],
+            self.data[at + 1],
+            self.data[at + 2],
+            self.data[at + 3],
+        ]) as usize
     }
 
     /// Key of restart point `i`, read in place: restart entries share nothing with their
     /// predecessor, so their key bytes are contiguous in the block.
     fn restart_key(&self, i: usize) -> Result<&[u8]> {
         let offset = self.restart(i);
-        let data = self.data.get(offset..self.restarts).ok_or_else(|| corruption("block restart offset out of bounds"))?;
+        let data = self
+            .data
+            .get(offset..self.restarts)
+            .ok_or_else(|| corruption("block restart offset out of bounds"))?;
         let mut reader = Reader::new(data, "block restart entry");
         if reader.varint()? != 0 {
             return Err(corruption("block restart entry shares a prefix"));
@@ -132,7 +163,10 @@ impl Block {
     }
 
     pub fn iter(self: &Arc<Self>) -> BlockIter {
-        BlockIter { block: Arc::clone(self), cursor: Cursor::default() }
+        BlockIter {
+            block: Arc::clone(self),
+            cursor: Cursor::default(),
+        }
     }
 
     /// The bytes of `range` (a value range from a [`Cursor`]) as a shared slice.
@@ -281,7 +315,9 @@ mod tests {
 
     #[test]
     fn seek_finds_every_key_and_the_gaps_between_them() {
-        let keys: Vec<Vec<u8>> = (0..500u32).map(|i| encode(format!("key{:05}", i * 2).as_bytes(), 7, Kind::Put)).collect();
+        let keys: Vec<Vec<u8>> = (0..500u32)
+            .map(|i| encode(format!("key{:05}", i * 2).as_bytes(), 7, Kind::Put))
+            .collect();
         let mut builder = BlockBuilder::default();
         for (i, k) in keys.iter().enumerate() {
             builder.add(k, format!("v{i}").as_bytes());
@@ -298,7 +334,8 @@ mod tests {
         }
         assert_eq!(n, keys.len());
         for i in 0..500u32 {
-            iter.seek(&key::lookup(format!("key{:05}", i * 2 + 1).as_bytes(), 9)).unwrap();
+            iter.seek(&key::lookup(format!("key{:05}", i * 2 + 1).as_bytes(), 9))
+                .unwrap();
             if i == 499 {
                 assert!(!iter.valid());
             } else {

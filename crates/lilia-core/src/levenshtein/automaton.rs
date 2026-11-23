@@ -1,5 +1,3 @@
-#![allow(clippy::missing_errors_doc, clippy::cast_possible_truncation)]
-
 const MAX_QUERY_LEN: usize = 64;
 
 /// State of a Levenshtein automaton during trie/string traversal.
@@ -57,8 +55,8 @@ impl LevenshteinAutomaton {
         let n = self.chars.len();
         let limit = self.max_distance.saturating_add(1);
         let mut distances = [limit; MAX_QUERY_LEN];
-        for (i, d) in distances.iter_mut().enumerate().take(n + 1) {
-            *d = (i as u8).min(limit);
+        for (i, d) in (0_u8..).zip(distances.iter_mut()).take(n + 1) {
+            *d = i.min(limit);
         }
 
         let matched_prefix_dist = if self.prefix_mode && n == 0 {

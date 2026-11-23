@@ -37,7 +37,10 @@ fn ids(matches: &[lilia_db::GeofenceMatch]) -> Vec<&str> {
 
 /// A uniform value in `[low, high)`.
 fn uniform(rng: &mut Rng, low: f64, high: f64) -> f64 {
-    #[allow(clippy::cast_precision_loss)] // reason: values below 2^24, exact in f64
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "values below 2^24, exact in f64"
+    )]
     let unit = rng.below(1 << 24) as f64 / f64::from(1 << 24);
     low + unit * (high - low)
 }

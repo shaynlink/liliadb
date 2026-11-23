@@ -466,8 +466,7 @@ pub enum Operation {
 impl Operation {
     /// The name of the operation, as its JSON form tags it.
     #[must_use]
-    // reason: one arm per operation.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, reason = "one arm per operation")]
     pub fn name(&self) -> &'static str {
         match self {
             Self::Handshake { .. } => "handshake",

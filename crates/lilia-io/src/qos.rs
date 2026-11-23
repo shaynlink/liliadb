@@ -15,7 +15,10 @@ pub fn set_current_thread_background() {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod platform {
-    #[allow(unsafe_code)] // reason: `pthread_set_qos_class_self_np` only affects the calling thread.
+    #[allow(
+        unsafe_code,
+        reason = "`pthread_set_qos_class_self_np` only affects the calling thread"
+    )]
     pub fn background() {
         // SAFETY: valid QoS class and relative priority 0; no pointers.
         unsafe {
@@ -26,22 +29,34 @@ mod platform {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod platform {
-    #[allow(unsafe_code)] // reason: `gettid` and `setpriority` take and return plain integers.
+    #[allow(
+        unsafe_code,
+        reason = "`gettid` and `setpriority` take and return plain integers"
+    )]
     pub fn background() {
         // SAFETY: no pointers; on Linux a thread id is a valid `PRIO_PROCESS` target and changes
         // only that thread's niceness.
         unsafe {
             let tid = libc::gettid();
-            libc::setpriority(libc::PRIO_PROCESS, libc::id_t::try_from(tid).unwrap_or(0), 10);
+            libc::setpriority(
+                libc::PRIO_PROCESS,
+                libc::id_t::try_from(tid).unwrap_or(0),
+                10,
+            );
         }
     }
 }
 
 #[cfg(windows)]
 mod platform {
-    #[allow(unsafe_code)] // reason: `SetThreadPriority` on the calling thread's pseudo-handle.
+    #[allow(
+        unsafe_code,
+        reason = "`SetThreadPriority` on the calling thread's pseudo-handle"
+    )]
     pub fn background() {
-        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+        };
         // SAFETY: the pseudo-handle of the current thread is always valid.
         unsafe {
             SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
@@ -49,7 +64,13 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android", windows)))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android",
+    windows
+)))]
 mod platform {
     pub fn background() {}
 }
@@ -58,6 +79,8 @@ mod platform {
 mod tests {
     #[test]
     fn background_does_not_panic() {
-        std::thread::spawn(super::set_current_thread_background).join().unwrap();
+        std::thread::spawn(super::set_current_thread_background)
+            .join()
+            .unwrap();
     }
 }

@@ -51,8 +51,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Rules of the storage paradigm (§5.2)
+        shell: bash
+        run: tools/lint.sh
       - run: cargo test --workspace
       - run: pnpm nx run-many -t build,lint,test --all
         env:

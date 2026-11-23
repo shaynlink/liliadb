@@ -15,13 +15,15 @@
 //! of the engine's own background threads. This crate is the only one of the engine stack that
 //! calls the operating system directly; each `unsafe` block states why it is sound.
 
-// reason: every fallible function of this crate is an I/O operation that returns the operating
-// system's (or the simulated file system's) `io::Error` unchanged; there is nothing to document
-// per function beyond that.
-#![allow(clippy::missing_errors_doc)]
+#![allow(
+    clippy::missing_errors_doc,
+    reason = "every fallible function of this crate is an I/O operation that returns the operating system's (or the simulated file system's) `io::Error` unchanged; there is nothing to document per function beyond that"
+)]
 
 mod clock;
 mod hardware;
+#[cfg(feature = "ipc")]
+pub mod ipc;
 mod mem;
 #[cfg(any(unix, windows))]
 mod native;

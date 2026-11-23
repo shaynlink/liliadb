@@ -34,7 +34,10 @@ pub struct MergingIterator {
 
 impl MergingIterator {
     pub fn new(children: Vec<Box<dyn InternalIterator>>) -> Self {
-        Self { children, current: None }
+        Self {
+            children,
+            current: None,
+        }
     }
 
     fn pick(&mut self) {
@@ -92,7 +95,8 @@ impl InternalIterator for MergingIterator {
     }
 
     fn value_bytes(&self) -> Bytes {
-        self.current.map_or_else(Bytes::new, |c| self.children[c].value_bytes())
+        self.current
+            .map_or_else(Bytes::new, |c| self.children[c].value_bytes())
     }
 }
 
@@ -123,7 +127,9 @@ pub mod testing {
             Ok(())
         }
         fn seek(&mut self, target: &[u8]) -> Result<()> {
-            self.at = self.entries.partition_point(|e| key::compare(&e.0, target) == Ordering::Less);
+            self.at = self
+                .entries
+                .partition_point(|e| key::compare(&e.0, target) == Ordering::Less);
             Ok(())
         }
         fn next(&mut self) -> Result<()> {
@@ -141,8 +147,14 @@ pub mod testing {
     #[test]
     fn merge_yields_global_internal_key_order() {
         use crate::key::{encode, Kind};
-        let a = VecIter::new(vec![(encode(b"a", 3, Kind::Put), b"a3".to_vec()), (encode(b"c", 1, Kind::Put), b"c1".to_vec())]);
-        let b = VecIter::new(vec![(encode(b"a", 5, Kind::Put), b"a5".to_vec()), (encode(b"b", 2, Kind::Delete), vec![])]);
+        let a = VecIter::new(vec![
+            (encode(b"a", 3, Kind::Put), b"a3".to_vec()),
+            (encode(b"c", 1, Kind::Put), b"c1".to_vec()),
+        ]);
+        let b = VecIter::new(vec![
+            (encode(b"a", 5, Kind::Put), b"a5".to_vec()),
+            (encode(b"b", 2, Kind::Delete), vec![]),
+        ]);
         let mut merged = MergingIterator::new(vec![Box::new(a), Box::new(b)]);
         merged.seek_to_first().unwrap();
         let mut values = Vec::new();

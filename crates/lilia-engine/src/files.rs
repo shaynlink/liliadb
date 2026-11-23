@@ -67,7 +67,12 @@ impl TableStore {
 
     pub fn open(&self, number: u64, size: u64) -> Result<Arc<Table>> {
         let file = self.vfs.open(&table(&self.dir, number), OpenMode::Read)?;
-        Ok(Arc::new(Table::open(number, file, size, Arc::clone(&self.cache))?))
+        Ok(Arc::new(Table::open(
+            number,
+            file,
+            size,
+            Arc::clone(&self.cache),
+        )?))
     }
 
     /// Drops the cached blocks of table `number` and deletes its file. A failure leaves an
@@ -91,7 +96,10 @@ mod tests {
             (manifest(dir, 3), FileKind::Manifest(3)),
             (temporary(dir, 9), FileKind::Temporary(9)),
         ] {
-            assert_eq!(parse(path.file_name().unwrap().to_str().unwrap()), Some(kind));
+            assert_eq!(
+                parse(path.file_name().unwrap().to_str().unwrap()),
+                Some(kind)
+            );
         }
         assert_eq!(parse("CURRENT"), None);
         assert_eq!(parse("notes.txt"), None);

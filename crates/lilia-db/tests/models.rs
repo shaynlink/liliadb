@@ -274,6 +274,10 @@ fn documents_scan_and_find_without_indexes() {
 /// Finds through an index return exactly what a scan filtered by the query returns, as the
 /// documents change and across a reopen.
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one index's whole life, each step checked against a scan"
+)]
 fn indexes_are_built_maintained_used_and_dropped() {
     let dir = tempfile::tempdir().unwrap();
     let mut rng = Rng(7);

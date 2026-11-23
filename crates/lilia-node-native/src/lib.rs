@@ -7,9 +7,11 @@
 //! [`NativeDatabase::execute_sync`] runs on the caller's thread and writes into a buffer the
 //! caller reuses from call to call; [`NativeDatabase::execute`] runs on the libuv thread pool.
 
-// reason: N-API functions take their arguments owned, as JavaScript passes them, and their
-// errors are JavaScript exceptions, documented by the TypeScript package.
-#![allow(clippy::needless_pass_by_value, clippy::missing_errors_doc)]
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::missing_errors_doc,
+    reason = "N-API functions take their arguments owned, as JavaScript passes them, and their errors are JavaScript exceptions, documented by the TypeScript package"
+)]
 
 use std::sync::Arc;
 use std::time::Duration;

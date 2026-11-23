@@ -6,8 +6,20 @@ use super::CvRdt;
 
 /// A Lamport / Hybrid Logical Clock counter for deterministic event ordering.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
-    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
 )]
 #[rkyv(crate = rkyv)]
 pub struct LogicalClock {
@@ -40,8 +52,16 @@ impl LogicalClock {
 
 /// A composite clock including an actor identifier for deterministic total ordering.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
-    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
 )]
 #[rkyv(crate = rkyv)]
 pub struct LwwClock {

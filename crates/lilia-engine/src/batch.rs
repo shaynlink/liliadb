@@ -68,7 +68,10 @@ impl WriteBatch {
 
     /// Commits only if the newest version of `key` is `version` (`None`: absent).
     pub fn expect(&mut self, key: impl Into<Bytes>, version: Option<u64>) -> &mut Self {
-        self.expectations.push(Expectation { key: key.into(), version });
+        self.expectations.push(Expectation {
+            key: key.into(),
+            version,
+        });
         self
     }
 
@@ -126,12 +129,17 @@ pub fn decode(record: &Bytes) -> Result<(u64, Vec<Op>)> {
         let kind = Kind::from_u8(reader.u8()?)?;
         let key = slice(reader.bytes()?);
         ops.push(match kind {
-            Kind::Put => Op::Put { key, value: slice(reader.bytes()?) },
+            Kind::Put => Op::Put {
+                key,
+                value: slice(reader.bytes()?),
+            },
             Kind::Delete => Op::Delete { key },
         });
     }
     if !reader.is_empty() {
-        return Err(corruption("journal record: trailing bytes after the last write"));
+        return Err(corruption(
+            "journal record: trailing bytes after the last write",
+        ));
     }
     Ok((first, ops))
 }
@@ -143,7 +151,11 @@ mod tests {
     #[test]
     fn batches_round_trip_through_the_journal_encoding() {
         let mut batch = WriteBatch::new();
-        batch.put("a", "1").delete("b").put("", vec![0u8; 300]).expect("a", None);
+        batch
+            .put("a", "1")
+            .delete("b")
+            .put("", vec![0u8; 300])
+            .expect("a", None);
         let mut out = Vec::new();
         encode(&mut out, 42, batch.ops());
         let (first, ops) = decode(&Bytes::from(out.clone())).unwrap();

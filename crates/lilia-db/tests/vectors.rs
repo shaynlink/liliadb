@@ -19,7 +19,10 @@ fn open(dir: &std::path::Path, ledger: bool) -> Database {
 }
 
 fn random(rng: &mut Rng, dim: usize) -> Vec<f32> {
-    #[allow(clippy::cast_precision_loss)] // reason: values below 2^20, exact in f32
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "values below 2^20, exact in f32"
+    )]
     (0..dim)
         .map(|_| (rng.below(1 << 20) as f32 / (1 << 19) as f32) - 1.0)
         .collect()

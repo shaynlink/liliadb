@@ -1,5 +1,3 @@
-#![allow(unsafe_code)]
-
 //! Core Zero-Copy abstractions and helpers powered by `rkyv`.
 
 use rkyv::rancor::Error as RancorError;
@@ -28,18 +26,4 @@ where
             false,
         )
     })
-}
-
-/// Instantaneous (0 nanosecond) unchecked access to an archived root in trusted memory.
-///
-/// # Safety
-/// The caller must ensure that `bytes` is correctly aligned for `T::Archived` and
-/// represents a valid serialized instance of `T`.
-#[inline]
-#[must_use]
-pub unsafe fn access_archived_unchecked<T>(bytes: &[u8]) -> &T::Archived
-where
-    T: Archive,
-{
-    rkyv::access_unchecked::<T::Archived>(bytes)
 }

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{input, render};
-use crate::args::LedgerCommand;
+use crate::args::models::LedgerCommand;
 
 /// A proof file, as `prove-doc`, `prove-kv` or `prove-commit` write it.
 #[derive(Deserialize)]

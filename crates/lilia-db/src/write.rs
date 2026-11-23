@@ -8,7 +8,7 @@
 //! *strict*: their failure is the caller's [`Error::Conflict`]. The others are internal: their
 //! failure only means the plan is stale, and the batch is planned again.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use bytes::Bytes;
 use lilia_engine::{Db, WriteBatch};
@@ -16,9 +16,9 @@ use lilia_engine::{Db, WriteBatch};
 use crate::batch::{Outcome, Write};
 use crate::catalog::Catalog;
 use crate::error::{invalid, Error, Result};
-use crate::guard::{Access, Guard};
-use crate::keys::{self, validate_name};
-use crate::record::{decode_doc, decode_kv, encode_doc, encode_kv};
+use crate::guard::Access;
+use crate::keys::{self};
+use crate::record::decode_kv;
 
 /// Model of a ledger delta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,146 +447,6 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn kv_put(
-        &mut self,
-        namespace: &str,
-        key: &[u8],
-        value: &[u8],
-        expires: Option<i64>,
-        if_version: Option<u64>,
-    ) -> Result<()> {
-        validate_name("namespace", namespace)?;
-        let record_key = keys::kv(namespace, key);
-        let guard = Guard::new(self.access, self.catalog.schema(namespace));
-        if if_version.is_some() || guard.checks_writes() {
-            let old = self
-                .current(&record_key)?
-                .map(|raw| decode_kv(&raw))
-                .transpose()?
-                .filter(|r| !r.expired(self.now_ms));
-            self.check_version(&record_key, if_version, old.is_some())?;
-            guard.check_kv(
-                namespace,
-                key,
-                old.as_ref().map(|r| r.value.as_ref()),
-                Some(value),
-            )?;
-        }
-        let record = encode_kv(value, expires);
-        let op = self.write_record(
-            &record_key,
-            Some(record),
-            (Model::Kv, namespace, hex::encode(key)),
-        );
-        self.plan.results.push((Some(op), false));
-        Ok(())
-    }
-
-    fn kv_delete(&mut self, namespace: &str, key: &[u8], if_version: Option<u64>) -> Result<()> {
-        validate_name("namespace", namespace)?;
-        let record_key = keys::kv(namespace, key);
-        let guard = Guard::new(self.access, self.catalog.schema(namespace));
-        let Some(raw) = self.current(&record_key)? else {
-            self.check_version(&record_key, if_version, false)?;
-            self.plan.results.push((None, false));
-            return Ok(());
-        };
-        let live = Some(decode_kv(&raw)?).filter(|r| !r.expired(self.now_ms));
-        self.check_version(&record_key, if_version, live.is_some())?;
-        if let Some(old) = &live {
-            guard.check_kv(namespace, key, Some(&old.value), None)?;
-        }
-        let op = self.write_record(&record_key, None, (Model::Kv, namespace, hex::encode(key)));
-        self.plan.results.push((Some(op), live.is_some()));
-        Ok(())
-    }
-
-    /// Replaces the index entries of document `id` in `space` from `old` to `new`.
-    fn reindex(
-        &mut self,
-        space: &str,
-        id: &str,
-        old: Option<&lilia_core::BinaryDoc>,
-        new: Option<&lilia_core::BinaryDoc>,
-    ) {
-        let Some(schema) = self.catalog.schema(space) else {
-            return;
-        };
-        for index in &schema.indexes {
-            let before = old.map_or_default(|d| index.values(d));
-            let after: BTreeSet<String> = new.map_or_default(|d| index.values(d));
-            for value in before.difference(&after) {
-                self.op(keys::index_entry(space, index.id, value, id), None);
-            }
-            // An index being built may not hold the old document's entries yet (the build
-            // skips documents changed since its snapshot), so every new entry is written.
-            let added: Vec<&String> = if index.ready {
-                after.difference(&before).collect()
-            } else {
-                after.iter().collect()
-            };
-            for value in added {
-                self.op(
-                    keys::index_entry(space, index.id, value, id),
-                    Some(Bytes::new()),
-                );
-            }
-        }
-    }
-
-    fn json_put(
-        &mut self,
-        space: &str,
-        id: &str,
-        doc: &lilia_core::BinaryDoc,
-        if_version: Option<u64>,
-    ) -> Result<()> {
-        validate_name("space", space)?;
-        if id.is_empty() {
-            return Err(invalid("document ids must not be empty"));
-        }
-        let record_key = keys::doc(space, id);
-        let schema = self.catalog.schema(space);
-        let indexed = schema.as_ref().is_some_and(|s| !s.indexes.is_empty());
-        let guard = Guard::new(self.access, schema);
-        if if_version.is_some() || guard.checks_writes() || indexed {
-            let old = self
-                .current(&record_key)?
-                .map(|raw| decode_doc(&raw))
-                .transpose()?;
-            self.check_version(&record_key, if_version, old.is_some())?;
-            guard.check_doc(space, old.as_ref(), Some(doc))?;
-            self.reindex(space, id, old.as_ref(), Some(doc));
-        }
-        let op = self.write_record(
-            &record_key,
-            Some(encode_doc(doc)),
-            (Model::Json, space, id.to_owned()),
-        );
-        self.plan.results.push((Some(op), false));
-        Ok(())
-    }
-
-    fn json_delete(&mut self, space: &str, id: &str, if_version: Option<u64>) -> Result<()> {
-        validate_name("space", space)?;
-        let record_key = keys::doc(space, id);
-        let guard = Guard::new(self.access, self.catalog.schema(space));
-        let old = self
-            .current(&record_key)?
-            .map(|raw| decode_doc(&raw))
-            .transpose()?;
-        self.check_version(&record_key, if_version, old.is_some())?;
-        let Some(old) = old else {
-            self.plan.results.push((None, false));
-            return Ok(());
-        };
-        guard.check_doc(space, Some(&old), None)?;
-        self.reindex(space, id, Some(&old), None);
-        let op = self.write_record(&record_key, None, (Model::Json, space, id.to_owned()));
-        self.plan.results.push((Some(op), true));
-        Ok(())
-    }
-
     /// Deletes the key-value record at `key` of `namespace` if it is still expired; the batch's
     /// outcomes then count it.
     ///
@@ -630,68 +490,5 @@ impl<'a> Planner<'a> {
     }
 }
 
-/// How a transaction's buffered writes change what it reads.
-pub mod overlay {
-    use bytes::Bytes;
-
-    use crate::batch::Write;
-    use crate::error::Result;
-    use crate::keys::{self, validate_name};
-    use crate::record::{decode_kv, encode_doc, encode_kv, now_ms};
-    use crate::txn::View;
-
-    /// Records written by one write, and an update of the overlay.
-    pub type Changes = Vec<(Bytes, Option<Bytes>)>;
-
-    /// The records `write` changes in `view`, and whether it deletes a live record.
-    ///
-    /// # Errors
-    ///
-    /// Invalid names; engine errors of the reads a write needs.
-    pub fn changes(write: &Write, view: &View<'_>) -> Result<(Changes, bool)> {
-        match write {
-            Write::KvPut {
-                namespace,
-                key,
-                value,
-                expires_at_ms,
-                ..
-            } => {
-                validate_name("namespace", namespace)?;
-                Ok((
-                    vec![(
-                        keys::kv(namespace, key),
-                        Some(encode_kv(value, *expires_at_ms)),
-                    )],
-                    false,
-                ))
-            }
-            Write::KvDelete { namespace, key, .. } => {
-                validate_name("namespace", namespace)?;
-                let record_key = keys::kv(namespace, key);
-                let live = match view.peek(&record_key)? {
-                    Some(item) => !decode_kv(&item.value)?.expired(now_ms()),
-                    None => false,
-                };
-                Ok((vec![(record_key, None)], live))
-            }
-            Write::JsonPut { space, id, doc, .. } => {
-                validate_name("space", space)?;
-                Ok((vec![(keys::doc(space, id), Some(encode_doc(doc)))], false))
-            }
-            Write::JsonDelete { space, id, .. } => {
-                validate_name("space", space)?;
-                let record_key = keys::doc(space, id);
-                let live = view.peek(&record_key)?.is_some();
-                Ok((vec![(record_key, None)], live))
-            }
-            Write::Graph(write) => crate::graph::overlay(write, view),
-            Write::Fts(write) => crate::fts::overlay(write, view),
-            Write::Vector(write) => crate::vectors::overlay(write, view),
-            Write::TimeSeries(write) => crate::timeseries::overlay(write, view),
-            Write::Geo(write) => crate::geo::overlay(write, view),
-            Write::Crdt(write) => crate::crdt::overlay(write, view),
-            Write::Bitemporal(write) => crate::bitemporal::overlay(write, view),
-        }
-    }
-}
+pub mod overlay;
+mod records;

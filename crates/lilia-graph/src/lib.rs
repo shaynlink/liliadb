@@ -4,7 +4,10 @@
 //! Cypher. Every read goes through the session or transaction of the graph handle, so the
 //! caller's read policies apply.
 
-#![allow(clippy::missing_errors_doc)]
+#![allow(
+    clippy::missing_errors_doc,
+    reason = "every fallible function returns the errors of the reads it makes through the graph handle, or `ErrorCode::InvalidInput` for an invalid query; there is nothing to document per function beyond that"
+)]
 
 pub mod algorithms;
 mod analysis;

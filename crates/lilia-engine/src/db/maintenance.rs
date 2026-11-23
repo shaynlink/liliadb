@@ -22,10 +22,18 @@ pub fn start(inner: &Arc<Inner>) -> Result<Vec<JoinHandle<()>>> {
     }
     let mut threads = Vec::with_capacity(1 + inner.options.compaction_threads);
     let flusher = Arc::clone(inner);
-    threads.push(thread::Builder::new().name("lilia-flush".into()).spawn(move || flush_loop(&flusher))?);
+    threads.push(
+        thread::Builder::new()
+            .name("lilia-flush".into())
+            .spawn(move || flush_loop(&flusher))?,
+    );
     for i in 0..inner.options.compaction_threads {
         let compactor = Arc::clone(inner);
-        threads.push(thread::Builder::new().name(format!("lilia-compact-{i}")).spawn(move || compaction_loop(&compactor))?);
+        threads.push(
+            thread::Builder::new()
+                .name(format!("lilia-compact-{i}"))
+                .spawn(move || compaction_loop(&compactor))?,
+        );
     }
     Ok(threads)
 }
@@ -93,7 +101,10 @@ fn flush_loop(inner: &Inner) {
 fn flush(inner: &Inner, memtable: &Arc<Memtable>) -> Result<()> {
     let mut iter = memtable.iter();
     iter.seek_to_first()?;
-    let retention = Retention { smallest_snapshot: inner.smallest_snapshot(), tombstones: None };
+    let retention = Retention {
+        smallest_snapshot: inner.smallest_snapshot(),
+        tombstones: None,
+    };
     let added = write_runs(inner, 0, &mut iter, &retention)?;
     // Journals up to this memtable's are obsolete once the run is recorded.
     let log_number = memtable.journal + 1;
@@ -104,11 +115,19 @@ fn flush(inner: &Inner, memtable: &Arc<Memtable>) -> Result<()> {
         ..VersionEdit::default()
     };
     install(inner, edit, Some(memtable))?;
-    remove_unreferenced(inner.vfs.as_ref(), &files::journal(&inner.dir, memtable.journal));
+    remove_unreferenced(
+        inner.vfs.as_ref(),
+        &files::journal(&inner.dir, memtable.journal),
+    );
     Ok(())
 }
 
-fn write_runs(inner: &Inner, level: usize, iter: &mut dyn InternalIterator, retention: &Retention<'_>) -> Result<Vec<NewFile>> {
+fn write_runs(
+    inner: &Inner,
+    level: usize,
+    iter: &mut dyn InternalIterator,
+    retention: &Retention<'_>,
+) -> Result<Vec<NewFile>> {
     let mut allocate = || inner.versions.lock().new_file_number();
     let mut sink = RunSink {
         vfs: inner.vfs.as_ref(),
@@ -132,8 +151,17 @@ fn install(inner: &Inner, edit: VersionEdit, flushed: Option<&Arc<Memtable>>) ->
     let mut versions = inner.versions.lock();
     let version = versions.log_and_apply(edit)?;
     let mut current = inner.current.write();
-    let imm = current.imm.iter().filter(|m| !flushed.is_some_and(|f| Arc::ptr_eq(m, f))).cloned().collect();
-    *current = Arc::new(SuperVersion { mem: Arc::clone(&current.mem), imm, version });
+    let imm = current
+        .imm
+        .iter()
+        .filter(|m| !flushed.is_some_and(|f| Arc::ptr_eq(m, f)))
+        .cloned()
+        .collect();
+    *current = Arc::new(SuperVersion {
+        mem: Arc::clone(&current.mem),
+        imm,
+        version,
+    });
     Ok(())
 }
 
@@ -174,11 +202,18 @@ fn run(inner: &Inner, compaction: &Compaction, version: &Version) -> Result<()> 
     let target = compaction.level + 1;
     let mut edit = VersionEdit::default();
     for (offset, inputs) in compaction.inputs.iter().enumerate() {
-        edit.deleted.extend(inputs.iter().map(|f| (compaction.level + offset, f.number)));
+        edit.deleted
+            .extend(inputs.iter().map(|f| (compaction.level + offset, f.number)));
     }
     if compaction.is_trivial_move() {
         let file = &compaction.inputs[0][0];
-        edit.added.push(NewFile { level: target, number: file.number, size: file.size, smallest: file.smallest.clone(), largest: file.largest.clone() });
+        edit.added.push(NewFile {
+            level: target,
+            number: file.number,
+            size: file.size,
+            smallest: file.smallest.clone(),
+            largest: file.largest.clone(),
+        });
         return install(inner, edit, None);
     }
     let mut children: Vec<Box<dyn InternalIterator>> = Vec::new();
@@ -187,7 +222,10 @@ fn run(inner: &Inner, compaction: &Compaction, version: &Version) -> Result<()> 
     }
     let mut merged = MergingIterator::new(children);
     merged.seek_to_first()?;
-    let retention = Retention { smallest_snapshot: inner.smallest_snapshot(), tombstones: Some((version, target)) };
+    let retention = Retention {
+        smallest_snapshot: inner.smallest_snapshot(),
+        tombstones: Some((version, target)),
+    };
     edit.added = write_runs(inner, target, &mut merged, &retention)?;
     install(inner, edit, None)
 }

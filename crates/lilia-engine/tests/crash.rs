@@ -34,7 +34,11 @@ fn plan(rng: &mut Rng, count: usize) -> (Vec<WriteBatch>, Vec<State>) {
                 batch.delete(k.clone());
                 state.remove(&k);
             } else {
-                let value = format!("b{b}-{}", "x".repeat(usize::try_from(rng.below(200)).unwrap())).into_bytes();
+                let value = format!(
+                    "b{b}-{}",
+                    "x".repeat(usize::try_from(rng.below(200)).unwrap())
+                )
+                .into_bytes();
                 batch.put(k.clone(), value.clone());
                 state.insert(k, value);
             }
@@ -46,7 +50,9 @@ fn plan(rng: &mut Rng, count: usize) -> (Vec<WriteBatch>, Vec<State>) {
 }
 
 fn read_state(db: &Db) -> State {
-    (0..KEYS).filter_map(|i| db.get(&key(i)).unwrap().map(|v| (key(i), v.to_vec()))).collect()
+    (0..KEYS)
+        .filter_map(|i| db.get(&key(i)).unwrap().map(|v| (key(i), v.to_vec())))
+        .collect()
 }
 
 fn iteration(seed: u64, background_threads: bool) {
@@ -56,7 +62,10 @@ fn iteration(seed: u64, background_threads: bool) {
         1 => Durability::Performance,
         _ => Durability::Durable,
     };
-    let options = Options { background_threads, ..small_options(durability) };
+    let options = Options {
+        background_threads,
+        ..small_options(durability)
+    };
     let memvfs = MemVfs::new(seed);
     let vfs: Arc<dyn Vfs> = Arc::new(memvfs.clone());
     let count = 40 + usize::try_from(rng.below(400)).unwrap();
@@ -99,7 +108,11 @@ fn iteration(seed: u64, background_threads: bool) {
     drop(db);
 
     memvfs.set_fault_ppm(0);
-    memvfs.restart(if rng.below(2) == 0 { CrashOptions::TORN } else { CrashOptions::CLEAN });
+    memvfs.restart(if rng.below(2) == 0 {
+        CrashOptions::TORN
+    } else {
+        CrashOptions::CLEAN
+    });
     let mut files_after_crash = vfs.list_dir(std::path::Path::new("/db")).unwrap();
     files_after_crash.sort();
     let db = Db::open_with(Arc::clone(&vfs), "/db", options.clone())
@@ -109,15 +122,26 @@ fn iteration(seed: u64, background_threads: bool) {
         Durability::Durable => vec![acknowledged, acknowledged + 1],
         Durability::Balanced | Durability::Performance => (preload..=acknowledged + 1).collect(),
     };
-    let matched = candidates.iter().any(|&n| states.get(n) == Some(&recovered));
+    let matched = candidates
+        .iter()
+        .any(|&n| states.get(n) == Some(&recovered));
     if !matched {
         let prefix = states.iter().position(|s| s == &recovered);
-        let short = |v: Option<&Vec<u8>>| v.map(|v| String::from_utf8_lossy(&v[..v.len().min(12)]).into_owned());
+        let short = |v: Option<&Vec<u8>>| {
+            v.map(|v| String::from_utf8_lossy(&v[..v.len().min(12)]).into_owned())
+        };
         let acknowledged_state = &states[acknowledged.min(states.len() - 1)];
         let differing: Vec<String> = (0..KEYS)
             .map(key)
             .filter(|k| acknowledged_state.get(k) != recovered.get(k))
-            .map(|k| format!("{}: want {:?} got {:?}", String::from_utf8_lossy(&k), short(acknowledged_state.get(&k)), short(recovered.get(&k))))
+            .map(|k| {
+                format!(
+                    "{}: want {:?} got {:?}",
+                    String::from_utf8_lossy(&k),
+                    short(acknowledged_state.get(&k)),
+                    short(recovered.get(&k))
+                )
+            })
             .collect();
         panic!(
             "seed {seed} ({durability:?}): recovered state matches no allowed prefix (preload {preload}, acknowledged {acknowledged}, matches prefix {prefix:?}); files after the crash {files_after_crash:?}; stats after reopen {:?}; differences from the acknowledged state: {differing:?}",
@@ -132,13 +156,23 @@ fn iteration(seed: u64, background_threads: bool) {
     db.close().unwrap();
     let db = Db::open_with(vfs, "/db", options).unwrap();
     assert_eq!(db.get(b"after-crash").unwrap().unwrap(), "ok");
-    assert_eq!(read_state(&db), recovered, "seed {seed}: state changed across a clean reopen");
+    assert_eq!(
+        read_state(&db),
+        recovered,
+        "seed {seed}: state changed across a clean reopen"
+    );
 }
 
 #[test]
 fn recovered_state_is_always_a_prefix_of_the_submitted_batches() {
-    let iterations: u64 = std::env::var("LILIA_CRASH_ITERATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000);
-    let base: u64 = std::env::var("LILIA_CRASH_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let iterations: u64 = std::env::var("LILIA_CRASH_ITERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1_000);
+    let base: u64 = std::env::var("LILIA_CRASH_SEED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     for seed in base..base + iterations {
         iteration(seed, true);
     }
@@ -146,8 +180,14 @@ fn recovered_state_is_always_a_prefix_of_the_submitted_batches() {
 
 #[test]
 fn without_background_threads_too() {
-    let iterations: u64 = std::env::var("LILIA_CRASH_ITERATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000);
-    let base: u64 = std::env::var("LILIA_CRASH_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let iterations: u64 = std::env::var("LILIA_CRASH_ITERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1_000);
+    let base: u64 = std::env::var("LILIA_CRASH_SEED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     for seed in base..base + iterations {
         iteration(seed, false);
     }

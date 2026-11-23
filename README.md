@@ -219,7 +219,8 @@ pnpm bench:compare
 - `apps/`: CLI (`lilia-cli`), local daemon (`lilia-daemon`), VS Code extension (`lilia-vscode`).
 - `crates/`:
   - `lilia-io`: the platform layer: file systems (native, in-memory with crash simulation, the
-    browser's OPFS), durability primitives, hardware probe.
+    browser's OPFS), durability primitives, hardware probe, and the access control of the
+    daemon's endpoints (the `ipc` feature).
   - `lilia-engine`: the storage engine (LSM tree, journal, compaction, snapshots).
   - `lilia-db`: the data models, transactions, history, ledger, security, SQL.
   - `lilia-core`: shared types (records, batches, errors), the binary JSON format, expressions,

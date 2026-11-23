@@ -23,7 +23,10 @@ pub fn quantize_f32_to_i8(floats: &[f32]) -> (Vec<i8>, f32) {
     let inv_scale = 1.0 / scale;
     let mut quantized = Vec::with_capacity(floats.len());
     for &val in floats {
-        #[allow(clippy::cast_possible_truncation)] // rounded and clamped to the i8 range: exact
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "rounded and clamped to the i8 range: exact"
+        )]
         let q = (val * inv_scale).round().clamp(-128.0, 127.0) as i8;
         quantized.push(q);
     }
@@ -104,8 +107,10 @@ pub fn cosine_distance_i8(a: &[i8], b: &[i8]) -> f64 {
     if norm_a <= 0 || norm_b <= 0 {
         return 1.0;
     }
-    // Sums of i8 products stay below 2^53 for any vector under 2^38 dimensions: exact in f64.
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "sums of i8 products stay below 2^53 for any vector under 2^38 dimensions: exact in f64"
+    )]
     let sim = (dot as f64) / ((norm_a as f64).sqrt() * (norm_b as f64).sqrt());
     (1.0 - sim).clamp(0.0, 2.0)
 }

@@ -6,7 +6,19 @@ use serde_json::Value;
 use super::graph::default_edge_weight;
 use super::vector::VectorElementType;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum Durability {
@@ -16,7 +28,9 @@ pub enum Durability {
     Performance,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct KvEntry {
     pub namespace: String,
@@ -29,7 +43,9 @@ pub struct KvEntry {
     pub expires_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct JsonEntry {
     pub space: String,
@@ -40,7 +56,9 @@ pub struct JsonEntry {
     pub version: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct BitemporalEntry {
     pub space: String,
@@ -122,7 +140,9 @@ impl JsonEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 #[serde(tag = "model", rename_all = "snake_case")]
 pub enum BatchOperation {
@@ -287,11 +307,12 @@ pub enum BatchOperation {
     },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct MutationResult {
     #[serde(default, with = "crate::version::optional")]
     pub version: Option<u64>,
     pub deleted: bool,
 }
-

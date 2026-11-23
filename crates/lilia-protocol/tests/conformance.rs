@@ -73,7 +73,11 @@ fn shared_conformance_fixtures() {
     let fixtures: Vec<Value> =
         serde_json::from_str(include_str!("../../../tools/conformance/fixtures.json")).unwrap();
     let directory = tempfile::tempdir().unwrap();
-    let database = lilia_protocol::open(directory.path().join("db"), &Default::default()).unwrap();
+    let database = lilia_protocol::open(
+        directory.path().join("db"),
+        &lilia_protocol::OpenOptions::default(),
+    )
+    .unwrap();
     let mut versions = Versions::default();
     for step in fixtures {
         let name = step["name"].as_str().unwrap();

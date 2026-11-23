@@ -37,7 +37,10 @@ pub struct Change {
 }
 
 fn visible(found: Option<Found>) -> Option<Versioned> {
-    found.filter(|f| f.kind == Kind::Put).map(|f| Versioned { value: f.value, version: f.sequence })
+    found.filter(|f| f.kind == Kind::Put).map(|f| Versioned {
+        value: f.value,
+        version: f.sequence,
+    })
 }
 
 impl Inner {
@@ -78,7 +81,11 @@ fn merged(source: &SuperVersion) -> Result<MergingIterator> {
     }
     for level in &source.version.levels[1..] {
         if !level.is_empty() {
-            children.push(Box::new(LevelIter { files: level.clone(), at: 0, current: None }));
+            children.push(Box::new(LevelIter {
+                files: level.clone(),
+                at: 0,
+                current: None,
+            }));
         }
     }
     Ok(MergingIterator::new(children))
@@ -99,7 +106,10 @@ impl Snapshot {
         // that compaction is honouring.
         let sequence = inner.visible.load(std::sync::atomic::Ordering::Acquire);
         *pins.snapshots.entry(sequence).or_insert(0) += 1;
-        Self { inner: Arc::clone(inner), sequence }
+        Self {
+            inner: Arc::clone(inner),
+            sequence,
+        }
     }
 
     /// A snapshot at a past `sequence`, if its state is still kept. Checked and registered under
@@ -108,14 +118,19 @@ impl Snapshot {
         let mut pins = inner.pins.lock();
         let visible = inner.visible.load(std::sync::atomic::Ordering::Acquire);
         if sequence > visible {
-            return Err(Error::InvalidArgument(format!("sequence {sequence} is after the newest write, {visible}")));
+            return Err(Error::InvalidArgument(format!(
+                "sequence {sequence} is after the newest write, {visible}"
+            )));
         }
         let oldest = pins.oldest(visible);
         if sequence < oldest {
             return Err(Error::HistoryUnavailable { sequence, oldest });
         }
         *pins.snapshots.entry(sequence).or_insert(0) += 1;
-        Ok(Self { inner: Arc::clone(inner), sequence })
+        Ok(Self {
+            inner: Arc::clone(inner),
+            sequence,
+        })
     }
 
     /// The last sequence number this snapshot sees.
@@ -176,12 +191,16 @@ impl InternalIterator for LevelIter {
     }
 
     fn seek(&mut self, target: &[u8]) -> Result<()> {
-        let at = self.files.partition_point(|f| key::compare(&f.largest, target) == Ordering::Less);
+        let at = self
+            .files
+            .partition_point(|f| key::compare(&f.largest, target) == Ordering::Less);
         self.open(at, Some(target))
     }
 
     fn next(&mut self) -> Result<()> {
-        let Some(current) = self.current.as_mut() else { return Ok(()) };
+        let Some(current) = self.current.as_mut() else {
+            return Ok(());
+        };
         current.next()?;
         if !current.valid() {
             self.open(self.at + 1, None)?;
@@ -198,7 +217,9 @@ impl InternalIterator for LevelIter {
     }
 
     fn value_bytes(&self) -> Bytes {
-        self.current.as_ref().map_or_else(Bytes::new, InternalIterator::value_bytes)
+        self.current
+            .as_ref()
+            .map_or_else(Bytes::new, InternalIterator::value_bytes)
     }
 }
 
@@ -216,12 +237,20 @@ pub struct RangeIter {
 
 impl std::fmt::Debug for RangeIter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RangeIter").field("sequence", &self.sequence).field("done", &self.done).finish_non_exhaustive()
+        f.debug_struct("RangeIter")
+            .field("sequence", &self.sequence)
+            .field("done", &self.done)
+            .finish_non_exhaustive()
     }
 }
 
 impl RangeIter {
-    pub(crate) fn new(inner: &Inner, sequence: u64, start: Bound<&[u8]>, end: Bound<&[u8]>) -> Result<Self> {
+    pub(crate) fn new(
+        inner: &Inner,
+        sequence: u64,
+        start: Bound<&[u8]>,
+        end: Bound<&[u8]>,
+    ) -> Result<Self> {
         let source = inner.super_version();
         let mut merged = merged(&source)?;
         let mut resolved = None;
@@ -233,7 +262,14 @@ impl RangeIter {
                 resolved = Some(k.to_vec());
             }
         }
-        Ok(Self { merged, sequence, end: end.map(<[u8]>::to_vec), resolved, done: false, _source: source })
+        Ok(Self {
+            merged,
+            sequence,
+            end: end.map(<[u8]>::to_vec),
+            resolved,
+            done: false,
+            _source: source,
+        })
     }
 
     fn past_end(&self, user: &[u8]) -> bool {

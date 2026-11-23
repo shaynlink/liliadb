@@ -22,9 +22,6 @@ mod tests;
 #[cfg(unix)]
 mod ipc_unix;
 
-#[cfg(windows)]
-mod ipc_windows;
-
 mod http;
 
 /// How long a connected client may stay silent before the daemon drops it.
@@ -93,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(unix)]
     let listener = ipc_unix::ListenerGuard::bind(&arguments.endpoint)?;
     #[cfg(windows)]
-    let security = ipc_windows::UserSecurity::new()?;
+    let security = lilia_io::ipc::UserSecurity::new()?;
     #[cfg(windows)]
     let listener = security.pipe(&arguments.endpoint, true)?;
     #[cfg(unix)]
@@ -194,7 +191,7 @@ async fn serve(
 async fn serve(
     endpoint: &Path,
     mut server: tokio::net::windows::named_pipe::NamedPipeServer,
-    security: &ipc_windows::UserSecurity,
+    security: &lilia_io::ipc::UserSecurity,
     database: Arc<Database>,
     token: String,
     shutdown: Arc<Notify>,

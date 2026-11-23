@@ -99,4 +99,6 @@ missing_debug_implementations = "warn"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+# Every exception to a lint says why (rules of docs/v0.2-storage-paradigm.md §5.2).
+allow_attributes_without_reason = "warn"
 

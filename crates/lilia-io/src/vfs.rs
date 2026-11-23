@@ -54,7 +54,12 @@ pub trait File: Send + Sync + fmt::Debug {
     fn read_exact_at(&self, mut buf: &mut [u8], mut offset: u64) -> io::Result<()> {
         while !buf.is_empty() {
             match self.read_at(buf, offset) {
-                Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "read past end of file")),
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "read past end of file",
+                    ))
+                }
                 Ok(n) => {
                     buf = &mut buf[n..];
                     offset += n as u64;

@@ -135,7 +135,7 @@ pub fn u64_to_fr(val: u64) -> Fr {
     Fr::from(val)
 }
 
-/// Converts an arbitrary string identifier (e.g. "usr_42") into a BN254 scalar field element
+/// Converts an arbitrary string identifier (e.g. "`usr_42`") into a BN254 scalar field element
 /// using domain-separated BLAKE3 hashing.
 #[must_use]
 pub fn str_to_fr(s: &str) -> Fr {

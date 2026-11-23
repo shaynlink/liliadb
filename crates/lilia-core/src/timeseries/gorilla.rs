@@ -129,7 +129,7 @@ pub fn compress_timeseries(points: &[TimeSeriesPoint]) -> Result<Vec<u8>> {
     // First point
     let t0 = points[0].timestamp;
     let v0 = points[0].value;
-    writer.write_bits(t0 as u64, 64);
+    writer.write_bits(t0.cast_unsigned(), 64);
     writer.write_bits(v0.to_bits(), 64);
 
     if points.len() == 1 {
@@ -140,11 +140,11 @@ pub fn compress_timeseries(points: &[TimeSeriesPoint]) -> Result<Vec<u8>> {
     // round-trip.
     let mut prev_t = points[1].timestamp;
     let mut prev_delta = prev_t.wrapping_sub(t0);
-    writer.write_bits(prev_delta as u64, 64);
+    writer.write_bits(prev_delta.cast_unsigned(), 64);
 
     let mut prev_val_bits = points[0].value.to_bits();
-    let mut prev_lz = 0u8;
-    let mut prev_tz = 0u8;
+    let mut prev_leading = 0u8;
+    let mut prev_trailing = 0u8;
     let mut has_prev_window = false;
 
     // Encode value for second point
@@ -152,8 +152,8 @@ pub fn compress_timeseries(points: &[TimeSeriesPoint]) -> Result<Vec<u8>> {
         &mut writer,
         points[1].value.to_bits(),
         prev_val_bits,
-        &mut prev_lz,
-        &mut prev_tz,
+        &mut prev_leading,
+        &mut prev_trailing,
         &mut has_prev_window,
     );
     prev_val_bits = points[1].value.to_bits();
@@ -168,19 +168,19 @@ pub fn compress_timeseries(points: &[TimeSeriesPoint]) -> Result<Vec<u8>> {
             writer.write_bit(false); // 0
         } else if (-63..=64).contains(&dod) {
             writer.write_bits(0b10, 2);
-            writer.write_bits((dod + 63) as u64, 7);
+            writer.write_bits((dod + 63).cast_unsigned(), 7);
         } else if (-255..=256).contains(&dod) {
             writer.write_bits(0b110, 3);
-            writer.write_bits((dod + 255) as u64, 9);
+            writer.write_bits((dod + 255).cast_unsigned(), 9);
         } else if (-2047..=2048).contains(&dod) {
             writer.write_bits(0b1110, 4);
-            writer.write_bits((dod + 2047) as u64, 12);
+            writer.write_bits((dod + 2047).cast_unsigned(), 12);
         } else if let Ok(dod_i32) = i32::try_from(dod) {
             writer.write_bits(0b11110, 5);
-            writer.write_bits(u64::from(dod_i32 as u32), 32);
+            writer.write_bits(u64::from(dod_i32.cast_unsigned()), 32);
         } else {
             writer.write_bits(0b11111, 5);
-            writer.write_bits(dod as u64, 64);
+            writer.write_bits(dod.cast_unsigned(), 64);
         }
 
         prev_t = p.timestamp;
@@ -191,8 +191,8 @@ pub fn compress_timeseries(points: &[TimeSeriesPoint]) -> Result<Vec<u8>> {
             &mut writer,
             p.value.to_bits(),
             prev_val_bits,
-            &mut prev_lz,
-            &mut prev_tz,
+            &mut prev_leading,
+            &mut prev_trailing,
             &mut has_prev_window,
         );
         prev_val_bits = p.value.to_bits();
@@ -206,8 +206,8 @@ fn encode_float_xor(
     writer: &mut BitWriter,
     curr_bits: u64,
     prev_bits: u64,
-    prev_lz: &mut u8,
-    prev_tz: &mut u8,
+    prev_leading: &mut u8,
+    prev_trailing: &mut u8,
     has_prev_window: &mut bool,
 ) {
     let xor = curr_bits ^ prev_bits;
@@ -218,28 +218,31 @@ fn encode_float_xor(
 
     writer.write_bit(true); // 1
 
-    let mut lz = xor.leading_zeros() as u8;
-    let tz = xor.trailing_zeros() as u8;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "a u64 has at most 64 leading or trailing zeros"
+    )]
+    let (mut leading, trailing) = (xor.leading_zeros() as u8, xor.trailing_zeros() as u8);
 
-    if lz > 31 {
-        lz = 31;
+    if leading > 31 {
+        leading = 31;
     }
 
-    if *has_prev_window && lz >= *prev_lz && tz >= *prev_tz {
+    if *has_prev_window && leading >= *prev_leading && trailing >= *prev_trailing {
         writer.write_bit(false); // 0: reuse previous window
-        let len = 64 - *prev_lz - *prev_tz;
-        let meaningful = (xor >> *prev_tz) & mask_for_length(len);
+        let len = 64 - *prev_leading - *prev_trailing;
+        let meaningful = (xor >> *prev_trailing) & mask_for_length(len);
         writer.write_bits(meaningful, len);
     } else {
         writer.write_bit(true); // 1: new window
-        writer.write_bits(u64::from(lz), 5); // 5 bits for leading zeros
-        let len = 64 - lz - tz;
+        writer.write_bits(u64::from(leading), 5); // 5 bits for leading zeros
+        let len = 64 - leading - trailing;
         writer.write_bits(u64::from(len - 1), 6); // 6 bits for (length - 1)
-        let meaningful = (xor >> tz) & mask_for_length(len);
+        let meaningful = (xor >> trailing) & mask_for_length(len);
         writer.write_bits(meaningful, len);
 
-        *prev_lz = lz;
-        *prev_tz = tz;
+        *prev_leading = leading;
+        *prev_trailing = trailing;
         *has_prev_window = true;
     }
 }
@@ -280,14 +283,19 @@ pub fn decompress_timeseries(bytes: &[u8]) -> Result<Vec<TimeSeriesPoint>> {
     // The second point carries the initial delta; later ones a delta of delta. Corrupted
     // payloads may overflow: the arithmetic wraps instead of panicking.
     let mut prev_delta = read_bits(&mut reader, 64, "truncated delta0")?.cast_signed();
-    let mut prev_lz = 0u8;
-    let mut prev_tz = 0u8;
+    let mut prev_leading = 0u8;
+    let mut prev_trailing = 0u8;
     for index in 1..count {
         if index > 1 {
             prev_delta = prev_delta.wrapping_add(read_delta_of_delta(&mut reader)?);
         }
         curr_t = curr_t.wrapping_add(prev_delta);
-        curr_v_bits = decode_float_xor(&mut reader, curr_v_bits, &mut prev_lz, &mut prev_tz)?;
+        curr_v_bits = decode_float_xor(
+            &mut reader,
+            curr_v_bits,
+            &mut prev_leading,
+            &mut prev_trailing,
+        )?;
         points.push(TimeSeriesPoint::new(curr_t, f64::from_bits(curr_v_bits)));
     }
     Ok(points)
@@ -335,8 +343,8 @@ fn read_delta_of_delta(reader: &mut BitReader<'_>) -> Result<i64> {
 fn decode_float_xor(
     reader: &mut BitReader<'_>,
     prev_bits: u64,
-    prev_lz: &mut u8,
-    prev_tz: &mut u8,
+    prev_leading: &mut u8,
+    prev_trailing: &mut u8,
 ) -> Result<u64> {
     let bit = reader.read_bit().ok_or_else(|| {
         LiliaError::new(
@@ -359,8 +367,8 @@ fn decode_float_xor(
         )
     })?;
 
-    let (len, tz) = if is_new_window {
-        let lz = reader.read_bits(5).ok_or_else(|| {
+    let (len, trailing) = if is_new_window {
+        let leading = reader.read_bits(5).ok_or_else(|| {
             LiliaError::new(
                 ErrorCode::InvalidInput,
                 "corrupted timeseries payload: truncated lz",
@@ -375,18 +383,21 @@ fn decode_float_xor(
             )
         })?;
 
-        let lz = lz as u8;
-        let len = (len_raw as u8) + 1;
-        let tz = 64 - lz - len;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the fields are 5 and 6 bits wide"
+        )]
+        let (leading, len) = (leading as u8, (len_raw as u8) + 1);
+        let trailing = 64 - leading - len;
 
-        *prev_lz = lz;
-        *prev_tz = tz;
-        (len, tz)
+        *prev_leading = leading;
+        *prev_trailing = trailing;
+        (len, trailing)
     } else {
-        let lz = *prev_lz;
-        let tz = *prev_tz;
-        let len = 64 - lz - tz;
-        (len, tz)
+        let leading = *prev_leading;
+        let trailing = *prev_trailing;
+        let len = 64 - leading - trailing;
+        (len, trailing)
     };
 
     let meaningful = reader.read_bits(len).ok_or_else(|| {
@@ -397,11 +408,15 @@ fn decode_float_xor(
         )
     })?;
 
-    let xor = meaningful << tz;
+    let xor = meaningful << trailing;
     Ok(prev_bits ^ xor)
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "test sizes and sample indices are far below 2^52"
+)]
 mod tests {
     use super::*;
 

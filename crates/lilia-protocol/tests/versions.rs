@@ -33,16 +33,17 @@ fn binary_versions_remain_native_u64_and_json_versions_are_decimal() {
                 operations: vec![operation],
             },
         };
-        let req_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&request).unwrap();
+        let request_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&request).unwrap();
         let _: lilia_protocol::Request =
-            rkyv::from_bytes::<lilia_protocol::Request, rkyv::rancor::Error>(&req_bytes).unwrap();
+            rkyv::from_bytes::<lilia_protocol::Request, rkyv::rancor::Error>(&request_bytes)
+                .unwrap();
         let result = MutationResult {
             version: Some(value),
             deleted: false,
         };
-        let res_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&result).unwrap();
+        let result_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&result).unwrap();
         let archived_res =
-            rkyv::access::<lilia_core::ArchivedMutationResult, rkyv::rancor::Error>(&res_bytes)
+            rkyv::access::<lilia_core::ArchivedMutationResult, rkyv::rancor::Error>(&result_bytes)
                 .unwrap();
         assert_eq!(
             archived_res.version.as_ref().map(|v| v.to_native()),

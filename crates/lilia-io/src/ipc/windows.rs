@@ -1,6 +1,9 @@
 //! Windows security attributes are supplied at object creation, never patched
 //! onto a token after writing. FFI ownership and pointer lifetimes stay here.
-#![allow(unsafe_code)]
+#![allow(
+    unsafe_code,
+    reason = "calls of the Win32 security API; each block states the ownership and lifetimes it relies on"
+)]
 
 use std::ffi::{c_void, OsStr};
 use std::fs::File;
@@ -31,8 +34,10 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
+use super::denied;
+use crate::{NativeVfs, Vfs};
+
 #[cfg(test)]
-#[path = "ipc_windows/tests.rs"]
 mod tests;
 
 const ANCESTOR_MUTATION_RIGHTS: u32 = GENERIC_ALL
@@ -45,9 +50,16 @@ const ANCESTOR_MUTATION_RIGHTS: u32 = GENERIC_ALL
     | FILE_WRITE_EA
     | FILE_WRITE_DATA;
 
-fn denied(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, message)
-}
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "both structures are a few dozen bytes"
+)]
+const TOKEN_USER_SIZE: u32 = std::mem::size_of::<TOKEN_USER>() as u32;
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "both structures are a few dozen bytes"
+)]
+const SECURITY_ATTRIBUTES_SIZE: u32 = std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32;
 
 fn wide(value: &OsStr) -> io::Result<Vec<u16>> {
     let mut value: Vec<_> = value.encode_wide().collect();
@@ -83,13 +95,17 @@ impl Drop for LocalMemory {
     }
 }
 
+/// The security descriptor that grants the current user, and nobody else, full access; every
+/// object this creates carries it from creation on.
 #[derive(Debug)]
-pub(crate) struct UserSecurity {
+pub struct UserSecurity {
     descriptor: LocalMemory,
 }
 
-pub(crate) struct Credentials {
-    pub(crate) token: String,
+/// A freshly published token, and the open handles that pin its directories.
+pub struct Credentials {
+    /// 32 random bytes, hex-encoded.
+    pub token: String,
     // No FILE_SHARE_DELETE on these handles: ancestors cannot be renamed or
     // replaced throughout the daemon lifetime, not merely during validation.
     _parents: Vec<File>,
@@ -102,7 +118,8 @@ impl std::fmt::Debug for Credentials {
 }
 
 impl UserSecurity {
-    pub(crate) fn new() -> io::Result<Self> {
+    /// The descriptor of the current process's user.
+    pub fn new() -> io::Result<Self> {
         // SAFETY: all output slots are aligned and initialized; token information
         // is kept in aligned storage until its SID has been converted. Every owned
         // HANDLE and LocalAlloc allocation is released exactly once by a guard.
@@ -120,7 +137,7 @@ impl UserSecurity {
                 0,
                 &raw mut length,
             );
-            if length < u32::try_from(std::mem::size_of::<TOKEN_USER>()).unwrap() {
+            if length < TOKEN_USER_SIZE {
                 return Err(io::Error::last_os_error());
             }
             let mut buffer =
@@ -166,13 +183,15 @@ impl UserSecurity {
 
     fn attributes(&self) -> SECURITY_ATTRIBUTES {
         SECURITY_ATTRIBUTES {
-            nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>()).unwrap(),
+            nLength: SECURITY_ATTRIBUTES_SIZE,
             lpSecurityDescriptor: self.descriptor.0,
             bInheritHandle: 0,
         }
     }
 
-    pub(crate) fn pipe(&self, path: &Path, first: bool) -> io::Result<NamedPipeServer> {
+    /// A local named pipe instance at `path` (`\\.\pipe\<name>`), refusing remote clients;
+    /// `first` claims the name, failing if another server holds it.
+    pub fn pipe(&self, path: &Path, first: bool) -> io::Result<NamedPipeServer> {
         let name = path
             .to_str()
             .ok_or_else(|| denied("invalid local pipe name"))?;
@@ -325,7 +344,10 @@ impl UserSecurity {
         }
     }
 
-    pub(crate) fn credentials(&self, path: &Path) -> io::Result<Credentials> {
+    /// Writes a new random token to `path`, through a private temporary file renamed into
+    /// place, after checking that no other user can alter the directories leading to it; the
+    /// directories stay pinned while the returned [`Credentials`] live.
+    pub fn credentials(&self, path: &Path) -> io::Result<Credentials> {
         let path = credential_path(path)?;
         let parent = path
             .parent()
@@ -348,10 +370,10 @@ impl UserSecurity {
                     }
                     if let Some(parent) = current.parent() {
                         if !parent.as_os_str().is_empty() {
-                            lilia_core::windows_security::sync_directory(parent)?;
+                            NativeVfs.sync_dir(parent)?;
                         }
                     }
-                    lilia_core::windows_security::sync_directory(&current)?;
+                    NativeVfs.sync_dir(&current)?;
                     self.open(&current, false)?
                 }
                 Err(error) => return Err(error),
@@ -403,7 +425,7 @@ impl UserSecurity {
         drop(file);
         let token = written?;
         std::fs::rename(&temporary, &path)?;
-        lilia_core::windows_security::sync_directory(parent)?;
+        NativeVfs.sync_dir(parent)?;
         Ok(Credentials {
             token,
             _parents: parents,
@@ -459,6 +481,10 @@ fn validate_components(path: &Path) -> io::Result<()> {
 struct PendingFile(PathBuf);
 
 impl Drop for PendingFile {
+    #[allow(
+        clippy::let_underscore_must_use,
+        reason = "the temporary file is gone once renamed into place, and a failed cleanup has no caller to report to"
+    )]
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }

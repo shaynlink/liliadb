@@ -73,12 +73,18 @@ impl Vfs for NativeVfs {
     }
 
     fn lock(&self, path: &Path) -> io::Result<Box<dyn LockGuard>> {
-        let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)?;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
         match file.try_lock() {
             Ok(()) => Ok(Box::new(NativeLock(file))),
-            Err(fs::TryLockError::WouldBlock) => {
-                Err(io::Error::new(io::ErrorKind::WouldBlock, format!("{} is locked by another process", path.display())))
-            }
+            Err(fs::TryLockError::WouldBlock) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("{} is locked by another process", path.display()),
+            )),
             Err(fs::TryLockError::Error(e)) => Err(e),
         }
     }
@@ -104,7 +110,12 @@ impl File for NativeFile {
     fn write_all_at(&self, mut buf: &[u8], mut offset: u64) -> io::Result<()> {
         while !buf.is_empty() {
             match std::os::windows::fs::FileExt::seek_write(&self.0, buf, offset) {
-                Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "failed to write whole buffer")),
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "failed to write whole buffer",
+                    ))
+                }
                 Ok(n) => {
                     buf = &buf[n..];
                     offset += n as u64;
@@ -139,7 +150,10 @@ impl File for NativeFile {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[allow(unsafe_code)] // reason: `fcntl` on a descriptor owned by `file`, no pointers involved.
+#[allow(
+    unsafe_code,
+    reason = "`fcntl` on a descriptor owned by `file`, no pointers involved"
+)]
 fn barrier(file: &fs::File) -> io::Result<()> {
     use std::os::fd::AsRawFd;
     // SAFETY: the descriptor is open for the whole call; F_BARRIERFSYNC takes no argument.
@@ -155,7 +169,10 @@ fn barrier(file: &fs::File) -> io::Result<()> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[allow(unsafe_code)] // reason: `fcntl(F_PREALLOCATE)` with a local, fully initialised `fstore_t`.
+#[allow(
+    unsafe_code,
+    reason = "`fcntl(F_PREALLOCATE)` with a local, fully initialised `fstore_t`"
+)]
 fn preallocate(file: &fs::File, len: u64) -> io::Result<()> {
     use std::os::fd::AsRawFd;
     let current = file.metadata()?.len();
@@ -182,7 +199,10 @@ fn preallocate(file: &fs::File, len: u64) -> io::Result<()> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-#[allow(unsafe_code)] // reason: `fallocate` on a descriptor owned by `file`, no pointers involved.
+#[allow(
+    unsafe_code,
+    reason = "`fallocate` on a descriptor owned by `file`, no pointers involved"
+)]
 fn preallocate(file: &fs::File, len: u64) -> io::Result<()> {
     use std::os::fd::AsRawFd;
     let len = libc::off_t::try_from(len).map_err(io::Error::other)?;
@@ -190,12 +210,25 @@ fn preallocate(file: &fs::File, len: u64) -> io::Result<()> {
     if unsafe { libc::fallocate(file.as_raw_fd(), libc::FALLOC_FL_KEEP_SIZE, 0, len) } == -1 {
         let error = io::Error::last_os_error();
         // File systems without `fallocate` (tmpfs on old kernels, some FUSE) keep working.
-        return if error.raw_os_error() == Some(libc::EOPNOTSUPP) { Ok(()) } else { Err(error) };
+        return if error.raw_os_error() == Some(libc::EOPNOTSUPP) {
+            Ok(())
+        } else {
+            Err(error)
+        };
     }
     Ok(())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android"
+)))]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as the platforms that preallocate, which can fail"
+)]
 fn preallocate(_file: &fs::File, _len: u64) -> io::Result<()> {
     Ok(())
 }
@@ -211,7 +244,11 @@ mod tests {
         let path = dir.path().join("f");
         let file = vfs.open(&path, OpenMode::CreateNew).unwrap();
         file.preallocate(1 << 20).unwrap();
-        assert_eq!(file.len().unwrap(), 0, "preallocation must not change the length");
+        assert_eq!(
+            file.len().unwrap(),
+            0,
+            "preallocation must not change the length"
+        );
         file.write_all_at(b"hello", 3).unwrap();
         file.sync(SyncLevel::Barrier).unwrap();
         file.sync(SyncLevel::Full).unwrap();
@@ -221,7 +258,10 @@ mod tests {
         assert!(vfs.open(&path, OpenMode::CreateNew).is_err());
 
         let lock = vfs.lock(&dir.path().join("LOCK")).unwrap();
-        assert_eq!(vfs.lock(&dir.path().join("LOCK")).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            vfs.lock(&dir.path().join("LOCK")).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         drop(lock);
         vfs.lock(&dir.path().join("LOCK")).unwrap();
 

@@ -1,7 +1,9 @@
 //! Helpers shared by the integration tests.
 
-// reason: each test crate compiles this module and uses a different subset of it.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test crate compiles this module and uses a different subset of it"
+)]
 
 use std::collections::BTreeMap;
 use std::ops::Bound;

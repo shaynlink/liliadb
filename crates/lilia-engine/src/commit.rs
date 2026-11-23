@@ -46,7 +46,12 @@ pub struct GroupCommit<T, R> {
 
 impl<T, R> Default for GroupCommit<T, R> {
     fn default() -> Self {
-        Self { state: Mutex::new(State { queue: VecDeque::new(), leading: false }) }
+        Self {
+            state: Mutex::new(State {
+                queue: VecDeque::new(),
+                leading: false,
+            }),
+        }
     }
 }
 
@@ -54,8 +59,19 @@ impl<T, R> GroupCommit<T, R> {
     /// Commits `item`, possibly with others: the leader calls `commit_group` with a group of at
     /// most `max_group_weight` total weight (or one item), and it must call [`Member::finish`]
     /// on every member. Returns this item's result; `None` if the leader left it without one.
-    pub fn commit(&self, item: T, weight: usize, max_group_weight: usize, commit_group: impl FnOnce(&[Arc<Member<T, R>>])) -> Option<R> {
-        let me = Arc::new(Member { item, weight, result: Mutex::new(None), wake: Condvar::new() });
+    pub fn commit(
+        &self,
+        item: T,
+        weight: usize,
+        max_group_weight: usize,
+        commit_group: impl FnOnce(&[Arc<Member<T, R>>]),
+    ) -> Option<R> {
+        let me = Arc::new(Member {
+            item,
+            weight,
+            result: Mutex::new(None),
+            wake: Condvar::new(),
+        });
         let mut state = self.state.lock();
         state.queue.push_back(Arc::clone(&me));
         loop {
@@ -112,7 +128,11 @@ mod tests {
         let groups = Arc::new(AtomicUsize::new(0));
         let threads: Vec<_> = (0..16)
             .map(|t| {
-                let (queue, sequence, groups) = (Arc::clone(&queue), Arc::clone(&sequence), Arc::clone(&groups));
+                let (queue, sequence, groups) = (
+                    Arc::clone(&queue),
+                    Arc::clone(&sequence),
+                    Arc::clone(&groups),
+                );
                 std::thread::spawn(move || {
                     let mut seen = Vec::new();
                     for i in 0..200 {
@@ -134,10 +154,16 @@ mod tests {
                 })
             })
             .collect();
-        let mut all: Vec<u64> = threads.into_iter().flat_map(|t| t.join().unwrap()).collect();
+        let mut all: Vec<u64> = threads
+            .into_iter()
+            .flat_map(|t| t.join().unwrap())
+            .collect();
         all.sort_unstable();
         all.dedup();
         assert_eq!(all.len(), 16 * 200, "every writer got a distinct result");
-        assert!(groups.load(Ordering::Relaxed) < 16 * 200, "some commits were grouped");
+        assert!(
+            groups.load(Ordering::Relaxed) < 16 * 200,
+            "some commits were grouped"
+        );
     }
 }

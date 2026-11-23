@@ -24,7 +24,10 @@ pub fn io_delta(before: Io, after: Io) -> Io {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[allow(unsafe_code)] // reason: `proc_pid_rusage` and `getrusage` are plain libc FFI with owned out-buffers.
+#[allow(
+    unsafe_code,
+    reason = "`proc_pid_rusage` and `getrusage` are plain libc FFI with owned out-buffers"
+)]
 mod imp {
     use crate::record::Io;
 
@@ -59,7 +62,7 @@ mod imp {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-#[allow(unsafe_code)] // reason: `getrusage` is plain libc FFI with an owned out-buffer.
+#[allow(unsafe_code, reason = "`getrusage` is plain libc FFI with an owned out-buffer")]
 mod imp {
     use crate::record::Io;
 

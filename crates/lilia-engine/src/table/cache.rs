@@ -62,7 +62,10 @@ pub struct BlockCache {
 
 impl BlockCache {
     pub fn new(capacity_bytes: usize) -> Self {
-        Self { shards: (0..SHARDS).map(|_| RwLock::new(Shard::default())).collect(), shard_capacity: capacity_bytes / SHARDS }
+        Self {
+            shards: (0..SHARDS).map(|_| RwLock::new(Shard::default())).collect(),
+            shard_capacity: capacity_bytes / SHARDS,
+        }
     }
 
     /// Spreads the blocks of every table over all shards: both halves of the key go through a
@@ -91,14 +94,22 @@ impl BlockCache {
         let key = (table, offset);
         let mut shard = self.shard(key).write();
         let size = block.size();
-        if let Some(old) = shard.map.insert(key, Slot { block, referenced: AtomicBool::new(false) }) {
+        if let Some(old) = shard.map.insert(
+            key,
+            Slot {
+                block,
+                referenced: AtomicBool::new(false),
+            },
+        ) {
             shard.bytes = shard.bytes - old.block.size() + size;
         } else {
             shard.bytes += size;
             shard.ring.push_back(key);
         }
         while shard.bytes > self.shard_capacity {
-            let Some(candidate) = shard.ring.pop_front() else { break };
+            let Some(candidate) = shard.ring.pop_front() else {
+                break;
+            };
             let second_chance = match shard.map.get(&candidate) {
                 Some(slot) => slot.referenced.swap(false, Ordering::Relaxed),
                 None => continue,
@@ -149,14 +160,23 @@ mod tests {
         let size = block().size();
         let cache = BlockCache::new(SHARDS * (2 * size + 1));
         let first = std::ptr::from_ref(cache.shard((1, 0)));
-        let offsets: Vec<u64> = (0..).filter(|&o| std::ptr::eq(cache.shard((1, o)), first)).take(3).collect();
+        let offsets: Vec<u64> = (0..)
+            .filter(|&o| std::ptr::eq(cache.shard((1, o)), first))
+            .take(3)
+            .collect();
         let (a, b, c) = (offsets[0], offsets[1], offsets[2]);
         cache.insert(1, a, block());
         cache.insert(1, b, block());
         assert!(cache.get(1, a).is_some(), "block a is now referenced");
         cache.insert(1, c, block());
-        assert!(cache.get(1, a).is_some(), "a referenced block gets a second chance");
-        assert!(cache.get(1, b).is_none(), "the unreferenced block was evicted");
+        assert!(
+            cache.get(1, a).is_some(),
+            "a referenced block gets a second chance"
+        );
+        assert!(
+            cache.get(1, b).is_none(),
+            "the unreferenced block was evicted"
+        );
         assert!(cache.get(1, c).is_some());
         cache.evict_table(1);
         assert!(cache.get(1, a).is_none() && cache.get(1, c).is_none());
@@ -165,8 +185,9 @@ mod tests {
     #[test]
     fn blocks_of_one_table_spread_over_all_shards() {
         let cache = BlockCache::new(1 << 20);
-        let used: std::collections::HashSet<*const RwLock<Shard>> =
-            (0..4_096u64).map(|i| std::ptr::from_ref(cache.shard((7, i * 16_384)))).collect();
+        let used: std::collections::HashSet<*const RwLock<Shard>> = (0..4_096u64)
+            .map(|i| std::ptr::from_ref(cache.shard((7, i * 16_384))))
+            .collect();
         assert_eq!(used.len(), SHARDS);
     }
 }

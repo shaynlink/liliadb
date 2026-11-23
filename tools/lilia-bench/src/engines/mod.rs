@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::record::EngineInfo;
-#[allow(unused_imports)] // reason: only the adapters compiled into this binary name it.
+#[allow(unused_imports, reason = "only the adapters compiled into this binary name it")]
 use crate::record::SyncPrimitive;
 
 #[cfg(feature = "kvs")]
@@ -102,7 +102,7 @@ pub fn open(id: &str, dir: &Path) -> Result<Box<dyn Engine>> {
 
 /// Sync primitive of engines that sync through Rust's `File::sync_all`/`sync_data`, which issue
 /// `F_FULLFSYNC` on Apple platforms.
-#[allow(dead_code)] // reason: used only by the adapters compiled into this binary.
+#[allow(dead_code, reason = "used only by the adapters compiled into this binary")]
 #[must_use]
 pub fn std_file_sync() -> SyncPrimitive {
     if cfg!(any(target_os = "macos", target_os = "ios")) {

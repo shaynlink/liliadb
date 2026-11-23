@@ -23,8 +23,10 @@ fn parse<E: serde::de::Error>(input: Input) -> Result<u64, E> {
     }
 }
 
-// Serde's with-module callback requires a reference to the field type.
-#[allow(clippy::trivially_copy_pass_by_ref)]
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Serde's with-module callback requires a reference to the field type"
+)]
 pub(crate) fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
     if serializer.is_human_readable() {
         serializer.serialize_str(&value.to_string())
@@ -41,8 +43,10 @@ pub(crate) mod optional {
     use super::{parse, Input};
     use serde::{Deserialize, Deserializer, Serializer};
 
-    // Serde's with-module callback requires a reference to the complete field.
-    #[allow(clippy::ref_option)]
+    #[allow(
+        clippy::ref_option,
+        reason = "Serde's with-module callback requires a reference to the complete field"
+    )]
     pub(crate) fn serialize<S: Serializer>(
         value: &Option<u64>,
         serializer: S,

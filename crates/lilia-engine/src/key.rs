@@ -69,7 +69,9 @@ pub fn check(key: &[u8]) -> Result<()> {
 }
 
 pub fn compare(a: &[u8], b: &[u8]) -> Ordering {
-    user(a).cmp(user(b)).then_with(|| trailer(b).cmp(&trailer(a)))
+    user(a)
+        .cmp(user(b))
+        .then_with(|| trailer(b).cmp(&trailer(a)))
 }
 
 /// An encoded internal key ordered by [`compare`], for ordered containers.
@@ -101,7 +103,10 @@ mod tests {
         assert_eq!(compare(&a3, &ab1), Ordering::Less);
         assert_eq!(compare(&lookup(b"a", 4), &a3), Ordering::Less);
         assert_eq!(compare(&lookup(b"a", 4), &a5), Ordering::Greater);
-        assert_eq!((user(&a3), sequence(&a3), kind(&a3).unwrap()), (&b"a"[..], 3, Kind::Delete));
+        assert_eq!(
+            (user(&a3), sequence(&a3), kind(&a3).unwrap()),
+            (&b"a"[..], 3, Kind::Delete)
+        );
         assert!(check(b"short").is_err());
     }
 }

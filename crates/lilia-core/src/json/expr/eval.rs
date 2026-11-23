@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::fmt::Write as _;
 
 use super::ast::{BinaryOp, EvaluatedValue, Expr, LiteralValue, UnaryOp};
 use crate::calendar::CivilDate;
@@ -408,7 +407,10 @@ impl DateTimeParts {
 const MILLIS_THRESHOLD: i64 = 100_000_000_000;
 
 /// Seconds of a real timestamp, truncated toward zero.
-#[allow(clippy::cast_possible_truncation)] // float-to-int casts saturate: out-of-range instants clamp
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "float-to-int casts saturate: out-of-range instants clamp"
+)]
 fn real_seconds(timestamp: f64) -> i64 {
     timestamp.trunc() as i64
 }
@@ -444,20 +446,20 @@ fn format_strftime(format: &str, ts_val: &EvaluatedValue) -> EvaluatedValue {
             out.push(c);
             continue;
         }
-        // Writing to a `String` cannot fail.
-        let _ = match chars.next() {
-            Some('Y') => write!(out, "{year:04}"),
-            Some('m') => write!(out, "{month:02}"),
-            Some('d') => write!(out, "{day:02}"),
-            Some('H') => write!(out, "{:02}", parts.hour),
-            Some('M') => write!(out, "{:02}", parts.min),
-            Some('S') => write!(out, "{:02}", parts.sec),
-            Some('F') => write!(out, "{year:04}-{month:02}-{day:02}"),
-            Some('j') => write!(out, "{:03}", parts.date.day_of_year()),
-            Some('w') => write!(out, "{}", parts.date.day_of_week()),
-            Some('%') | None => write!(out, "%"),
-            Some(other) => write!(out, "%{other}"),
+        let field = match chars.next() {
+            Some('Y') => format!("{year:04}"),
+            Some('m') => format!("{month:02}"),
+            Some('d') => format!("{day:02}"),
+            Some('H') => format!("{:02}", parts.hour),
+            Some('M') => format!("{:02}", parts.min),
+            Some('S') => format!("{:02}", parts.sec),
+            Some('F') => format!("{year:04}-{month:02}-{day:02}"),
+            Some('j') => format!("{:03}", parts.date.day_of_year()),
+            Some('w') => format!("{}", parts.date.day_of_week()),
+            Some('%') | None => "%".to_owned(),
+            Some(other) => format!("%{other}"),
         };
+        out.push_str(&field);
     }
     EvaluatedValue::String(out)
 }

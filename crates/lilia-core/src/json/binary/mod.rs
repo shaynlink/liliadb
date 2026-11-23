@@ -289,15 +289,23 @@ fn root_offset(data: &[u8]) -> Option<usize> {
     usize::try_from(u32::from_le_bytes(bytes)).ok()
 }
 
-#[allow(clippy::cast_precision_loss)]
+/// `value` as the nearest double, as JSON numbers are read by every JavaScript runtime.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "integers beyond 2^53 round to the nearest double, as in JavaScript"
+)]
 pub(crate) fn int_as_real(value: i64) -> f64 {
     value as f64
 }
 
+/// `value` as an `i64` when it is whole and within the range of `i64`.
 #[must_use]
 pub fn exact_int(value: f64) -> Option<i64> {
     const BOUND: f64 = 9_223_372_036_854_775_808.0;
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the value is checked whole and within the range of i64 before the cast"
+    )]
     let exact = (value.fract() == 0.0 && (-BOUND..BOUND).contains(&value)).then_some(value as i64);
     exact
 }

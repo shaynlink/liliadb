@@ -226,8 +226,10 @@ impl<'s, S: Source> Searcher<'s, S> {
             total.docs += stats.docs;
             total.tokens += stats.tokens;
         }
-        #[allow(clippy::cast_precision_loss)]
-        // reason: counts far below 2^52; BM25 is a float formula
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "counts far below 2^52; BM25 is a float formula"
+        )]
         let (docs, tokens) = (total.docs as f64, total.tokens as f64);
         Ok(Self {
             source,
@@ -242,7 +244,7 @@ impl<'s, S: Source> Searcher<'s, S> {
     }
 
     fn bm25(&self, document_frequency: usize, frequency: usize, length: u64) -> f64 {
-        #[allow(clippy::cast_precision_loss)] // reason: as in `new`
+        #[allow(clippy::cast_precision_loss, reason = "as in `new`")]
         let (df, tf, len) = (document_frequency as f64, frequency as f64, length as f64);
         let idf = ((self.docs - df + 0.5) / (df + 0.5) + 1.0).ln();
         let norm = if self.average_length > 0.0 {

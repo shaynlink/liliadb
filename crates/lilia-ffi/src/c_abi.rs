@@ -6,8 +6,10 @@
 //! Memory: a frame from [`lilia_c_execute`] is freed with [`lilia_c_free_bytes`], an error
 //! string with [`lilia_c_free_string`]; [`lilia_c_close`] closes a handle and frees it.
 
-// reason: a C ABI receives and returns raw pointers; each function documents what it expects.
-#![allow(unsafe_code)]
+#![allow(
+    unsafe_code,
+    reason = "a C ABI receives and returns raw pointers; each function documents what it expects"
+)]
 
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::time::Duration;

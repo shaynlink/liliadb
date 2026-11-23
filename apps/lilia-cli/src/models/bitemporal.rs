@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::operations::{self, Call};
 use super::{input, render};
-use crate::args::BitempCommand;
+use crate::args::models::BitempCommand;
 
 pub(crate) fn run(database: &Database, command: BitempCommand) -> Result<Value, LiliaError> {
     let session = database.system();

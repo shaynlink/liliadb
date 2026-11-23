@@ -41,12 +41,18 @@ struct Local<T>(T);
 // SAFETY: without the `atomics` target feature a `wasm32` program has exactly one thread, so the
 // wrapped object is never reached from another thread.
 #[cfg(not(target_feature = "atomics"))]
-#[allow(unsafe_code)] // reason: see the SAFETY comment above.
+#[allow(
+    unsafe_code,
+    reason = "a `wasm32` program without atomics has one thread"
+)]
 unsafe impl<T> Send for Local<T> {}
 
 // SAFETY: as for `Send`.
 #[cfg(not(target_feature = "atomics"))]
-#[allow(unsafe_code)] // reason: see the SAFETY comment above.
+#[allow(
+    unsafe_code,
+    reason = "a `wasm32` program without atomics has one thread"
+)]
 unsafe impl<T> Sync for Local<T> {}
 
 /// A slot file of the pool.
@@ -63,26 +69,39 @@ impl Drop for OpfsSlot {
 
 fn at(offset: u64) -> FileSystemReadWriteOptions {
     let options = FileSystemReadWriteOptions::new();
-    // reason: OPFS offsets are JavaScript numbers; files stay far below 2^53 bytes.
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "OPFS offsets are JavaScript numbers; files stay far below 2^53 bytes"
+    )]
     options.set_at(offset as f64);
     options
 }
 
-// reason: OPFS reports byte counts as JavaScript numbers, whole and non-negative, below 2^53.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "OPFS reports byte counts as JavaScript numbers, whole and non-negative, below 2^53"
+)]
 fn bytes(count: f64) -> u64 {
     count as u64
 }
 
 impl Slot for OpfsSlot {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
-        let read = self.0 .0.read_with_u8_array_and_options(buf, &at(offset)).map_err(|e| js_error("read", &e))?;
+        let read = self
+            .0
+             .0
+            .read_with_u8_array_and_options(buf, &at(offset))
+            .map_err(|e| js_error("read", &e))?;
         usize::try_from(bytes(read)).map_err(io::Error::other)
     }
 
     fn write_at(&self, buf: &[u8], offset: u64) -> io::Result<usize> {
-        let written = self.0 .0.write_with_u8_array_and_options(buf, &at(offset)).map_err(|e| js_error("write", &e))?;
+        let written = self
+            .0
+             .0
+            .write_with_u8_array_and_options(buf, &at(offset))
+            .map_err(|e| js_error("write", &e))?;
         usize::try_from(bytes(written)).map_err(io::Error::other)
     }
 
@@ -91,14 +110,20 @@ impl Slot for OpfsSlot {
     }
 
     fn size(&self) -> io::Result<u64> {
-        self.0 .0.get_size().map(bytes).map_err(|e| js_error("size", &e))
+        self.0
+             .0
+            .get_size()
+            .map(bytes)
+            .map_err(|e| js_error("size", &e))
     }
 
     fn truncate(&self, len: u64) -> io::Result<()> {
-        // reason: as for offsets.
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(clippy::cast_precision_loss, reason = "as for offsets")]
         let len = len as f64;
-        self.0 .0.truncate_with_f64(len).map_err(|e| js_error("truncate", &e))
+        self.0
+             .0
+            .truncate_with_f64(len)
+            .map_err(|e| js_error("truncate", &e))
     }
 }
 
@@ -128,8 +153,11 @@ impl OpfsPool {
             resolve(scope.navigator().storage().get_directory(), "OPFS root").await?;
         let create = FileSystemGetDirectoryOptions::new();
         create.set_create(true);
-        let directory: FileSystemDirectoryHandle =
-            resolve(root.get_directory_handle_with_options(directory, &create), "OPFS directory").await?;
+        let directory: FileSystemDirectoryHandle = resolve(
+            root.get_directory_handle_with_options(directory, &create),
+            "OPFS directory",
+        )
+        .await?;
         let count_file = OpfsSlot(Local(sync_handle(&directory, "pool").await?));
         let mut stored = [0u8; 8];
         let stored = match count_file.read_at(&mut stored, 0)? {
@@ -139,7 +167,9 @@ impl OpfsPool {
         let count = stored.max(min_slots);
         let mut slots: Vec<Arc<dyn Slot>> = Vec::with_capacity(count);
         for index in 0..count {
-            slots.push(Arc::new(OpfsSlot(Local(sync_handle(&directory, &slot_name(index)).await?))));
+            slots.push(Arc::new(OpfsSlot(Local(
+                sync_handle(&directory, &slot_name(index)).await?,
+            ))));
         }
         let pool = Self {
             directory: Local(directory),
@@ -166,7 +196,9 @@ impl OpfsPool {
         let first = self.slots.load(Ordering::Acquire);
         let mut slots: Vec<Arc<dyn Slot>> = Vec::with_capacity(count);
         for index in first..first + count {
-            slots.push(Arc::new(OpfsSlot(Local(sync_handle(&self.directory.0, &slot_name(index)).await?))));
+            slots.push(Arc::new(OpfsSlot(Local(
+                sync_handle(&self.directory.0, &slot_name(index)).await?,
+            ))));
         }
         self.vfs.add_slots(slots)?;
         self.slots.store(first + count, Ordering::Release);
@@ -177,7 +209,10 @@ impl OpfsPool {
         let count = u64::try_from(count).map_err(io::Error::other)?;
         let written = self.count_file.write_at(&count.to_le_bytes(), 0)?;
         if written != 8 {
-            return Err(io::Error::new(io::ErrorKind::WriteZero, "the pool count was not written"));
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "the pool count was not written",
+            ));
         }
         self.count_file.flush()
     }
@@ -188,9 +223,20 @@ fn slot_name(index: usize) -> String {
 }
 
 /// A synchronous access handle on file `name` of `directory`, created if missing.
-async fn sync_handle(directory: &FileSystemDirectoryHandle, name: &str) -> io::Result<FileSystemSyncAccessHandle> {
+async fn sync_handle(
+    directory: &FileSystemDirectoryHandle,
+    name: &str,
+) -> io::Result<FileSystemSyncAccessHandle> {
     let create = FileSystemGetFileOptions::new();
     create.set_create(true);
-    let file: FileSystemFileHandle = resolve(directory.get_file_handle_with_options(name, &create), "OPFS file").await?;
-    resolve(file.create_sync_access_handle(), "OPFS synchronous access handle").await
+    let file: FileSystemFileHandle = resolve(
+        directory.get_file_handle_with_options(name, &create),
+        "OPFS file",
+    )
+    .await?;
+    resolve(
+        file.create_sync_access_handle(),
+        "OPFS synchronous access handle",
+    )
+    .await
 }

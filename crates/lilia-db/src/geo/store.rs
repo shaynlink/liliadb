@@ -91,7 +91,11 @@ fn cell_size(level: u8) -> f64 {
     360.0 / f64::from(1u32 << level)
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // positions are validated: 0 <= cells <= 2^24
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "positions are validated: 0 <= cells <= 2^24"
+)]
 fn grid_cell(lon: f64, lat: f64, level: u8) -> (u32, u32) {
     let size = cell_size(level);
     (

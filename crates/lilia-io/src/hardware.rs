@@ -38,7 +38,14 @@ impl HardwareProfile {
     /// A small, symmetric machine: 1 core, 256 MiB, 4 KiB pages. Deterministic, for tests.
     #[must_use]
     pub const fn minimal() -> Self {
-        Self { page_size: 4_096, cache_line: 64, logical_cpus: 1, performance_cores: 1, efficiency_cores: 0, memory_bytes: 256 << 20 }
+        Self {
+            page_size: 4_096,
+            cache_line: 64,
+            logical_cpus: 1,
+            performance_cores: 1,
+            efficiency_cores: 0,
+            memory_bytes: 256 << 20,
+        }
     }
 }
 
@@ -46,19 +53,36 @@ impl HardwareProfile {
 mod platform {
     use super::HardwareProfile;
 
-    #[allow(unsafe_code)] // reason: `sysctlbyname` writes at most `size_of::<u64>()` bytes into a local.
+    #[allow(
+        unsafe_code,
+        reason = "`sysctlbyname` writes at most `size_of::<u64>()` bytes into a local"
+    )]
     fn sysctl_u64(name: &str) -> Option<u64> {
         let name = std::ffi::CString::new(name).ok()?;
         let mut value: u64 = 0;
         let mut len = std::mem::size_of::<u64>();
         // SAFETY: `value` is a writable u64 and `len` holds its size; the kernel writes no more
         // than `len` bytes and updates `len` to the size written (4 for 32-bit values).
-        let rc = unsafe { libc::sysctlbyname(name.as_ptr(), (&raw mut value).cast(), &raw mut len, std::ptr::null_mut(), 0) };
-        (rc == 0 && (len == 4 || len == 8)).then_some(if len == 4 { value & 0xFFFF_FFFF } else { value })
+        let rc = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr(),
+                (&raw mut value).cast(),
+                &raw mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        (rc == 0 && (len == 4 || len == 8)).then_some(if len == 4 {
+            value & 0xFFFF_FFFF
+        } else {
+            value
+        })
     }
 
     fn sysctl_usize(name: &str) -> Option<usize> {
-        sysctl_u64(name).and_then(|v| usize::try_from(v).ok()).filter(|&v| v > 0)
+        sysctl_u64(name)
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|&v| v > 0)
     }
 
     pub fn refine(profile: &mut HardwareProfile) {
@@ -74,8 +98,9 @@ mod platform {
         let levels = sysctl_usize("hw.nperflevels").unwrap_or(1);
         if let Some(fast) = sysctl_usize("hw.perflevel0.physicalcpu") {
             profile.performance_cores = fast;
-            profile.efficiency_cores =
-                (1..levels).filter_map(|l| sysctl_usize(&format!("hw.perflevel{l}.physicalcpu"))).sum();
+            profile.efficiency_cores = (1..levels)
+                .filter_map(|l| sysctl_usize(&format!("hw.perflevel{l}.physicalcpu")))
+                .sum();
         }
     }
 }
@@ -84,7 +109,7 @@ mod platform {
 mod platform {
     use super::HardwareProfile;
 
-    #[allow(unsafe_code)] // reason: `sysconf` takes and returns plain integers.
+    #[allow(unsafe_code, reason = "`sysconf` takes and returns plain integers")]
     fn sysconf(name: libc::c_int) -> Option<u64> {
         // SAFETY: no pointers are involved.
         let value = unsafe { libc::sysconf(name) };
@@ -99,10 +124,14 @@ mod platform {
         if let Some(v) = sysconf(libc::_SC_PAGESIZE).and_then(|v| usize::try_from(v).ok()) {
             profile.page_size = v;
         }
-        if let Some(v) = read_u64("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size").and_then(|v| usize::try_from(v).ok()) {
+        if let Some(v) = read_u64("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size")
+            .and_then(|v| usize::try_from(v).ok())
+        {
             profile.cache_line = v;
         }
-        if let (Some(pages), Some(size)) = (sysconf(libc::_SC_PHYS_PAGES), sysconf(libc::_SC_PAGESIZE)) {
+        if let (Some(pages), Some(size)) =
+            (sysconf(libc::_SC_PHYS_PAGES), sysconf(libc::_SC_PAGESIZE))
+        {
             profile.memory_bytes = pages.saturating_mul(size);
         }
         // Heterogeneous ARM SoCs expose per-core capacity (1024 for the biggest cores).
@@ -119,7 +148,12 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android"
+)))]
 mod platform {
     pub fn refine(_profile: &mut super::HardwareProfile) {}
 }
@@ -133,7 +167,10 @@ mod tests {
         let p = HardwareProfile::probe();
         assert!(p.page_size.is_power_of_two() && p.page_size >= 4_096);
         assert!(p.cache_line.is_power_of_two() && p.cache_line >= 32);
-        assert!(p.performance_cores >= 1 && p.performance_cores + p.efficiency_cores <= p.logical_cpus.max(1) * 2);
+        assert!(
+            p.performance_cores >= 1
+                && p.performance_cores + p.efficiency_cores <= p.logical_cpus.max(1) * 2
+        );
         assert!(p.memory_bytes >= 64 << 20);
     }
 }

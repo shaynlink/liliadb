@@ -1,6 +1,9 @@
 //! The `UniFFI` API and the C ABI, as the native SDKs call them.
 
-#![allow(unsafe_code)]
+#![allow(
+    unsafe_code,
+    reason = "the test calls the C ABI as the native SDKs do, through raw pointers"
+)]
 
 use std::ffi::{c_char, CStr, CString};
 

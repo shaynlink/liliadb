@@ -184,6 +184,13 @@ impl AnalyticsEngine {
         self.execute(context, sql, params)
     }
 
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(
+            clippy::needless_pass_by_value,
+            reason = "the same signature as elsewhere, where the query moves the context into the runtime"
+        )
+    )]
     fn execute(
         &self,
         context: SessionContext,
@@ -204,7 +211,10 @@ impl AnalyticsEngine {
         let (sender, receiver) = mpsc::sync_channel(1);
         #[cfg(not(target_arch = "wasm32"))]
         runtime.spawn(async move {
-            // The receiver only disappears if the calling thread is gone.
+            #[allow(
+                clippy::let_underscore_must_use,
+                reason = "the receiver only disappears with the calling thread, which no longer waits"
+            )]
             let _ = sender.send(run(&context, &sql, params).await);
         });
         #[cfg(not(target_arch = "wasm32"))]

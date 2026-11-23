@@ -49,8 +49,10 @@ fn exact_f64(value: i64) -> Option<f64> {
     if value.unsigned_abs() > MAX_EXACT_F64_INTEGER {
         return None;
     }
-    // Lossless: the magnitude was just checked to fit the 53-bit mantissa.
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "lossless: the magnitude was just checked to fit the 53-bit mantissa"
+    )]
     let exact = value as f64;
     Some(exact)
 }

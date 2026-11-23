@@ -24,9 +24,15 @@ pub struct CrashOptions {
 
 impl CrashOptions {
     /// Only synced data survives.
-    pub const CLEAN: Self = Self { keep_unsynced_prefix: false, tear_last_sector: false };
+    pub const CLEAN: Self = Self {
+        keep_unsynced_prefix: false,
+        tear_last_sector: false,
+    };
     /// Unsynced tails may partially survive, with a torn last sector.
-    pub const TORN: Self = Self { keep_unsynced_prefix: true, tear_last_sector: true };
+    pub const TORN: Self = Self {
+        keep_unsynced_prefix: true,
+        tear_last_sector: true,
+    };
 }
 
 #[derive(Debug, Default)]
@@ -88,7 +94,10 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
 }
 
 fn not_found(path: &Path) -> io::Error {
-    io::Error::new(io::ErrorKind::NotFound, format!("{} does not exist", path.display()))
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("{} does not exist", path.display()),
+    )
 }
 
 impl MemVfs {
@@ -114,15 +123,22 @@ impl MemVfs {
     /// crash stay unusable; locks are released.
     pub fn restart(&self, options: CrashOptions) {
         let mut state = lock(&self.state);
-        let survivors: Vec<(PathBuf, Arc<RwLock<Contents>>)> =
-            state.durable_files.iter().map(|(p, c)| (p.clone(), Arc::clone(c))).collect();
+        let survivors: Vec<(PathBuf, Arc<RwLock<Contents>>)> = state
+            .durable_files
+            .iter()
+            .map(|(p, c)| (p.clone(), Arc::clone(c)))
+            .collect();
         let mut files = BTreeMap::new();
         for (path, contents) in survivors {
             let old = contents.read().unwrap_or_else(PoisonError::into_inner);
             let mut data = old.durable.clone();
-            if options.keep_unsynced_prefix && old.current.len() > data.len() && old.current.starts_with(&data) {
+            if options.keep_unsynced_prefix
+                && old.current.len() > data.len()
+                && old.current.starts_with(&data)
+            {
                 let tail = &old.current[data.len()..];
-                let keep = usize::try_from(state.next_random() % (tail.len() as u64 + 1)).unwrap_or(0);
+                let keep =
+                    usize::try_from(state.next_random() % (tail.len() as u64 + 1)).unwrap_or(0);
                 let start = data.len();
                 data.extend_from_slice(&tail[..keep]);
                 if options.tear_last_sector && keep > 0 {
@@ -132,7 +148,13 @@ impl MemVfs {
                     }
                 }
             }
-            files.insert(path, Arc::new(RwLock::new(Contents { current: data.clone(), durable: data })));
+            files.insert(
+                path,
+                Arc::new(RwLock::new(Contents {
+                    current: data.clone(),
+                    durable: data,
+                })),
+            );
         }
         state.durable_files.clone_from(&files);
         state.files = files;
@@ -141,8 +163,18 @@ impl MemVfs {
         state.generation += 1;
     }
 
-    fn file(&self, contents: Arc<RwLock<Contents>>, writable: bool, generation: u64) -> Arc<dyn File> {
-        Arc::new(MemHandle { shared: contents, vfs: Arc::clone(&self.state), writable, generation })
+    fn file(
+        &self,
+        contents: Arc<RwLock<Contents>>,
+        writable: bool,
+        generation: u64,
+    ) -> Arc<dyn File> {
+        Arc::new(MemHandle {
+            shared: contents,
+            vfs: Arc::clone(&self.state),
+            writable,
+            generation,
+        })
     }
 }
 
@@ -161,7 +193,9 @@ impl MemHandle {
         let mut state = lock(&self.vfs);
         state.check()?;
         if state.generation != self.generation {
-            return Err(io::Error::other("file handle opened before a simulated power loss"));
+            return Err(io::Error::other(
+                "file handle opened before a simulated power loss",
+            ));
         }
         Ok(state)
     }
@@ -187,7 +221,10 @@ impl File for MemHandle {
     fn write_all_at(&self, buf: &[u8], offset: u64) -> io::Result<()> {
         self.state()?.maybe_fail("write")?;
         if !self.writable {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "file opened read-only"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "file opened read-only",
+            ));
         }
         let mut contents = self.shared.write().unwrap_or_else(PoisonError::into_inner);
         let start = usize::try_from(offset).map_err(io::Error::other)?;
@@ -209,13 +246,22 @@ impl File for MemHandle {
 
     fn len(&self) -> io::Result<u64> {
         self.check()?;
-        Ok(self.shared.read().unwrap_or_else(PoisonError::into_inner).current.len() as u64)
+        Ok(self
+            .shared
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .current
+            .len() as u64)
     }
 
     fn set_len(&self, len: u64) -> io::Result<()> {
         self.state()?.maybe_fail("set_len")?;
         let len = usize::try_from(len).map_err(io::Error::other)?;
-        self.shared.write().unwrap_or_else(PoisonError::into_inner).current.resize(len, 0);
+        self.shared
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .current
+            .resize(len, 0);
         Ok(())
     }
 
@@ -243,11 +289,18 @@ impl Vfs for MemVfs {
         let mut state = lock(&self.state);
         state.check()?;
         let contents = match mode {
-            OpenMode::Read | OpenMode::ReadWrite => state.files.get(path).cloned().ok_or_else(|| not_found(path))?,
+            OpenMode::Read | OpenMode::ReadWrite => state
+                .files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| not_found(path))?,
             OpenMode::CreateNew => {
                 state.maybe_fail("create")?;
                 if state.files.contains_key(path) {
-                    return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{} exists", path.display())));
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{} exists", path.display()),
+                    ));
                 }
                 if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                     if !state.dirs.contains(parent) {
@@ -255,7 +308,9 @@ impl Vfs for MemVfs {
                     }
                 }
                 let contents = Arc::new(RwLock::new(Contents::default()));
-                state.files.insert(path.to_path_buf(), Arc::clone(&contents));
+                state
+                    .files
+                    .insert(path.to_path_buf(), Arc::clone(&contents));
                 contents
             }
         };
@@ -273,7 +328,11 @@ impl Vfs for MemVfs {
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         let mut state = lock(&self.state);
         state.maybe_fail("remove")?;
-        state.files.remove(path).map(drop).ok_or_else(|| not_found(path))
+        state
+            .files
+            .remove(path)
+            .map(drop)
+            .ok_or_else(|| not_found(path))
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
@@ -313,8 +372,12 @@ impl Vfs for MemVfs {
         let mut state = lock(&self.state);
         state.maybe_fail("sync_dir")?;
         state.durable_files.retain(|p, _| p.parent() != Some(dir));
-        let current: Vec<(PathBuf, Arc<RwLock<Contents>>)> =
-            state.files.iter().filter(|(p, _)| p.parent() == Some(dir)).map(|(p, c)| (p.clone(), Arc::clone(c))).collect();
+        let current: Vec<(PathBuf, Arc<RwLock<Contents>>)> = state
+            .files
+            .iter()
+            .filter(|(p, _)| p.parent() == Some(dir))
+            .map(|(p, c)| (p.clone(), Arc::clone(c)))
+            .collect();
         state.durable_files.extend(current);
         Ok(())
     }
@@ -323,9 +386,15 @@ impl Vfs for MemVfs {
         let mut state = lock(&self.state);
         state.check()?;
         if !state.locks.insert(path.to_path_buf()) {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("{} is locked", path.display())));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("{} is locked", path.display()),
+            ));
         }
-        Ok(Box::new(MemLock { state: Arc::clone(&self.state), path: path.to_path_buf() }))
+        Ok(Box::new(MemLock {
+            state: Arc::clone(&self.state),
+            path: path.to_path_buf(),
+        }))
     }
 }
 
@@ -373,7 +442,8 @@ mod tests {
         vfs.create_dir_all(Path::new("/d")).unwrap();
         write(&vfs, "/d/old", b"1", true);
         vfs.sync_dir(Path::new("/d")).unwrap();
-        vfs.rename(Path::new("/d/old"), Path::new("/d/new")).unwrap();
+        vfs.rename(Path::new("/d/old"), Path::new("/d/new"))
+            .unwrap();
         vfs.crash();
         vfs.restart(CrashOptions::CLEAN);
         assert!(read(&vfs, "/d/old").is_some());
@@ -389,7 +459,10 @@ mod tests {
             vfs.sync_dir(Path::new("/t")).unwrap();
             file.write_all_at(&[7u8; 4_000], 7).unwrap();
             vfs.crash();
-            vfs.restart(CrashOptions { keep_unsynced_prefix: true, tear_last_sector: false });
+            vfs.restart(CrashOptions {
+                keep_unsynced_prefix: true,
+                tear_last_sector: false,
+            });
             let data = read(&vfs, "/t/log").unwrap();
             assert!(data.starts_with(b"durable") && data.len() <= 4_007);
             assert!(data[7..].iter().all(|&b| b == 7));

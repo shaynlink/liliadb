@@ -21,10 +21,16 @@ fn point_writes_reads_versions_and_conditional_batches() {
     let mut stale = WriteBatch::new();
     stale.expect("a", Some(v1)).put("a", "3").put("b", "x");
     match db.write(stale) {
-        Err(Error::Conflict { expected, actual, .. }) => assert_eq!((expected, actual), (Some(v1), Some(v2))),
+        Err(Error::Conflict {
+            expected, actual, ..
+        }) => assert_eq!((expected, actual), (Some(v1), Some(v2))),
         other => panic!("expected a conflict, got {other:?}"),
     }
-    assert_eq!(db.get(b"b").unwrap(), None, "a conflicting batch writes nothing");
+    assert_eq!(
+        db.get(b"b").unwrap(),
+        None,
+        "a conflicting batch writes nothing"
+    );
 
     let mut create = WriteBatch::new();
     create.expect("b", None).put("b", "created");
@@ -43,7 +49,9 @@ fn point_writes_reads_versions_and_conditional_batches() {
     let mut stale_position = WriteBatch::new();
     stale_position.at_sequence(next + 1).put("c", "late");
     match db.write(stale_position) {
-        Err(Error::SequenceMoved { expected, actual }) => assert_eq!((expected, actual), (next + 1, next)),
+        Err(Error::SequenceMoved { expected, actual }) => {
+            assert_eq!((expected, actual), (next + 1, next));
+        }
         other => panic!("expected a moved sequence, got {other:?}"),
     }
     let mut pinned = WriteBatch::new();
@@ -73,13 +81,22 @@ fn data_survives_flushes_compactions_and_reopen() {
         db.flush().unwrap();
         db.wait_for_compactions().unwrap();
         let stats = db.stats();
-        assert!(stats.levels.iter().skip(1).any(|&(runs, _)| runs > 0), "compactions moved data below level 0: {stats:?}");
+        assert!(
+            stats.levels.iter().skip(1).any(|&(runs, _)| runs > 0),
+            "compactions moved data below level 0: {stats:?}"
+        );
         db.close().unwrap();
     }
     let db = Db::open(dir.path(), small_options(Durability::Performance)).unwrap();
     for i in 0..n {
         let expected = (i % 3 != 0).then(|| format!("value-{i}-{}", "x".repeat(40)));
-        assert_eq!(db.get(&key(i)).unwrap().map(|v| String::from_utf8(v.to_vec()).unwrap()), expected, "key {i}");
+        assert_eq!(
+            db.get(&key(i))
+                .unwrap()
+                .map(|v| String::from_utf8(v.to_vec()).unwrap()),
+            expected,
+            "key {i}"
+        );
     }
     let all = scan(&db);
     assert_eq!(all.len() as u64, n - n.div_ceil(3));
@@ -112,9 +129,16 @@ fn snapshots_see_a_fixed_state_across_flushes_and_compactions() {
     db.flush().unwrap();
     db.wait_for_compactions().unwrap();
     for i in 0..500 {
-        assert_eq!(db.get_at(&snapshot, &key(i)).unwrap().unwrap().value, "before");
+        assert_eq!(
+            db.get_at(&snapshot, &key(i)).unwrap().unwrap().value,
+            "before"
+        );
     }
-    let old: Vec<_> = db.range_at(&snapshot, Bound::Unbounded, Bound::Unbounded).unwrap().map(|e| e.unwrap()).collect();
+    let old: Vec<_> = db
+        .range_at(&snapshot, Bound::Unbounded, Bound::Unbounded)
+        .unwrap()
+        .map(|e| e.unwrap())
+        .collect();
     assert_eq!(old.len(), 500);
     assert!(old.iter().all(|e| e.value == "before"));
     drop(snapshot);
@@ -136,7 +160,8 @@ fn versioned_rounds(db: &Db, rounds: u64) -> Vec<u64> {
         }
         after.push(db.last_sequence());
         for i in 0..400 {
-            db.put(key(10_000 + round * 400 + i), "x".repeat(64)).unwrap();
+            db.put(key(10_000 + round * 400 + i), "x".repeat(64))
+                .unwrap();
         }
     }
     db.flush().unwrap();
@@ -147,16 +172,29 @@ fn versioned_rounds(db: &Db, rounds: u64) -> Vec<u64> {
 #[test]
 fn history_is_kept_until_its_horizon_moves() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::open(dir.path(), Options { retain_history: true, ..small_options(Durability::Balanced) }).unwrap();
+    let db = Db::open(
+        dir.path(),
+        Options {
+            retain_history: true,
+            ..small_options(Durability::Balanced)
+        },
+    )
+    .unwrap();
     assert_eq!(db.oldest_sequence(), 0);
     let after = versioned_rounds(&db, 6);
-    assert!(db.stats().levels.iter().skip(1).any(|&(runs, _)| runs > 0), "compactions ran");
+    assert!(
+        db.stats().levels.iter().skip(1).any(|&(runs, _)| runs > 0),
+        "compactions ran"
+    );
 
     for (round, &sequence) in after.iter().enumerate() {
         let past = db.snapshot_at(sequence).unwrap();
         let value = db.get_at(&past, &key(1)).unwrap().unwrap();
         assert_eq!(value.value, format!("round {round}"));
-        let live = db.range_at(&past, Bound::Included(&key(0)), Bound::Excluded(&key(100))).unwrap().count();
+        let live = db
+            .range_at(&past, Bound::Included(&key(0)), Bound::Excluded(&key(100)))
+            .unwrap()
+            .count();
         assert_eq!(live, if round == 5 { 50 } else { 100 });
     }
     let history = db.history(&key(0)).unwrap();
@@ -164,14 +202,19 @@ fn history_is_kept_until_its_horizon_moves() {
     assert_eq!(history[0].value, None, "deleted last");
     assert_eq!(history[5].value.as_deref(), Some(&b"round 0"[..]));
     assert!(history.windows(2).all(|w| w[0].version > w[1].version));
-    assert!(matches!(db.snapshot_at(db.last_sequence() + 1), Err(Error::InvalidArgument(_))));
+    assert!(matches!(
+        db.snapshot_at(db.last_sequence() + 1),
+        Err(Error::InvalidArgument(_))
+    ));
 
     // Past the horizon, compactions drop what only older reads would see.
     db.set_history_horizon(after[3]).unwrap();
     db.set_history_horizon(after[1]).unwrap();
     assert_eq!(db.oldest_sequence(), after[3], "a horizon never moves back");
     match db.snapshot_at(after[2]) {
-        Err(Error::HistoryUnavailable { sequence, oldest }) => assert_eq!((sequence, oldest), (after[2], after[3])),
+        Err(Error::HistoryUnavailable { sequence, oldest }) => {
+            assert_eq!((sequence, oldest), (after[2], after[3]));
+        }
         other => panic!("expected unavailable history, got {other:?}"),
     }
     let at_horizon = db.snapshot_at(after[3]).unwrap();
@@ -180,23 +223,38 @@ fn history_is_kept_until_its_horizon_moves() {
     }
     db.flush().unwrap();
     db.wait_for_compactions().unwrap();
-    assert_eq!(db.get_at(&at_horizon, &key(1)).unwrap().unwrap().value, "round 3");
+    assert_eq!(
+        db.get_at(&at_horizon, &key(1)).unwrap().unwrap().value,
+        "round 3"
+    );
     let kept = db.history(&key(1)).unwrap();
-    assert_eq!(kept.last().unwrap().value.as_deref(), Some(&b"round 3"[..]), "the version current at the horizon is the oldest");
+    assert_eq!(
+        kept.last().unwrap().value.as_deref(),
+        Some(&b"round 3"[..]),
+        "the version current at the horizon is the oldest"
+    );
     assert_eq!(kept.len(), 3);
 }
 
 #[test]
 fn history_survives_the_replay_of_the_journal() {
     let dir = tempfile::tempdir().unwrap();
-    let options = Options { retain_history: true, ..small_options(Durability::Durable) };
+    let options = Options {
+        retain_history: true,
+        ..small_options(Durability::Durable)
+    };
     let db = Db::open(dir.path(), options.clone()).unwrap();
-    let versions: Vec<u64> = (0..5).map(|i| db.put("k", format!("{i}")).unwrap()).collect();
+    let versions: Vec<u64> = (0..5)
+        .map(|i| db.put("k", format!("{i}")).unwrap())
+        .collect();
     db.close().unwrap();
     let db = Db::open(dir.path(), options).unwrap();
     for (i, &version) in versions.iter().enumerate() {
         let past = db.snapshot_at(version).unwrap();
-        assert_eq!(db.get_at(&past, b"k").unwrap().unwrap().value, format!("{i}"));
+        assert_eq!(
+            db.get_at(&past, b"k").unwrap().unwrap().value,
+            format!("{i}")
+        );
     }
     assert_eq!(db.history(b"k").unwrap().len(), 5);
 }
@@ -208,11 +266,27 @@ fn without_history_only_snapshots_keep_the_past() {
     let first = db.put("k", "1").unwrap();
     let pinned = db.snapshot();
     db.put("k", "2").unwrap();
-    assert_eq!(db.get_at(&db.snapshot_at(first).unwrap(), b"k").unwrap().unwrap().value, "1");
+    assert_eq!(
+        db.get_at(&db.snapshot_at(first).unwrap(), b"k")
+            .unwrap()
+            .unwrap()
+            .value,
+        "1"
+    );
     drop(pinned);
-    assert!(matches!(db.snapshot_at(first), Err(Error::HistoryUnavailable { .. })));
-    assert!(matches!(db.set_history_horizon(first), Err(Error::InvalidArgument(_))));
-    assert_eq!(db.history(b"k").unwrap().len(), 1, "the current version only");
+    assert!(matches!(
+        db.snapshot_at(first),
+        Err(Error::HistoryUnavailable { .. })
+    ));
+    assert!(matches!(
+        db.set_history_horizon(first),
+        Err(Error::InvalidArgument(_))
+    ));
+    assert_eq!(
+        db.history(b"k").unwrap().len(),
+        1,
+        "the current version only"
+    );
 }
 
 #[test]
@@ -234,7 +308,10 @@ fn concurrent_writers_are_all_committed() {
     }
     for t in 0..8u64 {
         for i in 0..200 {
-            assert_eq!(db.get(&key(t * 1_000 + i)).unwrap().unwrap(), format!("{t}:{i}"));
+            assert_eq!(
+                db.get(&key(t * 1_000 + i)).unwrap().unwrap(),
+                format!("{t}:{i}")
+            );
         }
     }
     let db = Arc::into_inner(db).unwrap();

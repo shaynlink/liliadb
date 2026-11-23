@@ -61,7 +61,10 @@ impl Summary {
         }
     }
 
-    #[allow(clippy::cast_precision_loss)] // an average of up to 2^53 points is exact enough
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "an average of up to 2^53 points is exact enough"
+    )]
     pub fn stats(self) -> TimeSeriesStats {
         TimeSeriesStats {
             min: self.min,

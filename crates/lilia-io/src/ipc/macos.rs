@@ -1,6 +1,9 @@
 //! Narrow bindings to macOS sys/acl.h: reject grants instead of attempting to
 //! reinterpret ACL principals, inheritance or permission ordering.
-#![allow(unsafe_code)]
+#![allow(
+    unsafe_code,
+    reason = "calls of sys/acl.h; each block states the pointers it relies on"
+)]
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CString};
 use std::io;
@@ -32,7 +35,9 @@ impl Drop for Acl {
     }
 }
 
-pub(super) fn reject_grants(path: &Path) -> io::Result<()> {
+/// Refuses `path` when its extended ACL holds any entry other than a deny: an allow entry could
+/// grant another user access that the mode bits do not show.
+pub fn reject_acl_grants(path: &Path) -> io::Result<()> {
     let encoded_path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid ACL path"))?;
     // SAFETY: path is NUL terminated and live during the call; the documented
@@ -65,7 +70,7 @@ pub(super) fn reject_grants(path: &Path) -> io::Result<()> {
             let error = io::Error::last_os_error();
             // macOS returns EINVAL at end of a valid ACL (including empty ACLs),
             // unlike the POSIX/Linux iteration convention.
-            return if error.raw_os_error() == Some(rustix::io::Errno::INVAL.raw_os_error()) {
+            return if error.raw_os_error() == Some(libc::EINVAL) {
                 Ok(())
             } else {
                 Err(error)

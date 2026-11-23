@@ -26,7 +26,10 @@ impl std::fmt::Debug for Lmdb {
 }
 
 impl Lmdb {
-    #[allow(unsafe_code)] // reason: heed marks `open` unsafe; this process opens the directory once at a time.
+    #[allow(
+        unsafe_code,
+        reason = "heed marks `open` unsafe; this process opens the directory once at a time"
+    )]
     pub fn open(dir: &Path) -> Result<Self> {
         let path = dir.join("lmdb");
         std::fs::create_dir_all(&path)?;

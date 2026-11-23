@@ -7,9 +7,11 @@
 //!
 //! Both run the operations of [`lilia_protocol`] on the database's system session.
 
-// reason: exported functions take their arguments owned, as `UniFFI` passes them, and their
-// errors are Swift and Kotlin exceptions, documented by those SDKs.
-#![allow(clippy::needless_pass_by_value, clippy::missing_errors_doc)]
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::missing_errors_doc,
+    reason = "exported functions take their arguments owned, as `UniFFI` passes them, and their errors are Swift and Kotlin exceptions, documented by those SDKs"
+)]
 
 uniffi::setup_scaffolding!();
 

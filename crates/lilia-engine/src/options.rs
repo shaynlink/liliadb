@@ -85,7 +85,11 @@ impl Options {
     pub fn for_hardware(hardware: &HardwareProfile) -> Self {
         let memory = usize::try_from(hardware.memory_bytes).unwrap_or(usize::MAX);
         let memtable_bytes = (memory / 512).clamp(4 << 20, 64 << 20);
-        let background = if hardware.efficiency_cores > 0 { hardware.efficiency_cores } else { hardware.performance_cores / 4 };
+        let background = if hardware.efficiency_cores > 0 {
+            hardware.efficiency_cores
+        } else {
+            hardware.performance_cores / 4
+        };
         Self {
             durability: Durability::Durable,
             memtable_bytes,
@@ -114,8 +118,13 @@ impl Options {
         if self.block_bytes < 256 || self.target_file_bytes < self.block_bytes as u64 {
             return fail("block_bytes must be at least 256 and at most target_file_bytes");
         }
-        if self.max_immutable_memtables == 0 || self.compaction_threads == 0 || self.max_group_bytes == 0 {
-            return fail("max_immutable_memtables, compaction_threads and max_group_bytes must be positive");
+        if self.max_immutable_memtables == 0
+            || self.compaction_threads == 0
+            || self.max_group_bytes == 0
+        {
+            return fail(
+                "max_immutable_memtables, compaction_threads and max_group_bytes must be positive",
+            );
         }
         if self.l0_compaction_trigger == 0 || self.l0_stop_writes <= self.l0_compaction_trigger {
             return fail("l0_stop_writes must exceed a positive l0_compaction_trigger");
@@ -129,7 +138,8 @@ impl Options {
     /// Size budget of `level` (1 and deeper).
     pub(crate) fn level_bytes(&self, level: usize) -> u64 {
         let exponent = u32::try_from(level.saturating_sub(1)).unwrap_or(u32::MAX);
-        self.level1_bytes.saturating_mul(self.level_multiplier.saturating_pow(exponent))
+        self.level1_bytes
+            .saturating_mul(self.level_multiplier.saturating_pow(exponent))
     }
 }
 
@@ -149,10 +159,24 @@ mod tests {
         small.validate().unwrap();
         assert_eq!(small.memtable_bytes, 4 << 20);
         assert_eq!(small.compaction_threads, 1);
-        let big = HardwareProfile { page_size: 16_384, cache_line: 128, logical_cpus: 14, performance_cores: 10, efficiency_cores: 4, memory_bytes: 36 << 30 };
+        let big = HardwareProfile {
+            page_size: 16_384,
+            cache_line: 128,
+            logical_cpus: 14,
+            performance_cores: 10,
+            efficiency_cores: 4,
+            memory_bytes: 36 << 30,
+        };
         let options = Options::for_hardware(&big);
         options.validate().unwrap();
-        assert_eq!((options.memtable_bytes, options.block_bytes, options.compaction_threads), (64 << 20, 16_384, 4));
+        assert_eq!(
+            (
+                options.memtable_bytes,
+                options.block_bytes,
+                options.compaction_threads
+            ),
+            (64 << 20, 16_384, 4)
+        );
         assert_eq!(options.level_bytes(3), options.level1_bytes * 100);
     }
 }

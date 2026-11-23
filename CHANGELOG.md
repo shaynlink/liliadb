@@ -101,12 +101,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `commitment` and `prove` share them, so a proof answers for the commitment published before it
   (commit and prove used to resolve a textual salt differently). `lilia zk prove` takes
   `--condition "balance >= 1000 AND age >= 18"` and refuses other claims.
+- **The rules of the storage RFC (§5.2) run in CI**: `tools/lint.sh`, run on every platform of
+  the `rust` job and by the release, checks formatting; clippy with warnings as errors on every
+  target, where every `#[allow]` carries `reason = "..."` (`allow_attributes_without_reason`);
+  no `unwrap`, `expect` or `let _ =` of a must-use value outside tests; no source file over 600
+  lines; and `unsafe_code` lifted only in `lilia-io` and the native bindings (`lilia-ffi`,
+  `lilia-node-native`, `lilia-wasm`). The `wasm` job lints the browser-only code. The
+  regression-benchmark rule waits for the reference machine. Files over the limit were split
+  (the daemon's HTTP gateway, the CLI's arguments, the protocol's executor and tests, the
+  planner of `lilia-db`, the engine's open path, HNSW, Double Metaphone).
+- **`lilia-io`**: the `ipc` feature holds the daemon's operating-system access control, moved
+  out of `lilia-daemon` with its `unsafe` code: the macOS ACL check of the socket path, and the
+  Windows security descriptor, named pipes and token publication (with the opt-in cross-account
+  test, `tools/test-windows-accounts.ps1`). The token's directory is synced through
+  `NativeVfs::sync_dir`.
+- `HnswIndex::insert` returns the node's internal id; the list of nodes to persist it returned
+  for the SQLite engine is gone.
 
 ### Fixed
 - **`lilia-engine`**: a run moved to the next level unchanged had its file deleted once the moved
   copy was compacted away, while an older version still listed it; a long read through that
   version (ledger verification) then failed with "file not found". The file now belongs to every
   placement of the run.
+- **`lilia-zk`**: an `age` threshold above 2^32 was truncated, so `age >= 2^32 + 18` proved
+  `age >= 18`; it is now refused as an invalid statement.
+- **`lilia-core`**: a timestamp with more than 21 fractional digits overflowed while scaling them
+  to milliseconds; digits beyond the millisecond are now ignored. A whole archived float beyond
+  the range of `i64` read as `i64::MAX` or `i64::MIN`; `as_i64` now answers `None`.
 
 ### Removed
 - `lilia_bench`, `bench_rusqlite` and `lilia_bench_analytics` binaries and the `bench-bin` feature of
@@ -132,6 +153,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lilia-embed` no longer depends on `lilia-core`'s embedding configuration: `BuiltinModel` and
   the `Embedder` trait are its own, and its example stores and searches the vectors with
   `lilia-db`.
+- Unchecked rkyv access, the last `unsafe` outside `lilia-io` and the bindings:
+  `access_archived_unchecked` and `access_archived_doc_unchecked` (`lilia-core`) and
+  `read_archived_frame_unchecked` (`lilia-protocol`), with their benchmark cases; and
+  `lilia-core`'s Windows directory sync, replaced by `lilia-io`'s.
+- From `lilia-core`, code nothing called: `downsample_points` (duplicated by the time-series
+  lifecycle of `lilia-db`), `HnswIndex::load_node_edges` (the SQLite engine's index loader), and
+  the `getrandom` 0.4 dependency.
 - `lilia` commands retired with SQLite: `backup`, `blob`, `integrity` (references and checks),
   `json create-collection` and `json set-check`, `plugin` and the global `--plugin` (the daemon no
   longer loads plugins), and `zk setup --template` (one circuit).

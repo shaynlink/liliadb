@@ -34,7 +34,11 @@ pub struct JournalWriter {
 impl JournalWriter {
     /// A writer at the start of an empty file.
     pub fn new(file: Arc<dyn File>) -> Self {
-        Self { file, offset: 0, buffer: Vec::new() }
+        Self {
+            file,
+            offset: 0,
+            buffer: Vec::new(),
+        }
     }
 
     /// Frames every record and writes them with a single positional write.
@@ -60,7 +64,8 @@ impl JournalWriter {
                     (false, true) => LAST,
                 };
                 let length = u16::try_from(fragment.len()).map_err(io::Error::other)?;
-                self.buffer.extend_from_slice(&masked_crc(&[&[kind], fragment]).to_le_bytes());
+                self.buffer
+                    .extend_from_slice(&masked_crc(&[&[kind], fragment]).to_le_bytes());
                 self.buffer.extend_from_slice(&length.to_le_bytes());
                 self.buffer.push(kind);
                 self.buffer.extend_from_slice(fragment);
@@ -140,7 +145,9 @@ pub fn read_all(file: &dyn File) -> Result<Recovered> {
             (MIDDLE, Some(buffer)) => buffer.extend_from_slice(fragment),
             (LAST, Some(buffer)) => {
                 buffer.extend_from_slice(fragment);
-                recovered.records.push(pending.take().map_or_else(Bytes::new, BytesMut::freeze));
+                recovered
+                    .records
+                    .push(pending.take().map_or_else(Bytes::new, BytesMut::freeze));
             }
             _ => {
                 recovered.torn = true;
@@ -161,7 +168,11 @@ mod tests {
     use super::*;
 
     fn records() -> Vec<Vec<u8>> {
-        (0..200u32).map(|i| vec![u8::try_from(i % 251).unwrap(); usize::try_from(i * 997 % 70_000).unwrap()]).collect()
+        (0..200u32)
+            .map(|i| {
+                vec![u8::try_from(i % 251).unwrap(); usize::try_from(i * 997 % 70_000).unwrap()]
+            })
+            .collect()
     }
 
     #[test]
@@ -177,7 +188,10 @@ mod tests {
         file.preallocate(writer.size() + 100_000).unwrap();
         let got = read_all(file.as_ref()).unwrap();
         assert!(!got.torn);
-        assert_eq!(got.records.iter().map(|r| r.to_vec()).collect::<Vec<_>>(), all);
+        assert_eq!(
+            got.records.iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+            all
+        );
     }
 
     #[test]
@@ -190,16 +204,27 @@ mod tests {
             vfs.sync_dir(Path::new("/j")).unwrap();
             let mut writer = JournalWriter::new(Arc::clone(&file));
             let synced = usize::try_from(seed % 50).unwrap();
-            writer.append(all[..synced].iter().map(Vec::as_slice)).unwrap();
+            writer
+                .append(all[..synced].iter().map(Vec::as_slice))
+                .unwrap();
             writer.sync(SyncLevel::Full).unwrap();
-            writer.append(all[synced..].iter().map(Vec::as_slice)).unwrap();
+            writer
+                .append(all[synced..].iter().map(Vec::as_slice))
+                .unwrap();
             vfs.crash();
             vfs.restart(CrashOptions::TORN);
             let file = vfs.open(Path::new("/j/log"), OpenMode::Read).unwrap();
             let got = read_all(file.as_ref()).unwrap();
-            assert!(got.records.len() >= synced, "seed {seed}: lost synced records");
+            assert!(
+                got.records.len() >= synced,
+                "seed {seed}: lost synced records"
+            );
             for (i, record) in got.records.iter().enumerate() {
-                assert_eq!(record.as_ref(), all[i].as_slice(), "seed {seed}: record {i} differs");
+                assert_eq!(
+                    record.as_ref(),
+                    all[i].as_slice(),
+                    "seed {seed}: record {i} differs"
+                );
             }
         }
     }

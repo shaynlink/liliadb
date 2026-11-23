@@ -107,32 +107,3 @@ where
     rkyv::access::<T::Archived, rkyv::rancor::Error>(buffer)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
 }
-
-/// 0-nanosecond unchecked read of an archived frame from trusted local IPC stream.
-///
-/// # Safety
-/// The stream payload must be a trusted, well-formed instance of `T::Archived`.
-///
-/// # Errors
-/// Returns an I/O error for truncated frames.
-#[allow(unsafe_code)]
-pub async fn read_archived_frame_unchecked<'a, T>(
-    stream: &mut (impl AsyncRead + Unpin),
-    buffer: &'a mut rkyv::util::AlignedVec,
-) -> io::Result<&'a T::Archived>
-where
-    T: rkyv::Archive,
-    T::Archived: 'a,
-{
-    let length = stream.read_u32().await? as usize;
-    if length == 0 || length > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid frame length",
-        ));
-    }
-    buffer.clear();
-    buffer.resize(length, 0);
-    stream.read_exact(buffer).await?;
-    unsafe { Ok(rkyv::access_unchecked::<T::Archived>(buffer)) }
-}

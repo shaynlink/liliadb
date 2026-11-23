@@ -112,8 +112,10 @@ fn encode(numbers: &[f64], element_type: VectorElementType) -> Result<Vec<u8>, L
     }
 }
 
-// reason: an f32 vector stores the nearest representable value of each element.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "an f32 vector stores the nearest representable value of each element"
+)]
 fn nearest_f32(value: f64) -> f32 {
     value as f32
 }

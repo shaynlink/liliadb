@@ -192,7 +192,10 @@ async fn js_clients_send_message_pack_and_receive_js_frames() {
     let (mut client, mut server) = tokio::io::duplex(8_192);
     client.write_all(&Codec::Js.preface()).await.unwrap();
     let request = to_msgpack(&batch_request()).unwrap();
-    client.write_u32(request.len() as u32).await.unwrap();
+    client
+        .write_u32(u32::try_from(request.len()).unwrap())
+        .await
+        .unwrap();
     client.write_all(&request).await.unwrap();
     let codec = Codec::accept(&mut server).await.unwrap();
     assert_eq!(codec, Codec::Js);
@@ -222,7 +225,7 @@ async fn js_clients_send_message_pack_and_receive_js_frames() {
         "versions are decimal strings"
     );
     let segments = 8 + json;
-    let key = entry["key"].as_u64().unwrap() as usize;
+    let key = usize::try_from(entry["key"].as_u64().unwrap()).unwrap();
     let at = |i: usize, field: usize| {
         let offset = segments + i * 8 + field * 4;
         u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap()) as usize

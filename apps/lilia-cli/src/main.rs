@@ -120,53 +120,38 @@ fn print_value(output: Output, value: &serde_json::Value) -> anyhow::Result<()> 
 }
 
 fn print_table(cols: &[String], rows: &[serde_json::Value]) {
-    use std::fmt::Write as _;
-
+    let cell = |item: &serde_json::Value| match item {
+        serde_json::Value::String(s) => s.clone(),
+        _ => item.to_string(),
+    };
     let mut widths: Vec<usize> = cols.iter().map(String::len).collect();
-    for row in rows {
-        if let Some(items) = row.as_array() {
-            for (i, item) in items.iter().enumerate() {
-                if i < widths.len() {
-                    let s = match item {
-                        serde_json::Value::String(s) => s.clone(),
-                        _ => item.to_string(),
-                    };
-                    widths[i] = widths[i].max(s.len());
-                }
-            }
+    for items in rows.iter().filter_map(serde_json::Value::as_array) {
+        for (width, item) in widths.iter_mut().zip(items) {
+            *width = (*width).max(cell(item).len());
         }
     }
-
-    let mut header_line = String::new();
-    let mut separator = String::new();
-    for (i, col) in cols.iter().enumerate() {
-        if i > 0 {
-            header_line.push_str(" | ");
-            separator.push_str("-+-");
-        }
-        let w = widths[i];
-        let _ = write!(header_line, "{col:<w$}");
-        separator.push_str(&"-".repeat(widths[i]));
-    }
-    println!("{header_line}");
-    println!("{separator}");
-
-    for row in rows {
-        if let Some(items) = row.as_array() {
-            let mut row_line = String::new();
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    row_line.push_str(" | ");
-                }
-                let s = match item {
-                    serde_json::Value::String(s) => s.clone(),
-                    _ => item.to_string(),
-                };
-                let w = if i < widths.len() { widths[i] } else { 0 };
-                let _ = write!(row_line, "{s:<w$}");
-            }
-            println!("{row_line}");
-        }
+    let line = |cells: Vec<String>| {
+        cells
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                let w = widths.get(i).copied().unwrap_or(0);
+                format!("{text:<w$}")
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    println!("{}", line(cols.to_vec()));
+    println!(
+        "{}",
+        widths
+            .iter()
+            .map(|&w| "-".repeat(w))
+            .collect::<Vec<_>>()
+            .join("-+-")
+    );
+    for items in rows.iter().filter_map(serde_json::Value::as_array) {
+        println!("{}", line(items.iter().map(cell).collect()));
     }
     println!("({} rows)", rows.len());
 }

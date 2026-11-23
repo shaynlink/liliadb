@@ -16,6 +16,10 @@ fn names(nodes: &[String]) -> Vec<&str> {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one graph, checked through every traversal in turn"
+)]
 fn nodes_edges_and_traversals() {
     let dir = tempfile::tempdir().unwrap();
     let db = open(dir.path(), false);
