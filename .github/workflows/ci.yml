@@ -15,6 +15,10 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
     runs-on: ${{ matrix.runner }}
+    env:
+      # candle/gemm emits Armv8.2 half-precision instructions when lilia-embed is built.
+      # The hosted ARM64 runner supports them, but Rust's generic target does not enable them.
+      RUSTFLAGS: ${{ matrix.runner == 'ubuntu-24.04-arm' && '-C target-feature=+fp16' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.100.0

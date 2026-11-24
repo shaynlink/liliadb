@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(unix)]
 use std::fs;
 
 use lilia_protocol::{PROTOCOL_MAJOR, PROTOCOL_MINOR};
