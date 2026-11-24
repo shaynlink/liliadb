@@ -80,6 +80,11 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Threading",
 ] }
 
+# `psm` 0.1.32 omits watchOS from its Mach-O assembly guard. Keep Apple mobile
+# targets buildable until the upstream release containing rust-lang/stacker#152.
+[patch.crates-io]
+psm = { git = "https://github.com/rust-lang/stacker", rev = "f289c05e5a5f16bc667c48f63a2aa7b4cfb764f5" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

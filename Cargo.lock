@@ -4332,8 +4332,7 @@ dependencies = [
 [[package]]
 name = "psm"
 version = "0.1.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
+source = "git+https://github.com/rust-lang/stacker?rev=f289c05e5a5f16bc667c48f63a2aa7b4cfb764f5#f289c05e5a5f16bc667c48f63a2aa7b4cfb764f5"
 dependencies = [
  "ar_archive_writer",
  "cc",
@@ -5297,7 +5296,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
