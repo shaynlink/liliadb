@@ -125,10 +125,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dialect; the change stream it described is gone.
 - **`docs/benchmarks.md` measures `lilia-db`** (2026-11-24, `full` profile) instead of the
   SQLite engine. Against v0.1: power-safe commits where v0.1 only reached the drive cache, bulk
-  loads 10.8× faster, a third of the disk (272.8 MiB for 1,000,000 keys) and a write
-  amplification of 2.87× instead of 268×, point reads 3.7× faster on one thread and 31× on ten.
-  Slower than v0.1: full-text queries (318 queries/s instead of 1,244 for one term) and SQL
-  analytics (311 ms instead of 1 ms, without the columnar tables).
+  loads 11.2× faster, a third of the disk (272.8 MiB for 1,000,000 keys) and a write
+  amplification of 2.84× instead of 268×, point reads 5.1× faster on one thread and 32× on ten.
+  Slower than v0.1: full-text queries (293 queries/s instead of 1,244 for one term), SQL
+  analytics (334 ms instead of 1 ms, without the columnar tables) and vector recall@10 (0.670
+  instead of 0.742).
+- **The JavaScript benchmark covers the local databases of Node, Bun and Deno**: libsql, sqlite3,
+  lmdb-js, LevelDB (classic-level), PGlite, DuckDB and SurrealDB join better-sqlite3,
+  `node:sqlite`, `bun:sqlite` and `@db/sqlite`; every SQLite driver also runs with `fullfsync`.
+  The report groups the surfaces by sync class and checks each declared sync against the
+  measured commit latency. LiliaDB's surfaces were declared `fsync`; they flush the drive cache
+  (`F_FULLFSYNC`).
+- **Releases are GitHub releases only**: a release tag creates the GitHub release (archives,
+  prebuilds, Homebrew formulas, checksums) and no longer publishes to npm or pushes to the
+  Homebrew tap; the manual `publish-npm` workflow is removed.
 
 ### Fixed
 - **`lilia-engine`**: a run moved to the next level unchanged had its file deleted once the moved
