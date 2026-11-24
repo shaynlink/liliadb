@@ -132,13 +132,30 @@ pub fn sdk(data: &Data) -> String {
     if all.is_empty() {
         return String::new();
     }
-    let mut t = Table::new(["Surface", "Version", "Commits/s (1 key)", "p50", "Keys/s (100 per commit)", "Reads/s", "p50 read"]);
-    for (engine, cells) in pivot(&all, &["write.commit", "write.batch", "read.get"].map(|w| column(move |r| r.workload == w))) {
-        t.row([label(engine), engine.version.clone(), ops(cells[0]), p50(cells[0]), ops(cells[1]), ops(cells[2]), p50(cells[2])]);
-    }
     let records = all.iter().find(|r| r.workload == "read.get").and_then(|r| param_u64(r, "records")).map_or("?".into(), |n| count(n as f64));
-    format!(
-        "## JavaScript surfaces\n\nThe same key-value operations through each runtime's binding, durable configuration (`synchronous=FULL` for SQLite drivers, `durability: \"durable\"` for LiliaDB), 256-byte values; reads over {records} loaded keys. Each surface pays its own call overhead (Node-API, IPC framing, HTTP).\n\n{}",
-        t.render()
-    )
+    let mut out = format!(
+        "## JavaScript surfaces\n\nThe same key-value operations through each runtime's binding, 256-byte values, every write committed as one transaction in the database's most durable configuration, and each SQLite driver also with `fullfsync`; reads over {records} loaded keys. Each surface pays its own call overhead (Node-API, FFI, WebAssembly, IPC framing, HTTP). Surfaces are grouped by the sync class of their commits; the check compares the declared sync with the measured single-commit latency.\n\n"
+    );
+    for class in ["power-safe", "drive cache", "no sync"] {
+        let in_class: Vec<&Record> = all.iter().copied().filter(|r| data.class(&r.engine) == class).collect();
+        if in_class.is_empty() {
+            continue;
+        }
+        let mut t = Table::new(["Surface", "Version", "Commit sync", "Commits/s (1 key)", "p50", "Keys/s (100 per commit)", "Reads/s", "p50 read", "Check"]);
+        for (engine, cells) in pivot(&in_class, &["write.commit", "write.batch", "read.get"].map(|w| column(move |r| r.workload == w))) {
+            t.row([
+                label(engine),
+                engine.version.clone(),
+                format!("`{}`", engine.sync.label()),
+                ops(cells[0]),
+                p50(cells[0]),
+                ops(cells[1]),
+                ops(cells[2]),
+                p50(cells[2]),
+                data.sync_check(engine, cells[0].map(|r| r.latency.p50_us)).to_owned(),
+            ]);
+        }
+        out.push_str(&format!("### {}{}\n\n{}\n", class[..1].to_uppercase(), &class[1..], t.render()));
+    }
+    out
 }

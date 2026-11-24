@@ -2,11 +2,22 @@
 // Run by `sdk_suite.mjs`: `node node_main.mjs --surface <id> --profile <p> --dir <dir>`.
 
 import { argument, emit, failure, PROFILES, runSurface } from "./harness.mjs";
-import { betterSqlite3, liliaDaemonHttp, liliaDaemonIpc, liliaEmbedded, nodeSqlite } from "./node_surfaces.mjs";
+import { classicLevel, duckdb, lmdb, pglite, SQLITE_DRIVERS, surrealdb } from "./node_competitors.mjs";
+import { liliaDaemonHttp, liliaDaemonIpc, liliaEmbedded } from "./node_surfaces.mjs";
 
+/** Every Node.js surface by id; each SQLite driver twice, with and without `fullfsync`. */
 export const NODE_SURFACES = {
-  "better-sqlite3": (dir) => betterSqlite3(dir),
-  "node-sqlite": (dir) => nodeSqlite(dir),
+  ...Object.fromEntries(
+    Object.entries(SQLITE_DRIVERS).flatMap(([id, open]) => [
+      [id, (dir) => open(dir, false)],
+      [`${id}-fullfsync`, (dir) => open(dir, true)],
+    ]),
+  ),
+  "lmdb-js": (dir) => lmdb(dir),
+  "classic-level": (dir) => classicLevel(dir),
+  pglite: (dir) => pglite(dir),
+  duckdb: (dir) => duckdb(dir),
+  surrealdb: (dir) => surrealdb(dir),
   "lilia-node": (dir) => liliaEmbedded(dir, false),
   "lilia-node-sync": (dir) => liliaEmbedded(dir, true),
   "lilia-daemon-ipc": (dir) => liliaDaemonIpc(dir),

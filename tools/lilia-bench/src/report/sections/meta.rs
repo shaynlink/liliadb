@@ -41,14 +41,7 @@ pub fn engines(data: &Data) -> String {
     let mut t = Table::new(["Engine", "Version", "Commit sync", "Class on this OS", "1-writer commit p50", "Check"]);
     for engine in Data::engines(&kv) {
         let p50 = commit_probe(data, engine).map(|r| r.latency.p50_us);
-        // Only a power-safe commit has a physical lower bound (one drive-cache flush); a slow
-        // drive-cache commit proves nothing about its sync, so it is not flagged.
-        let check = match (apple, data.class(engine), p50) {
-            (true, "power-safe", Some(p)) if p < 1_000.0 => "⚠ faster than a drive-cache flush: declared sync not observed",
-            (true, "power-safe", Some(_)) => "at least one flush per commit",
-            (_, _, Some(_)) => "not verifiable from latency",
-            (_, _, None) => "not measured",
-        };
+        let check = data.sync_check(engine, p50);
         t.row([
             label(engine),
             engine.version.clone(),

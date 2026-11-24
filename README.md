@@ -203,8 +203,9 @@ All published numbers come from one reproducible suite, [`tools/lilia-bench`](to
 which measures LiliaDB against SQLite, LMDB, redb, fjall, RocksDB and DuckDB on the same machine:
 durable commits (1 to 64 writers), batched and bulk writes, point, multi-key, range and scan reads,
 YCSB A–F, JSON documents, full-text search, vector search, analytics, and the JavaScript surfaces
-(Node-API, daemon IPC/HTTP, better-sqlite3, `node:sqlite`, `bun:sqlite`, Deno). Every engine runs
-in its most durable mode, and each row states the sync primitive it actually uses.
+(Node-API, daemon IPC/HTTP, better-sqlite3, `node:sqlite`, libsql, sqlite3, `bun:sqlite`, Deno,
+lmdb-js, LevelDB, PGlite, DuckDB, SurrealDB). Every engine runs in its most durable mode, and each
+row states the sync primitive it actually uses.
 
 The report, including where LiliaDB is slower, is [docs/benchmarks.md](docs/benchmarks.md). Reproduce it with:
 

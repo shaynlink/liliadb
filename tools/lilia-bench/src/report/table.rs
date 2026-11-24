@@ -2,6 +2,14 @@
 
 use crate::record::Record;
 
+/// Whether a cell states a quantity: its first word is a number, with thousands separators and a
+/// unit suffix allowed (`12,383`, `4.00 ms`, `2.87×`); a version such as `0.5.17` is not one.
+fn is_number(cell: &str) -> bool {
+    cell.split_whitespace()
+        .next()
+        .is_some_and(|word| word.replace(',', "").trim_end_matches(|c: char| !c.is_ascii_digit()).parse::<f64>().is_ok())
+}
+
 /// A Markdown table; columns whose cells are all numbers (or `—`) are right-aligned.
 #[derive(Debug, Default)]
 pub struct Table {
@@ -29,7 +37,7 @@ impl Table {
         let numeric = |i: usize| {
             i > 0
                 && self.rows.iter().all(|row| {
-                    row.get(i).is_none_or(|cell| cell == "—" || cell.starts_with(|c: char| c.is_ascii_digit()))
+                    row.get(i).is_none_or(|cell| cell == "—" || is_number(cell))
                 })
         };
         let mut out = format!("| {} |\n|", self.headers.join(" | "));

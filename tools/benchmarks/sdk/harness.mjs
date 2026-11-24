@@ -172,37 +172,71 @@ async function workloads(adapter, info, payload, records, budgetMs, valueSize) {
   }
 }
 
-/** SQLite table and pragmas identical to the Rust suite's `sqlite` engine. */
-export const SQLITE_SETUP = [
-  "PRAGMA journal_mode = WAL",
-  "PRAGMA synchronous = FULL",
-  "PRAGMA cache_size = -65536",
-  "PRAGMA temp_store = MEMORY",
-  "CREATE TABLE IF NOT EXISTS kv(k BLOB PRIMARY KEY, v BLOB NOT NULL) STRICT, WITHOUT ROWID",
-];
+/**
+ * The sync primitive a commit issues on `platform` (`process.platform`, or Deno's `Deno.build.os`),
+ * in the schema of `tools/lilia-bench` (`SyncPrimitive`). `flushesDriveCache`: the binding asks
+ * Apple platforms for `F_FULLFSYNC`; elsewhere `fsync`/`fdatasync` is already power-safe.
+ */
+export function platformSync(platform, flushesDriveCache) {
+  if (platform === "darwin" || platform === "ios") {
+    return flushesDriveCache ? "full_fsync" : "fsync";
+  }
+  return platform === "win32" || platform === "windows" ? "flush_file_buffers" : "fsync";
+}
+
+/**
+ * SQLite table and pragmas identical to the Rust suite's `sqlite` engine; with `fullfsync`, to its
+ * `sqlite-fullfsync` engine (power-safe commits on Apple platforms).
+ */
+export function sqliteSetup(fullfsync) {
+  return [
+    "PRAGMA journal_mode = WAL",
+    "PRAGMA synchronous = FULL",
+    `PRAGMA fullfsync = ${fullfsync ? "ON" : "OFF"}`,
+    `PRAGMA checkpoint_fullfsync = ${fullfsync ? "ON" : "OFF"}`,
+    "PRAGMA cache_size = -65536",
+    "PRAGMA temp_store = MEMORY",
+    "CREATE TABLE IF NOT EXISTS kv(k BLOB PRIMARY KEY, v BLOB NOT NULL) STRICT, WITHOUT ROWID",
+  ];
+}
 export const SQLITE_UPSERT = "INSERT INTO kv(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v";
 export const SQLITE_GET = "SELECT length(v) AS n FROM kv WHERE k = ?";
 
-/** `fsync` stops at the drive cache on Apple platforms; elsewhere it is power-safe. */
-export const SQLITE_SYNC = "fsync";
+/**
+ * Identity of one SQLite driver in one of its two configurations: `driver` (`better-sqlite3`), the
+ * `runtime` it runs in (`Node`), the driver's `version`, the SQLite it links.
+ */
+export function sqliteInfo(id, driver, runtime, version, sqliteVersion, fullfsync, platform) {
+  return {
+    id: fullfsync ? `${id}-fullfsync` : id,
+    name: `${driver} (${runtime}${fullfsync ? ", fullfsync" : ""})`,
+    version: `${version} (SQLite ${sqliteVersion})`,
+    sync: platformSync(platform, fullfsync),
+  };
+}
 
 /**
- * Adapter over a synchronous SQLite driver (better-sqlite3, node:sqlite, bun:sqlite, @db/sqlite):
- * all expose `exec`, `prepare(sql).run/get`.
+ * Adapter over a synchronous SQLite driver (better-sqlite3, node:sqlite, libsql, bun:sqlite,
+ * @db/sqlite): all expose `exec`, `prepare(sql).run/get`. `surface` is
+ * `{ id, driver, runtime, version, fullfsync, platform, arrayParams }`; with `arrayParams`, statement
+ * parameters are passed as one array rather than as separate arguments.
  */
-export function sqliteAdapter(id, name, version, db, close) {
-  for (const sql of SQLITE_SETUP) {
+export function sqliteAdapter(surface, db, close) {
+  const { id, driver, runtime, version, fullfsync, platform, arrayParams } = surface;
+  const bind = arrayParams ? (...params) => [params] : (...params) => params;
+  for (const sql of sqliteSetup(fullfsync)) {
     db.exec(sql);
   }
   const upsert = db.prepare(SQLITE_UPSERT);
   const get = db.prepare(SQLITE_GET);
+  const sqliteVersion = db.prepare("SELECT sqlite_version() AS v").get().v;
   return {
-    info: { id, name, version: `${version} (SQLite ${db.prepare("SELECT sqlite_version() AS v").get().v})`, sync: SQLITE_SYNC },
+    info: sqliteInfo(id, driver, runtime, version, sqliteVersion, fullfsync, platform),
     put(items) {
       db.exec("BEGIN IMMEDIATE");
       try {
         for (const [k, v] of items) {
-          upsert.run(k, v);
+          upsert.run(...bind(k, v));
         }
         db.exec("COMMIT");
       } catch (error) {
@@ -211,7 +245,7 @@ export function sqliteAdapter(id, name, version, db, close) {
       }
     },
     // Drivers return `undefined` (Node, Deno) or `null` (Bun) for no row.
-    get: (k) => get.get(k) != null,
+    get: (k) => get.get(...bind(k)) != null,
     close,
   };
 }

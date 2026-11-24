@@ -4,7 +4,7 @@
 mod sections;
 mod table;
 
-use crate::record::{EngineInfo, Failure, Line, Record};
+use crate::record::{EngineInfo, Failure, Line, Record, SyncPrimitive};
 use crate::sysinfo::Host;
 
 pub use table::{count, duration_us, mib, param_str, param_u64, ratio, Table};
@@ -40,13 +40,29 @@ impl<'a> Data<'a> {
         self.host.map_or(std::env::consts::OS, |h| h.os.as_str())
     }
 
-    /// `power-safe` or `drive cache`, for the OS the results were measured on.
+    /// `power-safe`, `drive cache` or `no sync`, for the OS the results were measured on.
     #[must_use]
     pub fn class(&self, info: &EngineInfo) -> &'static str {
         if info.sync.power_safe_on(self.os()) {
             "power-safe"
+        } else if info.sync == SyncPrimitive::None {
+            "no sync"
         } else {
             "drive cache"
+        }
+    }
+
+    /// Whether the single-commit latency `p50_us` of `info` is consistent with its declared sync.
+    /// Only a power-safe commit on Apple platforms has a physical lower bound (one drive-cache
+    /// flush, about 4 ms); a slow drive-cache commit proves nothing about its sync.
+    #[must_use]
+    pub fn sync_check(&self, info: &EngineInfo, p50_us: Option<f64>) -> &'static str {
+        let apple = matches!(self.os(), "macos" | "ios");
+        match (apple, self.class(info), p50_us) {
+            (true, "power-safe", Some(p)) if p < 1_000.0 => "⚠ faster than a drive-cache flush: declared sync not observed",
+            (true, "power-safe", Some(_)) => "at least one flush per commit",
+            (_, _, Some(_)) => "not verifiable from latency",
+            (_, _, None) => "not measured",
         }
     }
 

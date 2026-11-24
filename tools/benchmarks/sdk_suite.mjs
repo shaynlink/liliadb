@@ -14,17 +14,30 @@ import { argument, emit, failure, PROFILES } from "./sdk/harness.mjs";
 import { NODE_SURFACES } from "./sdk/node_main.mjs";
 
 const profile = argument(process.argv.slice(2), "profile", "quick");
+const only = argument(process.argv.slice(2), "only", "").split(",").filter(Boolean);
 if (!PROFILES[profile]) {
   console.error(`unknown profile ${profile}; expected one of ${Object.keys(PROFILES).join(", ")}`);
   process.exit(2);
 }
 
 const sdk = import.meta.dirname;
-const surfaces = [
+const all = [
   ...Object.keys(NODE_SURFACES).map((id) => [id, process.execPath, [join(sdk, "sdk/node_main.mjs"), "--surface", id]]),
-  ["bun-sqlite", "bun", ["run", join(sdk, "sdk/bun_sqlite.ts")]],
-  ["deno-sqlite", "deno", ["run", "--allow-all", join(sdk, "sdk/deno_sqlite.ts")]],
+  ...[false, true].flatMap((fullfsync) => {
+    const suffix = fullfsync ? "-fullfsync" : "";
+    const flag = fullfsync ? ["--fullfsync"] : [];
+    return [
+      [`bun-sqlite${suffix}`, "bun", ["run", join(sdk, "sdk/bun_sqlite.ts"), ...flag]],
+      [`deno-sqlite${suffix}`, "deno", ["run", "--allow-all", join(sdk, "sdk/deno_sqlite.ts"), ...flag]],
+    ];
+  }),
 ];
+const unknown = only.filter((id) => !all.some(([known]) => known === id));
+if (unknown.length > 0) {
+  console.error(`unknown surface ${unknown.join(", ")}; expected some of ${all.map(([id]) => id).join(", ")}`);
+  process.exit(2);
+}
+const surfaces = only.length > 0 ? all.filter(([id]) => only.includes(id)) : all;
 
 for (const [id, runtime, args] of surfaces) {
   // Physical path: the daemon refuses IPC directories behind symlinks (macOS `/var` → `/private/var`).

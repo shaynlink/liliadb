@@ -1,5 +1,5 @@
-// Node.js surfaces: SQLite drivers (better-sqlite3, node:sqlite) and LiliaDB (Node-API embedded,
-// async and sync, daemon over IPC and over HTTP).
+// Node.js surfaces of LiliaDB: Node-API embedded (async and sync calls), the daemon over IPC and
+// over HTTP.
 
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -7,17 +7,12 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { connect, createServer } from "node:net";
 import { join, resolve } from "node:path";
-import { createRequire } from "node:module";
 
-import { sqliteAdapter } from "./harness.mjs";
+import { platformSync } from "./harness.mjs";
 
-const require = createRequire(import.meta.url);
 const repo = resolve(import.meta.dirname, "../../..");
-const LILIA_SYNC = "fsync"; // `durability: "durable"` runs SQLite with synchronous=FULL, no fullfsync.
-
-function packageVersion(name) {
-  return JSON.parse(readFileSync(require.resolve(`${name}/package.json`), "utf8")).version;
-}
+// `durability: "durable"`: the engine's journal is flushed past the drive cache on every commit.
+const LILIA_SYNC = platformSync(process.platform, true);
 
 function liliaVersion() {
   return JSON.parse(readFileSync(join(repo, "packages/node/package.json"), "utf8")).version;
@@ -25,18 +20,6 @@ function liliaVersion() {
 
 async function liliaModule() {
   return import(join(repo, "packages/node/dist/index.js"));
-}
-
-export async function betterSqlite3(dir) {
-  const Database = require("better-sqlite3");
-  const db = new Database(join(dir, "bench.sqlite"));
-  return sqliteAdapter("better-sqlite3", "better-sqlite3 (Node)", packageVersion("better-sqlite3"), db, () => db.close());
-}
-
-export async function nodeSqlite(dir) {
-  const { DatabaseSync } = await import("node:sqlite");
-  const db = new DatabaseSync(join(dir, "bench.sqlite"));
-  return sqliteAdapter("node-sqlite", "node:sqlite (Node)", `Node ${process.version}`, db, () => db.close());
 }
 
 function liliaOps(items) {

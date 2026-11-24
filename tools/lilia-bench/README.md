@@ -34,7 +34,9 @@ cargo run --release --manifest-path tools/lilia-bench/Cargo.toml -- render
 Prerequisites: Rust (the workspace toolchain), a C/C++ toolchain, and `libclang` for RocksDB's
 bindings (found automatically under the Xcode or Command Line Tools directory on macOS). The
 JavaScript surfaces need Node 22+, and optionally Bun and Deno; a missing runtime is reported as a
-run without results, never silently skipped.
+run without results, never silently skipped. Their competitors are the dependencies of
+`tools/benchmarks/package.json`, installed by `pnpm install`. One surface or a few run alone with
+`node tools/benchmarks/sdk_suite.mjs --profile quick --only lmdb-js,better-sqlite3-fullfsync`.
 
 ## Engines
 
@@ -68,7 +70,7 @@ Rust's `File::sync_all`/`sync_data` issue `F_FULLFSYNC` on Apple platforms. On L
 | `fts` | full-text indexing and top-10 BM25 queries |
 | `vector` | HNSW inserts, top-10 cosine search with recall@10 against an exact scan |
 | `analytics` | filtered aggregate and group-by, answers checked against the generator |
-| `sdk` | the JavaScript surfaces (`tools/benchmarks/sdk_suite.mjs`) |
+| `sdk` | the JavaScript surfaces (`tools/benchmarks/sdk_suite.mjs`): single-key commits, commits of 100 keys and point reads through LiliaDB (Node-API async and sync, daemon IPC and HTTP) and the local databases of Node, Bun and Deno: the SQLite drivers (better-sqlite3, `node:sqlite`, libsql, sqlite3, `bun:sqlite`, `@db/sqlite`), each with and without `fullfsync`, lmdb-js, LevelDB (classic-level), PGlite, DuckDB and SurrealDB (SurrealKV) |
 
 ## Layout
 
