@@ -2633,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-analytics"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2669,7 +2669,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-core"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "blake3",
  "getrandom 0.2.17",
@@ -2691,7 +2691,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-db"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "blake3",
  "bytes",
@@ -2710,7 +2710,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-engine"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "bytes",
  "crc32c",
@@ -2722,7 +2722,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-graph"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "lilia-core",
  "lilia-db",
@@ -2733,7 +2733,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-io"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "js-sys",
  "libc",
@@ -2745,7 +2745,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-protocol"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "lilia-core",
  "lilia-db",

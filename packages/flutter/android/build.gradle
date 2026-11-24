@@ -1,5 +1,5 @@
 group 'io.liliadb.flutter'
-version '0.1.0-alpha.9'
+version '0.2.0-alpha.1'
 
 buildscript {
     ext.kotlin_version = '1.9.22'

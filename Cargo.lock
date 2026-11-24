@@ -3347,7 +3347,7 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "lilia-analytics"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-cli"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3381,7 +3381,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-core"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "blake3",
  "getrandom 0.2.17",
@@ -3403,7 +3403,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-daemon"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -3431,7 +3431,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-db"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "blake3",
  "bytes",
@@ -3453,7 +3453,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-embed"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -3469,7 +3469,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-engine"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "bytes",
  "crc32c",
@@ -3482,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-ffi"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "lilia-core",
  "lilia-db",
@@ -3497,7 +3497,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-graph"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "lilia-core",
  "lilia-db",
@@ -3511,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-io"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "hex",
  "js-sys",
@@ -3528,7 +3528,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-node-native"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "lilia-core",
  "lilia-db",
@@ -3541,7 +3541,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-protocol"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "criterion",
  "lilia-core",
@@ -3559,7 +3559,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-wasm"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "getrandom 0.3.4",
  "js-sys",
@@ -3578,7 +3578,7 @@ dependencies = [
 
 [[package]]
 name = "lilia-zk"
-version = "0.1.0-alpha.9"
+version = "0.2.0-alpha.1"
 dependencies = [
  "ark-bn254",
  "ark-crypto-primitives",

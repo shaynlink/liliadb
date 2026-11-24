@@ -97,7 +97,7 @@ curl -s http://127.0.0.1:4444/health
 {
   "ok": true,
   "status": "running",
-  "version": "0.1.0-alpha.9"
+  "version": "0.2.0-alpha.1"
 }
 ```
 

@@ -1,6 +1,6 @@
 {
   "name": "@liliadb/react-native",
-  "version": "0.1.0-alpha.9",
+  "version": "0.2.0-alpha.1",
   "description": "Local-first multimodel database (KV, JSON, graph, full-text, vector, time series, geo, CRDT, SQL) for React Native, through JSI",
   "type": "module",
   "main": "dist/index.js",
