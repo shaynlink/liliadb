@@ -123,6 +123,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fate of the modules §5.3 left open. `docs/http_api.md` documents `POST /v1/json/scan_by_index`,
   the `408` and `501` statuses and `--development`, and its SQL example uses the DataFusion
   dialect; the change stream it described is gone.
+- **`docs/benchmarks.md` measures `lilia-db`** (2026-11-24, `full` profile) instead of the
+  SQLite engine. Against v0.1: power-safe commits where v0.1 only reached the drive cache, bulk
+  loads 10.8× faster, a third of the disk (272.8 MiB for 1,000,000 keys) and a write
+  amplification of 2.87× instead of 268×, point reads 3.7× faster on one thread and 31× on ten.
+  Slower than v0.1: full-text queries (318 queries/s instead of 1,244 for one term) and SQL
+  analytics (311 ms instead of 1 ms, without the columnar tables).
 
 ### Fixed
 - **`lilia-engine`**: a run moved to the next level unchanged had its file deleted once the moved

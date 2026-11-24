@@ -6,15 +6,15 @@
 
 |  |  |
 | :--- | :--- |
-| Date (UTC) | 2026-11-20T14:24:59Z |
-| LiliaDB | 0.1.0-alpha.9 @ `392ec245de6d` (uncommitted changes) |
+| Date (UTC) | 2026-11-24T01:54:08Z |
+| LiliaDB | 0.1.0-alpha.9 @ `96d4ad1d93be` (uncommitted changes) |
 | CPU | Apple M3 Max — 14 logical, physical by performance level: 10 + 4 |
 | Memory | 36 GiB |
 | OS | macOS 27.2.1 (Darwin 27.2.0) (aarch64) |
 | VM page / cache line | 16384 B / 128 B |
 | Rust | rustc 1.100.0 (0ef1bc386 2026-11-09) |
 | JavaScript runtimes | Node v26.5.0, Bun 1.3.7, Deno deno 2.9.8 (long term support, release, aarch64-apple-darwin) |
-| Profile | `full` — `{"analytics_rows":500000,"budget_ms":5000,"documents":100000,"read_threads":[1,4,10],"records":1000000,"threads":[1,2,4,8,16,64],"value_size":256,"vector_dim":768,"vectors":20000,"work_dir":"/var/folders/tr/gl1b_7s11_77hq319t737mzw0000gn/T/lilia-bench-2824"}` |
+| Profile | `full` — `{"analytics_rows":500000,"budget_ms":5000,"documents":100000,"read_threads":[1,4,10],"records":1000000,"threads":[1,2,4,8,16,64],"value_size":256,"vector_dim":768,"vectors":20000,"work_dir":"/var/folders/tr/gl1b_7s11_77hq319t737mzw0000gn/T/lilia-bench-26145"}` |
 
 ## Engines and durability
 
@@ -22,36 +22,38 @@ On Apple platforms `fsync` returns once data reaches the drive's volatile cache;
 
 | Engine | Version | Commit sync | Class on this OS | 1-writer commit p50 | Check |
 | :--- | :--- | :--- | :--- | ---: | :--- |
-| **LiliaDB** | 0.1.0-alpha.9 (SQLite 3.54.1) | `fsync` | drive cache | 866 µs | not verifiable from latency |
-| **LiliaDB (ledger off)** | 0.1.0-alpha.9 (SQLite 3.54.1) | `fsync` | drive cache | 182 µs | not verifiable from latency |
-| **LiliaDB (AES-256-GCM)** | 0.1.0-alpha.9 (SQLite 3.54.1) | `fsync` | drive cache | 731 µs | not verifiable from latency |
-| redb | 5.0.0 | `F_FULLFSYNC` | power-safe | 4.37 ms | at least one flush per commit |
-| fjall | 3.1.13 | `F_FULLFSYNC` | power-safe | 4.02 ms | at least one flush per commit |
-| LMDB | lmdb-master-sys 0.2.6 (heed 0.23.1) | `F_FULLFSYNC` | power-safe | 4.04 ms | at least one flush per commit |
-| RocksDB | 11.8.1 (rocksdb crate 0.25.0) | `fsync` | drive cache | 30 µs | not verifiable from latency |
-| SQLite (WAL) | 3.53.2 (rusqlite 0.40.2) | `fsync` | drive cache | 33 µs | not verifiable from latency |
-| SQLite (WAL, fullfsync) | 3.53.2 (rusqlite 0.40.2) | `F_FULLFSYNC` | power-safe | 4.05 ms | at least one flush per commit |
-| RocksDB (HAVE_FULLFSYNC) | 11.8.1 (rocksdb crate 0.25.0) | `F_FULLFSYNC` | power-safe | 4.03 ms | at least one flush per commit |
+| **lilia-engine (v0.2, Durable)** | 0.1.0-alpha.9 | `F_FULLFSYNC` | power-safe | 4.03 ms | at least one flush per commit |
+| **lilia-engine (v0.2, Balanced)** | 0.1.0-alpha.9 | `F_BARRIERFSYNC` | drive cache | 122 µs | not verifiable from latency |
+| **LiliaDB (Durable)** | 0.1.0-alpha.9 | `F_FULLFSYNC` | power-safe | 4.08 ms | at least one flush per commit |
+| **LiliaDB (Durable, ledger)** | 0.1.0-alpha.9 | `F_FULLFSYNC` | power-safe | 4.10 ms | at least one flush per commit |
+| **LiliaDB (Durable, no history)** | 0.1.0-alpha.9 | `F_FULLFSYNC` | power-safe | 4.11 ms | at least one flush per commit |
+| redb | 5.0.0 | `F_FULLFSYNC` | power-safe | 4.81 ms | at least one flush per commit |
+| fjall | 3.1.13 | `F_FULLFSYNC` | power-safe | 4.10 ms | at least one flush per commit |
+| LMDB | lmdb-master-sys 0.2.6 (heed 0.23.1) | `F_FULLFSYNC` | power-safe | 4.78 ms | at least one flush per commit |
+| RocksDB | 11.8.1 (rocksdb crate 0.25.0) | `fsync` | drive cache | 26 µs | not verifiable from latency |
+| SQLite (WAL) | 3.53.2 (rusqlite 0.40.2) | `fsync` | drive cache | 34 µs | not verifiable from latency |
+| SQLite (WAL, fullfsync) | 3.53.2 (rusqlite 0.40.2) | `F_FULLFSYNC` | power-safe | 4.08 ms | at least one flush per commit |
+| RocksDB (HAVE_FULLFSYNC) | 11.8.1 (rocksdb crate 0.25.0) | `F_FULLFSYNC` | power-safe | 4.05 ms | at least one flush per commit |
 
 ## Summary
 
-LiliaDB (default configuration: `Durability::Durable`, ledger on) against the fastest other engine of its sync class (`drive cache`), and against the fastest power-safe engine. A ratio below 1 means LiliaDB is slower (or, for lower-is-better rows, smaller).
+LiliaDB (default configuration: `Durability::Durable`, a week of history, no ledger) against the fastest other engine of its sync class (`power-safe`), and against the fastest power-safe engine. A ratio below 1 means LiliaDB is slower (or, for lower-is-better rows, smaller).
 
 | Metric | LiliaDB | Best competitor, same sync class | LiliaDB ÷ it | Best power-safe competitor | LiliaDB ÷ it |
-| :--- | ---: | ---: | ---: | ---: | ---: |
-| Single-key commits, 1 writer | 1,104 commits/s | 30,487 commits/s (RocksDB) | 0.04× | 246 commits/s (fjall) | 4.49× |
-| Single-key commits, 8 writers | 1,093 commits/s | 87,117 commits/s (RocksDB) | 0.01× | 1,021 commits/s (RocksDB (HAVE_FULLFSYNC)) | 1.07× |
-| Single-key commits, most writers measured (64) | 1,159 commits/s | 165,323 commits/s (RocksDB) | 0.01× | 7,190 commits/s (RocksDB (HAVE_FULLFSYNC)) | 0.16× |
-| Batched writes, 1,000 keys per commit | 17,338 keys/s | 711,443 keys/s (RocksDB) | 0.02× | 146,439 keys/s (fjall) | 0.12× |
-| Bulk load | 12,150 keys/s | 915,308 keys/s (RocksDB) | 0.01× | 155,885 keys/s (RocksDB (HAVE_FULLFSYNC)) | 0.08× |
-| Point reads, 1 thread | 134,341 reads/s | 416,467 reads/s (RocksDB) | 0.32× | 1,263,822 reads/s (redb) | 0.11× |
-| Point reads, most threads measured (10) | 111,404 reads/s | 1,460,114 reads/s (RocksDB) | 0.08× | 11,234,870 reads/s (LMDB) | 0.01× |
-| Range reads, 100 keys | 3,103,555 keys/s | 4,331,110 keys/s (SQLite (WAL)) | 0.72× | 24,397,274 keys/s (LMDB) | 0.13× |
-| Full ordered scan | 3,082,044 keys/s | 6,398,629 keys/s (SQLite (WAL)) | 0.48× | 37,249,520 keys/s (LMDB) | 0.08× |
-| YCSB A (50% update), 1 thread | 1,943 ops/s | 38,991 ops/s (RocksDB) | 0.05× | 480 ops/s (fjall) | 4.05× |
-| YCSB C (read only), 1 thread | 156,704 ops/s | 242,751 ops/s (RocksDB) | 0.65× | 1,119,389 ops/s (LMDB) | 0.14× |
-| Disk size after bulk load (lower is better) | 832.5 MiB | 270.4 MiB (RocksDB) | 3.08× | 270.5 MiB (RocksDB (HAVE_FULLFSYNC)) | 3.08× |
-| Write amplification of bulk load (lower is better) | 268.01× | 2.05× (RocksDB) | 131.05× | 2.13× (fjall) | 125.83× |
+| :--- | ---: | ---: | ---: | :--- | ---: |
+| Single-key commits, 1 writer | 231 commits/s | 234 commits/s (RocksDB (HAVE_FULLFSYNC)) | 0.99× | same class | — |
+| Single-key commits, 8 writers | 1,293 commits/s | 936 commits/s (RocksDB (HAVE_FULLFSYNC)) | 1.38× | same class | — |
+| Single-key commits, most writers measured (64) | 10,068 commits/s | 6,418 commits/s (RocksDB (HAVE_FULLFSYNC)) | 1.57× | same class | — |
+| Batched writes, 1,000 keys per commit | 94,271 keys/s | 137,978 keys/s (RocksDB (HAVE_FULLFSYNC)) | 0.68× | same class | — |
+| Bulk load | 131,765 keys/s | 136,993 keys/s (RocksDB (HAVE_FULLFSYNC)) | 0.96× | same class | — |
+| Point reads, 1 thread | 503,445 reads/s | 1,076,056 reads/s (LMDB) | 0.47× | same class | — |
+| Point reads, most threads measured (10) | 3,414,988 reads/s | 10,843,154 reads/s (LMDB) | 0.31× | same class | — |
+| Range reads, 100 keys | 3,869,989 keys/s | 22,689,609 keys/s (LMDB) | 0.17× | same class | — |
+| Full ordered scan | 4,828,820 keys/s | 35,413,523 keys/s (LMDB) | 0.14× | same class | — |
+| YCSB A (50% update), 1 thread | 452 ops/s | 470 ops/s (fjall) | 0.96× | same class | — |
+| YCSB C (read only), 1 thread | 823,807 ops/s | 1,544,452 ops/s (LMDB) | 0.53× | same class | — |
+| Disk size after bulk load (lower is better) | 272.8 MiB | 270.5 MiB (RocksDB (HAVE_FULLFSYNC)) | 1.01× | same class | — |
+| Write amplification of bulk load (lower is better) | 2.87× | 2.16× (fjall) | 1.33× | same class | — |
 
 ## Writes
 
@@ -61,16 +63,18 @@ Commits per second; each writer thread commits one key per transaction and waits
 
 | Engine | Sync | 1 writer | 2 writers | 4 writers | 8 writers | 16 writers | 64 writers | p50 (1 writer) | p99 (1 writer) |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| RocksDB | `fsync` (drive cache) | 30,487 | 36,556 | 63,420 | 87,117 | 115,324 | 165,323 | 30 µs | 46 µs |
-| SQLite (WAL) | `fsync` (drive cache) | 10,389 | 9,605 | 11,539 | 11,530 | 10,081 | 9,425 | 33 µs | 102 µs |
-| **LiliaDB (ledger off)** | `fsync` (drive cache) | 5,118 | 3,210 | 4,083 | 4,078 | 3,573 | 2,634 | 182 µs | 349 µs |
-| **LiliaDB (AES-256-GCM)** | `fsync` (drive cache) | 1,315 | 1,268 | 1,316 | 1,298 | 988 | 1,173 | 731 µs | 1.24 ms |
-| **LiliaDB** | `fsync` (drive cache) | 1,104 | 1,032 | 1,068 | 1,093 | 1,182 | 1,159 | 866 µs | 1.55 ms |
-| fjall | `F_FULLFSYNC` (power-safe) | 246 | 145 | 222 | 162 | 188 | 217 | 4.02 ms | 5.10 ms |
-| LMDB | `F_FULLFSYNC` (power-safe) | 234 | 236 | 243 | 242 | 234 | 237 | 4.04 ms | 5.96 ms |
-| SQLite (WAL, fullfsync) | `F_FULLFSYNC` (power-safe) | 233 | 230 | 233 | 218 | 221 | 165 | 4.05 ms | 5.81 ms |
-| RocksDB (HAVE_FULLFSYNC) | `F_FULLFSYNC` (power-safe) | 213 | 385 | 632 | 1,021 | 1,997 | 7,190 | 4.03 ms | 15.30 ms |
-| redb | `F_FULLFSYNC` (power-safe) | 208 | 206 | 200 | 204 | 138 | 69.4 | 4.37 ms | 8.45 ms |
+| RocksDB | `fsync` (drive cache) | 36,691 | 36,784 | 59,492 | 97,041 | 114,763 | 151,730 | 26 µs | 44 µs |
+| SQLite (WAL) | `fsync` (drive cache) | 6,683 | 9,688 | 6,899 | 11,108 | 6,980 | 13,301 | 34 µs | 115 µs |
+| **lilia-engine (v0.2, Balanced)** | `F_BARRIERFSYNC` (drive cache) | 6,530 | 8,879 | 15,908 | 27,669 | 47,640 | 60,720 | 122 µs | 793 µs |
+| **lilia-engine (v0.2, Durable)** | `F_FULLFSYNC` (power-safe) | 239 | 245 | 648 | 1,452 | 3,024 | 11,377 | 4.03 ms | 6.16 ms |
+| RocksDB (HAVE_FULLFSYNC) | `F_FULLFSYNC` (power-safe) | 234 | 345 | 560 | 936 | 1,854 | 6,418 | 4.05 ms | 6.58 ms |
+| **LiliaDB (Durable)** | `F_FULLFSYNC` (power-safe) | 231 | 234 | 622 | 1,293 | 2,851 | 10,068 | 4.08 ms | 7.47 ms |
+| **LiliaDB (Durable, ledger)** | `F_FULLFSYNC` (power-safe) | 226 | 234 | 595 | 1,243 | 2,609 | 8,885 | 4.10 ms | 7.73 ms |
+| SQLite (WAL, fullfsync) | `F_FULLFSYNC` (power-safe) | 226 | 215 | 118 | 210 | 195 | 191 | 4.08 ms | 8.07 ms |
+| LMDB | `F_FULLFSYNC` (power-safe) | 212 | 211 | 222 | 213 | 212 | 205 | 4.78 ms | 7.47 ms |
+| redb | `F_FULLFSYNC` (power-safe) | 209 | 202 | 202 | 203 | 201 | 204 | 4.81 ms | 8.25 ms |
+| fjall | `F_FULLFSYNC` (power-safe) | 162 | 233 | 231 | 238 | 233 | 236 | 4.10 ms | 15.18 ms |
+| **LiliaDB (Durable, no history)** | `F_FULLFSYNC` (power-safe) | 135 | 240 | 605 | 1,325 | 2,672 | 10,079 | 4.11 ms | 15.84 ms |
 
 ### Batched writes
 
@@ -78,16 +82,18 @@ Keys per second, 256-byte values, one writer.
 
 | Engine | 100 keys/commit | 1,000 keys/commit | 10,000 keys/commit | p99 commit (1,000) |
 | :--- | ---: | ---: | ---: | ---: |
-| RocksDB | 556,148 | 711,443 | 817,258 | 2.20 ms |
-| SQLite (WAL) | 31,708 | 40,112 | 81,280 | 37.69 ms |
-| **LiliaDB (ledger off)** | 25,806 | 29,103 | 75,330 | 61.57 ms |
-| fjall | 20,567 | 146,439 | 627,504 | 11.16 ms |
-| RocksDB (HAVE_FULLFSYNC) | 20,563 | 143,274 | 652,874 | 9.68 ms |
-| LMDB | 14,435 | 43,598 | 103,955 | 31.78 ms |
-| **LiliaDB** | 14,056 | 17,338 | 34,852 | 110.49 ms |
-| **LiliaDB (AES-256-GCM)** | 12,215 | 14,675 | 24,051 | 151.59 ms |
-| redb | 11,595 | 43,596 | 89,275 | 33.76 ms |
-| SQLite (WAL, fullfsync) | 10,750 | 27,979 | 73,817 | 49.85 ms |
+| RocksDB | 575,363 | 840,977 | 892,716 | 1.85 ms |
+| **lilia-engine (v0.2, Balanced)** | 261,433 | 492,298 | 714,836 | 5.16 ms |
+| SQLite (WAL) | 29,282 | 37,747 | 77,559 | 41.79 ms |
+| **lilia-engine (v0.2, Durable)** | 20,214 | 53,306 | 394,430 | 42.26 ms |
+| RocksDB (HAVE_FULLFSYNC) | 19,338 | 137,978 | 627,774 | 9.49 ms |
+| fjall | 18,507 | 131,958 | 585,245 | 11.84 ms |
+| **LiliaDB (Durable, no history)** | 18,507 | 82,750 | 424,152 | 25.95 ms |
+| **LiliaDB (Durable, ledger)** | 17,860 | 130,408 | 364,738 | 12.84 ms |
+| LMDB | 12,617 | 45,658 | 102,628 | 28.67 ms |
+| redb | 11,993 | 43,553 | 97,638 | 30.96 ms |
+| SQLite (WAL, fullfsync) | 10,319 | 27,746 | 72,896 | 47.77 ms |
+| **LiliaDB (Durable)** | 6,902 | 94,271 | 437,015 | 26.52 ms |
 
 ### Value size
 
@@ -95,16 +101,18 @@ Payload MB/s, 100 keys per commit, one writer.
 
 | Engine | 1 KiB values | 4 KiB values | 64 KiB values |
 | :--- | ---: | ---: | ---: |
-| RocksDB | 385.3 | 344.0 | 552.4 |
-| RocksDB (HAVE_FULLFSYNC) | 19.6 | 63.2 | 343.1 |
-| SQLite (WAL) | 14.6 | 54.9 | 181.6 |
-| LMDB | 13.3 | 47.8 | 483.5 |
-| fjall | 10.1 | 37.5 | 289.6 |
-| redb | 9.5 | 38.9 | 223.9 |
-| **LiliaDB (ledger off)** | 9.3 | 14.5 | 11.1 |
-| SQLite (WAL, fullfsync) | 7.0 | 26.9 | 135.6 |
-| **LiliaDB** | 6.7 | 13.8 | 11.0 |
-| **LiliaDB (AES-256-GCM)** | 5.9 | 9.8 | 10.6 |
+| RocksDB | 375.2 | 703.7 | 658.6 |
+| **lilia-engine (v0.2, Balanced)** | 146.4 | 333.5 | 560.5 |
+| **lilia-engine (v0.2, Durable)** | 19.7 | 66.1 | 374.3 |
+| RocksDB (HAVE_FULLFSYNC) | 18.7 | 63.2 | 215.1 |
+| **LiliaDB (Durable)** | 17.5 | 62.7 | 329.8 |
+| fjall | 17.3 | 55.1 | 295.8 |
+| **LiliaDB (Durable, no history)** | 17.2 | 62.5 | 326.7 |
+| **LiliaDB (Durable, ledger)** | 16.8 | 64.5 | 324.7 |
+| SQLite (WAL) | 13.3 | 50.4 | 164.9 |
+| redb | 10.6 | 45.9 | 326.2 |
+| SQLite (WAL, fullfsync) | 6.8 | 26.0 | 131.6 |
+| LMDB | 4.6 | 23.8 | 528.5 |
 
 ### Updates and deletes
 
@@ -112,16 +120,18 @@ Existing keys (100,000 loaded), 1,000 per commit; updates pick keys uniformly at
 
 | Engine | Updates (keys/s) | p99 commit | Deletes (keys/s) | p99 commit |
 | :--- | ---: | ---: | ---: | ---: |
-| RocksDB | 853,186 | 1.81 ms | 1,067,482 | 1.24 ms |
-| fjall | 150,592 | 10.88 ms | 178,620 | 6.54 ms |
-| RocksDB (HAVE_FULLFSYNC) | 144,610 | 10.28 ms | 143,812 | 9.06 ms |
-| SQLite (WAL) | 72,633 | 27.37 ms | 55,656 | 21.53 ms |
-| SQLite (WAL, fullfsync) | 42,685 | 35.17 ms | 12,044 | 110.06 ms |
-| LMDB | 39,675 | 41.63 ms | 25,322 | 58.54 ms |
-| redb | 25,675 | 46.85 ms | 34,672 | 43.46 ms |
-| **LiliaDB (ledger off)** | 21,589 | 75.26 ms | 26,662 | 59.43 ms |
-| **LiliaDB (AES-256-GCM)** | 12,076 | 128.32 ms | 13,128 | 129.05 ms |
-| **LiliaDB** | 10,745 | 148.59 ms | 11,892 | 193.74 ms |
+| RocksDB | 759,617 | 1.99 ms | 884,974 | 1.63 ms |
+| **lilia-engine (v0.2, Balanced)** | 540,772 | 7.07 ms | 700,436 | 2.06 ms |
+| fjall | 136,388 | 11.86 ms | 138,116 | 11.69 ms |
+| **LiliaDB (Durable, no history)** | 135,948 | 11.54 ms | 122,621 | 9.98 ms |
+| **LiliaDB (Durable)** | 135,676 | 12.35 ms | 116,050 | 12.53 ms |
+| **lilia-engine (v0.2, Durable)** | 133,066 | 11.58 ms | 136,616 | 8.32 ms |
+| **LiliaDB (Durable, ledger)** | 124,052 | 14.00 ms | 114,164 | 10.35 ms |
+| RocksDB (HAVE_FULLFSYNC) | 108,068 | 20.81 ms | 145,018 | 10.01 ms |
+| SQLite (WAL) | 67,022 | 26.52 ms | 50,256 | 25.16 ms |
+| redb | 44,465 | 27.49 ms | 38,054 | 45.12 ms |
+| LMDB | 43,648 | 25.79 ms | 47,462 | 25.93 ms |
+| SQLite (WAL, fullfsync) | 41,858 | 39.31 ms | 31,022 | 39.56 ms |
 
 
 ## Reads
@@ -132,16 +142,18 @@ Existing keys (100,000 loaded), 1,000 per commit; updates pick keys uniformly at
 
 | Engine | Load (keys/s) | Disk after load | Space amplification | Write amplification |
 | :--- | ---: | ---: | ---: | ---: |
-| RocksDB | 915,308 | 270.4 MiB | 1.04× | 2.05× |
-| RocksDB (HAVE_FULLFSYNC) | 155,885 | 270.5 MiB | 1.04× | 2.49× |
-| fjall | 139,669 | 337.0 MiB | 1.30× | 2.13× |
-| LMDB | 37,426 | 425.4 MiB | 1.64× | 58.48× |
-| redb | 30,040 | 544.0 MiB | 2.10× | 80.91× |
-| **LiliaDB (ledger off)** | 24,499 | 426.8 MiB | 1.65× | 120.06× |
-| SQLite (WAL) | 21,118 | 321.5 MiB | 1.24× | 137.84× |
-| SQLite (WAL, fullfsync) | 14,853 | 321.5 MiB | 1.24× | 137.84× |
-| **LiliaDB** | 12,150 | 832.5 MiB | 3.21× | 268.01× |
-| **LiliaDB (AES-256-GCM)** | 11,124 | 945.8 MiB | 3.65× | 290.81× |
+| RocksDB | 845,815 | 270.4 MiB | 1.04× | 2.08× |
+| **lilia-engine (v0.2, Balanced)** | 498,180 | 271.2 MiB | 1.05× | 2.75× |
+| **LiliaDB (Durable, no history)** | 141,377 | 272.8 MiB | 1.05× | 2.87× |
+| **lilia-engine (v0.2, Durable)** | 141,082 | 271.2 MiB | 1.05× | 2.75× |
+| RocksDB (HAVE_FULLFSYNC) | 136,993 | 270.5 MiB | 1.04× | 2.55× |
+| **LiliaDB (Durable, ledger)** | 136,594 | 361.1 MiB | 1.39× | 3.55× |
+| fjall | 134,663 | 337.0 MiB | 1.30× | 2.16× |
+| **LiliaDB (Durable)** | 131,765 | 272.8 MiB | 1.05× | 2.87× |
+| LMDB | 35,589 | 425.4 MiB | 1.64× | 58.48× |
+| redb | 27,133 | 544.0 MiB | 2.10× | 80.94× |
+| SQLite (WAL) | 21,390 | 321.5 MiB | 1.24× | 137.84× |
+| SQLite (WAL, fullfsync) | 16,655 | 321.5 MiB | 1.24× | 137.73× |
 
 ### Point reads
 
@@ -149,31 +161,35 @@ Reads per second of uniformly random existing keys. "After reopen" is the first 
 
 | Engine | 1 thread | After reopen | 4 threads | 10 threads | p50 (1 thread) | p99 (1 thread) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| redb | 1,263,822 | 619,043 | 1,345,806 | 478,779 | 0.79 µs | 1.38 µs |
-| LMDB | 1,184,738 | 994,907 | 4,623,265 | 11,234,870 | 0.83 µs | 1.42 µs |
-| fjall | 459,195 | 199,908 | 1,003,971 | 1,490,953 | 2.12 µs | 5.54 µs |
-| RocksDB | 416,467 | 199,360 | 1,021,164 | 1,460,114 | 2.42 µs | 5.75 µs |
-| RocksDB (HAVE_FULLFSYNC) | 365,850 | 153,462 | 853,464 | 1,289,949 | 2.71 µs | 4.92 µs |
-| SQLite (WAL) | 265,170 | 257,137 | 147,354 | 116,989 | 3.54 µs | 8.50 µs |
-| SQLite (WAL, fullfsync) | 194,418 | 190,709 | 110,107 | 81,979 | 3.96 µs | 36 µs |
-| **LiliaDB (ledger off)** | 144,520 | 118,915 | 117,673 | 114,806 | 6.54 µs | 12 µs |
-| **LiliaDB** | 134,341 | 129,950 | 111,808 | 111,404 | 7.08 µs | 13 µs |
-| **LiliaDB (AES-256-GCM)** | 109,910 | 105,891 | 112,512 | 112,713 | 8.92 µs | 14 µs |
+| LMDB | 1,076,056 | 922,714 | 4,567,559 | 10,843,154 | 0.88 µs | 4.08 µs |
+| redb | 1,040,431 | 486,179 | 1,190,793 | 470,526 | 0.88 µs | 4.38 µs |
+| **lilia-engine (v0.2, Balanced)** | 631,868 | 371,794 | 2,239,459 | 4,167,219 | 1.46 µs | 5.71 µs |
+| **lilia-engine (v0.2, Durable)** | 593,440 | 426,042 | 2,216,475 | 4,141,694 | 1.46 µs | 6.42 µs |
+| **LiliaDB (Durable, no history)** | 511,455 | 350,552 | 1,572,953 | 3,299,950 | 1.79 µs | 6.54 µs |
+| **LiliaDB (Durable)** | 503,445 | 393,135 | 1,523,694 | 3,414,988 | 1.79 µs | 6.67 µs |
+| **LiliaDB (Durable, ledger)** | 488,661 | 360,398 | 1,589,565 | 3,093,105 | 1.88 µs | 6.29 µs |
+| fjall | 364,660 | 193,948 | 966,530 | 1,263,322 | 2.50 µs | 7.96 µs |
+| RocksDB (HAVE_FULLFSYNC) | 359,703 | 175,474 | 934,268 | 1,488,604 | 2.67 µs | 7.67 µs |
+| RocksDB | 350,252 | 185,042 | 959,465 | 1,476,154 | 2.58 µs | 8.21 µs |
+| SQLite (WAL, fullfsync) | 254,713 | 258,218 | 142,060 | 121,851 | 3.62 µs | 9.00 µs |
+| SQLite (WAL) | 249,942 | 236,670 | 138,314 | 122,482 | 3.67 µs | 9.58 µs |
 
 ### Multi-key, range and scan reads
 
 | Engine | Multi-get, 100 keys (keys/s) | Range of 100 (keys/s) | p50 per range | Full scan (keys/s) |
 | :--- | ---: | ---: | ---: | ---: |
-| redb | 1,978,326 | 24,022,141 | 4.04 µs | 30,523,453 |
-| LMDB | 1,150,162 | 24,397,274 | 4.12 µs | 37,249,520 |
-| RocksDB | 459,884 | 3,498,855 | 28 µs | 4,096,684 |
-| RocksDB (HAVE_FULLFSYNC) | 431,027 | 3,432,289 | 29 µs | 4,119,847 |
-| fjall | 426,514 | 5,481,741 | 18 µs | 6,703,056 |
-| SQLite (WAL) | 386,813 | 4,331,110 | 23 µs | 6,398,629 |
-| SQLite (WAL, fullfsync) | 307,919 | 3,230,248 | 25 µs | 5,039,407 |
-| **LiliaDB (ledger off)** | 154,457 | 3,472,949 | 28 µs | 3,468,257 |
-| **LiliaDB** | 137,888 | 3,103,555 | 32 µs | 3,082,044 |
-| **LiliaDB (AES-256-GCM)** | 110,324 | 502,223 | 196 µs | 511,638 |
+| redb | 1,479,635 | 18,682,827 | 4.79 µs | 25,759,952 |
+| LMDB | 1,120,541 | 22,689,609 | 4.29 µs | 35,413,523 |
+| **lilia-engine (v0.2, Durable)** | 594,226 | 6,515,297 | 14 µs | 9,759,404 |
+| **lilia-engine (v0.2, Balanced)** | 585,686 | 6,931,312 | 14 µs | 10,109,527 |
+| **LiliaDB (Durable)** | 513,638 | 3,869,989 | 25 µs | 4,828,820 |
+| **LiliaDB (Durable, no history)** | 493,351 | 3,956,225 | 24 µs | 4,812,567 |
+| **LiliaDB (Durable, ledger)** | 484,133 | 3,435,904 | 28 µs | 4,481,627 |
+| RocksDB | 436,273 | 3,181,988 | 29 µs | 4,319,726 |
+| SQLite (WAL) | 395,536 | 4,372,034 | 22 µs | 6,358,285 |
+| RocksDB (HAVE_FULLFSYNC) | 394,208 | 3,328,242 | 29 µs | 3,974,585 |
+| fjall | 393,190 | 4,828,398 | 19 µs | 6,584,062 |
+| SQLite (WAL, fullfsync) | 384,998 | 4,303,493 | 23 µs | 6,241,962 |
 
 
 ## YCSB
@@ -184,31 +200,35 @@ Operations per second. A: 50% read / 50% update. B: 95/5. C: read only. D: 95% r
 
 | Engine | A | B | C | D | E | F | p99 (A) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| RocksDB | 38,991 | 138,511 | 242,751 | 103,105 | 19,642 | 26,307 | 105 µs |
-| SQLite (WAL) | 14,454 | 70,308 | 150,661 | 36,315 | 23,475 | 17,637 | 215 µs |
-| **LiliaDB (ledger off)** | 7,452 | 26,012 | 135,907 | 21,982 | 13,274 | 5,664 | 287 µs |
-| **LiliaDB (AES-256-GCM)** | 2,084 | 8,058 | 113,848 | 6,970 | 3,771 | 583 | 1.42 ms |
-| **LiliaDB** | 1,943 | 8,501 | 156,704 | 6,943 | 4,538 | 569 | 1.28 ms |
-| fjall | 480 | 5,059 | 438,260 | 4,969 | 4,263 | 468 | 5.97 ms |
-| RocksDB (HAVE_FULLFSYNC) | 463 | 4,448 | 465,226 | 4,635 | 3,678 | 481 | 6.13 ms |
-| SQLite (WAL, fullfsync) | 456 | 2,615 | 334,693 | 4,428 | 3,656 | 722 | 6.37 ms |
-| LMDB | 439 | 4,497 | 1,119,389 | 4,556 | 4,536 | 439 | 5.74 ms |
-| redb | 382 | 4,079 | 1,092,142 | 4,148 | 4,318 | 420 | 8.36 ms |
+| RocksDB | 59,391 | 236,727 | 552,478 | 284,096 | 45,374 | 53,794 | 43 µs |
+| SQLite (WAL) | 32,376 | 201,873 | 363,780 | 119,087 | 55,419 | 37,918 | 45 µs |
+| **lilia-engine (v0.2, Balanced)** | 14,004 | 117,977 | 995,398 | 121,715 | 27,901 | 13,435 | 496 µs |
+| fjall | 470 | 4,415 | 771,527 | 4,383 | 3,534 | 454 | 5.97 ms |
+| **lilia-engine (v0.2, Durable)** | 467 | 4,273 | 1,009,179 | 4,564 | 3,239 | 460 | 6.05 ms |
+| RocksDB (HAVE_FULLFSYNC) | 461 | 4,338 | 591,350 | 4,485 | 3,436 | 460 | 5.86 ms |
+| **LiliaDB (Durable, no history)** | 454 | 4,042 | 800,654 | 4,650 | 3,690 | 478 | 6.67 ms |
+| **LiliaDB (Durable)** | 452 | 4,328 | 823,807 | 4,466 | 3,275 | 453 | 6.01 ms |
+| **LiliaDB (Durable, ledger)** | 452 | 3,823 | 810,369 | 4,254 | 3,205 | 428 | 6.08 ms |
+| SQLite (WAL, fullfsync) | 450 | 4,413 | 342,485 | 4,168 | 3,464 | 691 | 5.96 ms |
+| LMDB | 411 | 3,997 | 1,544,452 | 3,649 | 3,902 | 403 | 6.80 ms |
+| redb | 409 | 3,906 | 1,335,117 | 3,995 | 4,108 | 390 | 6.08 ms |
 
 ### 8 client threads
 
 | Engine | A | B | C | D | E | F | p99 (A) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| RocksDB | 99,191 | 578,844 | 862,910 | 433,474 | 74,507 | 60,817 | 339 µs |
-| SQLite (WAL) | 16,091 | 55,193 | 61,306 | 49,602 | 12,423 | 19,833 | 329 µs |
-| **LiliaDB (ledger off)** | 8,223 | 57,201 | 125,553 | 50,737 | 31,933 | 8,173 | 2.18 ms |
-| RocksDB (HAVE_FULLFSYNC) | 2,018 | 19,232 | 2,060,811 | 18,542 | 19,558 | 1,989 | 10.05 ms |
-| **LiliaDB** | 1,374 | 9,552 | 118,719 | 7,480 | 6,207 | 602 | 13.86 ms |
-| **LiliaDB (AES-256-GCM)** | 1,286 | 9,429 | 119,588 | 7,657 | 6,381 | 592 | 14.76 ms |
-| fjall | 493 | 5,186 | 1,731,555 | 5,170 | 4,436 | 501 | 126.96 ms |
-| LMDB | 474 | 4,542 | 8,102,701 | 4,471 | 4,497 | 467 | 93.92 ms |
-| redb | 407 | 4,376 | 509,203 | 4,314 | 3,878 | 436 | 164.97 ms |
-| SQLite (WAL, fullfsync) | 407 | 4,434 | 133,697 | 4,358 | 3,600 | 488 | 10.03 ms |
+| RocksDB | 185,696 | 1,195,834 | 3,325,981 | 1,256,116 | 214,667 | 175,820 | 146 µs |
+| **lilia-engine (v0.2, Balanced)** | 62,964 | 528,958 | 4,657,527 | 512,906 | 207,493 | 62,380 | 686 µs |
+| SQLite (WAL) | 33,605 | 172,044 | 142,551 | 148,199 | 38,813 | 34,574 | 61 µs |
+| **LiliaDB (Durable)** | 2,541 | 20,747 | 3,779,212 | 21,788 | 20,124 | 2,411 | 10.95 ms |
+| **LiliaDB (Durable, no history)** | 2,533 | 21,656 | 3,554,730 | 26,642 | 20,117 | 2,653 | 10.97 ms |
+| **lilia-engine (v0.2, Durable)** | 2,476 | 21,631 | 4,654,694 | 23,572 | 19,795 | 2,598 | 11.83 ms |
+| **LiliaDB (Durable, ledger)** | 2,413 | 18,827 | 3,605,717 | 20,676 | 19,391 | 2,383 | 11.90 ms |
+| RocksDB (HAVE_FULLFSYNC) | 2,020 | 19,159 | 2,813,966 | 18,374 | 19,542 | 1,970 | 10.01 ms |
+| SQLite (WAL, fullfsync) | 463 | 4,383 | 160,780 | 4,030 | 3,401 | 600 | 5.38 ms |
+| fjall | 459 | 4,830 | 2,728,312 | 4,888 | 4,367 | 460 | 178.00 ms |
+| redb | 399 | 4,108 | 501,691 | 4,313 | 3,658 | 405 | 148.93 ms |
+| LMDB | 391 | 4,096 | 13,122,996 | 4,137 | 3,727 | 402 | 112.05 ms |
 
 
 ## JSON documents
@@ -219,15 +239,15 @@ One secondary index on `$.city`, maintained by every insert. SQLite stores docum
 
 | Engine | 1 KiB docs/s | 4 KiB docs/s | 64 KiB docs/s | Disk per 1 KiB doc |
 | :--- | ---: | ---: | ---: | ---: |
-| SQLite (WAL, JSONB) | 10,738 | 9,621 | 2,198 | 4728 B |
-| **LiliaDB** | 4,543 | 2,277 | 183 | 6812 B |
+| **LiliaDB (Durable)** | 14,928 | 14,393 | 4,585 | 1207 B |
+| SQLite (WAL, JSONB) | 11,883 | 11,057 | 2,438 | 4727 B |
 
 ### Reads (100,000 documents of 1 KiB, every result decoded)
 
 | Engine | Get by id (ops/s) | p50 | Extract `$.user.name` (ops/s) | p50 | Indexed find, 100 docs (queries/s) | p50 |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| SQLite (WAL, JSONB) | 63,319 | 15 µs | 69,163 | 14 µs | 977 | 973 µs |
-| **LiliaDB** | 56,484 | 17 µs | 54,176 | 17 µs | 890 | 1.10 ms |
+| **LiliaDB (Durable)** | 750,725 | 1.08 µs | 659,176 | 1.33 µs | 7,013 | 140 µs |
+| SQLite (WAL, JSONB) | 81,680 | 12 µs | 85,436 | 11 µs | 1,090 | 895 µs |
 
 
 ## Full-text search
@@ -236,8 +256,8 @@ One secondary index on `$.city`, maintained by every insert. SQLite stores docum
 
 | Engine | Index (docs/s) | Index size | 1-term top-10 (q/s) | p50 | 2-term top-10 (q/s) | p50 | Mean hits (2 terms) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| SQLite (WAL, FTS5) | 45,837 | 56.2 MiB | 1,196 | 544 µs | 5,835 | 142 µs | 8.6 |
-| **LiliaDB** | 147 | 189.2 MiB | 1,244 | 550 µs | 3,497 | 252 µs | 8.6 |
+| SQLite (WAL, FTS5) | 47,483 | 56.2 MiB | 1,234 | 530 µs | 6,185 | 134 µs | 8.6 |
+| **LiliaDB (Durable)** | 8,245 | 149.5 MiB | 318 | 2.72 ms | 304 | 3.08 ms | 8.6 |
 
 ## Vector search
 
@@ -245,8 +265,8 @@ One secondary index on `$.city`, maintained by every insert. SQLite stores docum
 
 | Engine | Insert (vectors/s) | Disk | Top-10 search (q/s) | p50 | p99 | Recall@10 |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **LiliaDB (HNSW, M=16, ef_c=64)** | 185 | 241.3 MiB | 2,652 | 348 µs | 796 µs | 0.742 |
-| Exact scan (in-process reference) | — | — | 112 | 8.78 ms | 9.60 ms | 1.000 |
+| **LiliaDB (HNSW, M=16, ef_c=64)** | 223 | 59.1 MiB | 2,579 | 366 µs | 749 µs | 0.695 |
+| Exact scan (in-process reference) | — | — | 114 | 8.68 ms | 9.36 ms | 1.000 |
 
 ## Analytics
 
@@ -254,10 +274,9 @@ One secondary index on `$.city`, maintained by every insert. SQLite stores docum
 
 | Engine | Mode | Load (rows/s) | Build | Filter + aggregate (median) | Group by (median) |
 | :--- | :--- | ---: | ---: | ---: | ---: |
-| **LiliaDB** | columnar (DataFusion) | 18,596 | 2.73 s | 1.02 ms | 1.24 ms |
-| DuckDB | columnar table | 2,498,205 | — | 1.43 ms | 5.45 ms |
-| SQLite (typed table) | row store (typed table) | 2,766,953 | — | 19.52 ms | 145.69 ms |
-| **LiliaDB** | aggregation pipeline (JSON) | 18,596 | — | 2.73 s | 2.64 s |
+| DuckDB | columnar table | 2,706,149 | — | 1.29 ms | 5.21 ms |
+| SQLite (typed table) | row store (typed table) | 2,969,663 | — | 18.91 ms | 127.72 ms |
+| **LiliaDB (Durable)** | SQL over JSON (DataFusion) | 146,906 | — | 311.30 ms | 325.50 ms |
 
 ## JavaScript surfaces
 
@@ -265,25 +284,18 @@ The same key-value operations through each runtime's binding, durable configurat
 
 | Surface | Version | Commits/s (1 key) | p50 | Keys/s (100 per commit) | Reads/s | p50 read |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| bun:sqlite (Bun) | Bun 1.3.7 (SQLite 3.54.0) | 12,541 | 41 µs | 18,208 | 191,360 | 4.75 µs |
-| node:sqlite (Node) | Node v26.5.0 (SQLite 3.53.3) | 11,998 | 34 µs | 17,976 | 360,149 | 2.50 µs |
-| @db/sqlite 0.12.0 (Deno) | Deno 2.9.8 (SQLite 3.46.0) | 11,278 | 35 µs | 23,628 | 388,230 | 2.33 µs |
-| better-sqlite3 (Node) | 13.0.3 (SQLite 3.53.4) | 10,276 | 36 µs | 18,816 | 363,959 | 2.46 µs |
-| **LiliaDB Node-API (sync calls)** | 0.1.0-alpha.9 | 1,384 | 702 µs | 13,033 | 108,743 | 8.58 µs |
-| **LiliaDB Node-API (async calls)** | 0.1.0-alpha.9 | 1,371 | 707 µs | 13,124 | 30,030 | 32 µs |
-| **LiliaDB daemon (HTTP)** | 0.1.0-alpha.9 | 1,301 | 743 µs | 12,926 | 14,241 | 68 µs |
-
-## Runs without results
-
-These planned measurements produced no data; their engines are missing from the tables above.
-
-| Suite | Engine | Workload | Reason |
-| :--- | :--- | :--- | :--- |
-| sdk | lilia-daemon-ipc | sdk | `socket closed unexpectedly` |
+| bun:sqlite (Bun) | Bun 1.3.7 (SQLite 3.54.0) | 11,265 | 37 µs | 18,971 | 206,645 | 4.54 µs |
+| node:sqlite (Node) | Node v26.5.0 (SQLite 3.53.3) | 9,612 | 32 µs | 20,063 | 381,221 | 2.38 µs |
+| @db/sqlite 0.12.0 (Deno) | Deno 2.9.8 (SQLite 3.46.0) | 9,165 | 34 µs | 25,375 | 407,192 | 2.25 µs |
+| better-sqlite3 (Node) | 13.0.3 (SQLite 3.53.4) | 8,442 | 34 µs | 20,212 | 418,264 | 2.21 µs |
+| **LiliaDB Node-API (sync calls)** | 0.1.0-alpha.9 | 217 | 4.31 ms | 13,981 | 265,080 | 3.54 µs |
+| **LiliaDB Node-API (async calls)** | 0.1.0-alpha.9 | 204 | 4.92 ms | 14,293 | 80,340 | 12 µs |
+| **LiliaDB daemon (IPC)** | 0.1.0-alpha.9 | 191 | 5.02 ms | 14,174 | 31,966 | 29 µs |
+| **LiliaDB daemon (HTTP)** | 0.1.0-alpha.9 | 172 | 5.53 ms | 14,080 | 15,695 | 62 µs |
 
 ## Method
 
-- **Harness.** `tools/lilia-bench` builds one binary per engine group (LiliaDB and SQLite each embed a SQLite amalgamation, so they cannot share one) and runs every workload group of every engine in its own process. Each write workload starts from an empty database directory.
+- **Harness.** `tools/lilia-bench` builds one binary per engine group (no engine's native libraries are linked into another's measurements) and runs every workload group of every engine in its own process. Each write workload starts from an empty database directory.
 - **Data.** 16-byte keys whose first 8 bytes are a hash (inserts land at random positions in every ordered index), 256 B values of mixed text, 1000000 records for reads and YCSB.
 - **Durability.** Every engine runs in its most durable configuration; a write call returns after the engine's commit sync. The sync primitive is declared per engine and checked against the observed single-commit latency.
 - **Time boxes.** Throughput workloads run for 5000 ms of wall-clock time each; throughput is operations completed divided by elapsed time. Point-read latency is sampled every 8th read so the clock does not dominate sub-microsecond reads.
