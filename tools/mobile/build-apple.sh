@@ -11,6 +11,19 @@ BUILD_DIR="${ROOT_DIR}/target/apple-build"
 OUT_DIR="${ROOT_DIR}/release/apple"
 SPM_DIR="${ROOT_DIR}/packages/apple-spm"
 
+# Minimum OS versions: the platforms of the generated Package.swift, and the deployment targets
+# that rustc and the C compiler of every `cc` dependency (zstd, blake3, psm) build for. Without
+# them rustc links for its own minimum (iOS 10) objects the C compiler built for the SDK's
+# version, and the link fails on symbols those older versions lack (`___chkstk_darwin`).
+IOS_MIN="15.0"
+MACOS_MIN="12.0"
+WATCHOS_MIN="8.0"
+TVOS_MIN="15.0"
+export IPHONEOS_DEPLOYMENT_TARGET="${IOS_MIN}"
+export MACOSX_DEPLOYMENT_TARGET="${MACOS_MIN}"
+export WATCHOS_DEPLOYMENT_TARGET="${WATCHOS_MIN}"
+export TVOS_DEPLOYMENT_TARGET="${TVOS_MIN}"
+
 echo "==> [LiliaDB] Preparing Apple build environment..."
 mkdir -p "${BUILD_DIR}"
 mkdir -p "${OUT_DIR}"
@@ -132,17 +145,17 @@ else
 fi
 
 # 5. Generate Package.swift for SPM
-cat << 'EOF' > "${SPM_DIR}/Package.swift"
+cat << EOF > "${SPM_DIR}/Package.swift"
 // swift-tools-version: 5.9
 import PackageDescription
 
 let package = Package(
     name: "Lilia",
     platforms: [
-        .iOS(.v15),
-        .macOS(.v12),
-        .watchOS(.v8),
-        .tvOS(.v15),
+        .iOS("${IOS_MIN}"),
+        .macOS("${MACOS_MIN}"),
+        .watchOS("${WATCHOS_MIN}"),
+        .tvOS("${TVOS_MIN}"),
     ],
     products: [
         .library(
