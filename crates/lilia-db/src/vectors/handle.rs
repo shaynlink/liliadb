@@ -249,7 +249,8 @@ impl<'c, C: Context> Vectors<'c, C> {
         limit: usize,
     ) -> Result<Vec<VectorHit>> {
         scored.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-        let mut hits = Vec::with_capacity(limit.min(scored.len()));
+        // Reserve from the bounded candidate set, not from the caller's requested limit.
+        let mut hits = Vec::with_capacity(scored.len().min(MAX_VECTOR_SEARCH_HITS));
         for (d, id) in scored {
             if hits.len() >= limit {
                 break;
