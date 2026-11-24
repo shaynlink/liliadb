@@ -22,6 +22,7 @@ import {
   LiliaStorageBar,
   LiliaDevInspector,
 } from './index.js';
+import { splitSnippet } from './components/fts/LiliaHighlightSnippet.js';
 
 test('All 19 Built-in Components are exported and valid React components', () => {
   const components = [
@@ -92,6 +93,21 @@ test('LiliaGraphBreadcrumbs renders path segments and custom separators', () => 
   });
   assert.ok(crumbs);
   assert.ok((crumbs.props as { contentContainerStyle?: unknown }).contentContainerStyle);
+});
+
+test('LiliaHighlightSnippet parses engine markers without a backtracking regex', () => {
+  assert.deepEqual(splitSnippet('Found in <b>LiliaDB</b> today'), [
+    { text: 'Found in ', isHighlight: false },
+    { text: 'LiliaDB', isHighlight: true },
+    { text: ' today', isHighlight: false },
+  ]);
+  assert.deepEqual(
+    splitSnippet('Unclosed <b>marker'),
+    [
+      { text: 'Unclosed ', isHighlight: false },
+      { text: '<b>marker', isHighlight: false },
+    ],
+  );
 });
 
 test('React element creation succeeds for all 19 components', () => {
