@@ -117,6 +117,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NativeVfs::sync_dir`.
 - `HnswIndex::insert` returns the node's internal id; the list of nodes to persist it returned
   for the SQLite engine is gone.
+- **Documentation of the switch**: `docs/architecture.md` describes v0.2 as built (the engine,
+  `lilia-io`, the models of `lilia-db`, the protocol and its codecs, the bindings, the daemon and
+  its IPC security) instead of the SQLite engine; the storage RFC records alpha.3c (§7.4) and the
+  fate of the modules §5.3 left open. `docs/http_api.md` documents `POST /v1/json/scan_by_index`,
+  the `408` and `501` statuses and `--development`, and its SQL example uses the DataFusion
+  dialect; the change stream it described is gone.
 
 ### Fixed
 - **`lilia-engine`**: a run moved to the next level unchanged had its file deleted once the moved

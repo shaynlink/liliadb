@@ -1,6 +1,6 @@
 # LiliaDB HTTP REST Gateway Specification
 
-`lilia-daemon` includes a high-performance local loopback HTTP/REST gateway. It provides language-agnostic access to LiliaDB's Key/Value store, JSON document engine, embedded Graph relationships, Full-Text Search (FTS5), atomic batch transactions, SQL analytical views, and real-time Change Data Capture (CDC) Server-Sent Events (SSE).
+`lilia-daemon` includes a high-performance local loopback HTTP/REST gateway. It provides language-agnostic access to LiliaDB's Key/Value store, JSON document engine, embedded Graph relationships, Full-Text Search, vectors and hybrid search, atomic batches, and read-only SQL. Every request runs through `lilia_protocol::execute`, as for the daemon's IPC clients and the bindings.
 
 ---
 
@@ -8,8 +8,8 @@
 
 The HTTP gateway is engineered strictly for **local IPC replacement** (e.g., AI agent tools, sidecars, CLI scripts, and local containers):
 
-1. **Loopback Only**: The server refuses to bind to non-loopback interfaces. Attempting to pass `--http-bind 0.0.0.0` or a public IP exits immediately with an error. Valid bindings are `127.0.0.1` (IPv4 loopback) or `::1` (IPv6 loopback).
-2. **Bearer Token Authentication**: Every `/v1/*` request requires a valid `Authorization: Bearer <TOKEN>` header (or an optional `?token=<TOKEN>` query parameter for SSE event streams).
+1. **Loopback Only**: The server refuses to bind to non-loopback interfaces unless started with `--development`. Without it, `--http-bind 0.0.0.0` or a public IP exits immediately with an error; valid bindings are `127.0.0.1` (IPv4 loopback) or `::1` (IPv6 loopback).
+2. **Bearer Token Authentication**: Every `/v1/*` request requires a valid `Authorization: Bearer <TOKEN>` header.
 3. **Constant-Time Comparison**: Tokens are validated using constant-time equality verification (`subtle::ConstantTimeEq`) to prevent timing side-channel attacks.
 4. **Public vs. Protected Routes**:
    - `GET /health`: Public (no token needed, for health checks and orchestrator probes).
@@ -42,7 +42,7 @@ lilia-daemon \
 
 When started, the daemon logs:
 ```
-[INFO] HTTP gateway listening on http://127.0.0.1:4444
+INFO lilia_daemon: http gateway started addr=127.0.0.1:4444
 ```
 
 ---
@@ -73,8 +73,10 @@ Errors return a JSON object with standard fields:
 | **400 Bad Request** | `INVALID_INPUT` | Malformed JSON request body or invalid parameters. |
 | **401 Unauthorized** | `AUTHENTICATION` | Missing or invalid `Authorization: Bearer <TOKEN>` header. |
 | **404 Not Found** | `NOT_FOUND` | Document or Key/Value entry does not exist. |
+| **408 Request Timeout** | `TIMEOUT` | The request's deadline passed before it ran. |
 | **409 Conflict** | `CONFLICT` | Optimistic concurrency conflict (`if_version` mismatch). |
-| **500 Internal Error** | `STORAGE` / `INTERNAL` | Storage engine failure or unexpected internal error. |
+| **501 Not Implemented** | `UNSUPPORTED` | An operation `lilia-db` does not support. |
+| **500 Internal Error** | any other code | Storage engine failure or unexpected internal error. |
 
 ---
 
@@ -347,6 +349,15 @@ curl -s -X POST http://127.0.0.1:4444/v1/json/indexes/drop \
   -d '{"space": "users", "name": "idx_user_role"}'
 ```
 
+##### `POST /v1/json/scan_by_index`
+The documents whose value for the index `index_name` is `value`, in id order; `after` continues from an id, `limit` defaults to 100:
+```bash
+curl -s -X POST http://127.0.0.1:4444/v1/json/scan_by_index \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"space": "users", "index_name": "by_role", "value": "admin", "limit": 10}'
+```
+
 ##### `POST /v1/json/find`
 Query documents matching criteria with automatic secondary index acceleration:
 ```bash
@@ -457,7 +468,7 @@ curl -s -X POST http://127.0.0.1:4444/v1/graph/reachability \
 
 ---
 
-### Full-Text Search Endpoints (FTS5)
+### Full-Text Search Endpoints
 
 Full-text search with BM25 ranking, typo-tolerant suggestions and fuzzy search, and phonetic matching.
 
@@ -668,7 +679,7 @@ curl -s -X POST http://127.0.0.1:4444/v1/vector/search \
 ```
 
 #### `POST /v1/hybrid/search`
-Perform atomic Reciprocal Rank Fusion (RRF) search fusing FTS5 lexical ranking and HNSW semantic vector similarity.
+Perform atomic Reciprocal Rank Fusion (RRF) search fusing BM25 full-text ranking and HNSW semantic vector similarity.
 
 **Request:**
 ```bash
@@ -710,7 +721,7 @@ curl -s -X POST http://127.0.0.1:4444/v1/hybrid/search \
 ### Batch & Transactions
 
 #### `POST /v1/batch`
-Execute multiple Key/Value, JSON, Graph, and FTS mutations atomically in a single ACID commit.
+Execute multiple Key/Value, JSON, Graph, FTS and vector mutations atomically in a single commit. Each result carries the version of the record written: the engine's sequence number of that write (`null` when the write changed nothing, such as the delete of an absent record).
 
 **Supported Operations:**
 - `kv_set` (`namespace`, `key`, `value`, `if_version`, `expires_at_ms`)
@@ -760,9 +771,9 @@ curl -s -X POST http://127.0.0.1:4444/v1/batch \
 ```json
 {
   "results": [
-    {"version": "1", "deleted": false},
-    {"version": "1", "deleted": false},
-    {"version": null, "deleted": false}
+    {"version": "1042", "deleted": false},
+    {"version": "1043", "deleted": false},
+    {"version": "1044", "deleted": false}
   ]
 }
 ```
@@ -780,7 +791,7 @@ curl -s -X POST http://127.0.0.1:4444/v1/sql \
   -H "Authorization: Bearer my-secret-token" \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "SELECT id, json_extract(value, '\''$.role'\'') AS role FROM lilia_json WHERE space = ?1",
+    "query": "SELECT id, value->>'\''role'\'' AS role FROM lilia_json WHERE space = $1 ORDER BY id",
     "params": ["users"]
   }'
 ```
