@@ -185,7 +185,7 @@ mod tests {
         let id = str_to_fr("usr_101");
         let v1 = u64_to_fr(2450);
         let v2 = u64_to_fr(29);
-        let salt = u64_to_fr(999_999);
+        let salt = id + v1 + v2;
 
         // Native calculation
         let native_hash = poseidon_hash_4(id, v1, v2, salt);

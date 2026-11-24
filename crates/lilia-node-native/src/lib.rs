@@ -49,14 +49,14 @@ pub struct NativeOpenOptions {
 /// `error` as a JavaScript error whose message is the JSON of the error; retryable errors
 /// carry the `WouldDeadlock` status.
 fn napi_error(error: LiliaError) -> Error {
-    Error::new(
-        if error.retryable {
-            Status::WouldDeadlock
-        } else {
-            Status::GenericFailure
-        },
-        serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()),
-    )
+    let mut napi_error =
+        Error::from_reason(serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
+    napi_error.status = if error.retryable {
+        Status::WouldDeadlock
+    } else {
+        Status::GenericFailure
+    };
+    napi_error
 }
 
 fn invalid_arg(message: impl Into<String>) -> Error {

@@ -16,6 +16,10 @@ use crate::keys::{self, validate_name};
 use crate::read::Source;
 use crate::record::decode_doc;
 
+/// A search response remains bounded even when it is requested through an
+/// untrusted protocol client. Larger result sets should be fetched in pages.
+const MAX_VECTOR_SEARCH_HITS: usize = 10_000;
+
 /// Vector collection `name` of a session or transaction.
 ///
 /// Hits are read through the session or transaction, so they show its view of the vectors,
@@ -130,6 +134,7 @@ impl<'c, C: Context> Vectors<'c, C> {
         within: Option<&HashSet<&str>>,
         limit: usize,
     ) -> Result<Vec<VectorHit>> {
+        let limit = limit.min(MAX_VECTOR_SEARCH_HITS);
         validate_name("collection", &self.name)?;
         if limit == 0 || within.is_some_and(HashSet::is_empty) {
             return Ok(Vec::new());
