@@ -1,8 +1,6 @@
 #![allow(
     clippy::missing_errors_doc,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
+    reason = "every fallible function here refuses invalid coordinates, resolutions or cells with `ErrorCode::InvalidInput`, and nothing else"
 )]
 
 use std::str::FromStr;

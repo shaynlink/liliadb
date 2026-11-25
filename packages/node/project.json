@@ -3,12 +3,11 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "sourceRoot": "packages/node/src",
-  "implicitDependencies": ["lilia-node-native", "lilia-protocol"],
+  "implicitDependencies": ["lilia-node-native", "lilia-protocol", "liliadb-client"],
   "targets": {
     "build": { "executor": "nx:run-script", "options": { "script": "build" } },
     "test": { "executor": "nx:run-script", "options": { "script": "test" } },
     "lint": { "executor": "nx:run-script", "options": { "script": "lint" } },
-    "bench": { "executor": "nx:run-script", "options": { "script": "bench" } },
     "package": { "executor": "nx:run-script", "options": { "script": "package" } }
   },
   "tags": ["scope:bindings", "type:library", "lang:typescript"]

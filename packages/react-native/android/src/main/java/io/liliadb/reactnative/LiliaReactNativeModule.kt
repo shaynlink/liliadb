@@ -1,239 +1,51 @@
 package io.liliadb.reactnative
 
-import com.facebook.react.bridge.*
-import io.liliadb.FfiResourceProfile
-import io.liliadb.LiliaDatabase
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import com.facebook.proguard.annotations.DoNotStrip
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.WritableMap
+import com.facebook.react.module.annotations.ReactModule
+import com.facebook.react.turbomodule.core.interfaces.BindingsInstallerHolder
+import com.facebook.react.turbomodule.core.interfaces.TurboModuleWithJSIBindings
 import java.io.File
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
-class LiliaReactNativeModule(reactContext: ReactApplicationContext) :
-    ReactContextBaseJavaModule(reactContext) {
+/**
+ * The Android TurboModule of LiliaDB: React Native installs its JSI binding (cpp/LiliaJsi.h)
+ * through [getBindingsInstaller] when it creates the module; [directories] names the
+ * directories a database may live in.
+ */
+@ReactModule(name = LiliaReactNativeModule.NAME)
+class LiliaReactNativeModule(context: ReactApplicationContext) :
+    NativeLiliaReactNativeSpec(context), TurboModuleWithJSIBindings {
 
-    private val instances = ConcurrentHashMap<String, LiliaDatabase>()
-    private val scope = CoroutineScope(Dispatchers.IO)
-
-    override fun getName(): String = "LiliaReactNativeModule"
-
-    private fun resolveProfile(profileStr: String?): FfiResourceProfile {
-        return when (profileStr?.lowercase()) {
-            "constrained" -> FfiResourceProfile.CONSTRAINED
-            "server" -> FfiResourceProfile.SERVER
-            else -> FfiResourceProfile.MOBILE
+    override fun directories(): WritableMap {
+        val context = reactApplicationContext
+        return Arguments.createMap().apply {
+            putString("noBackup", existing(context.noBackupFilesDir))
+            putString("files", existing(context.filesDir))
+            putString("cache", existing(context.cacheDir))
         }
     }
 
-    @ReactMethod
-    fun openDatabase(options: ReadableMap, promise: Promise) {
-        val path = options.getString("path") ?: run {
-            promise.reject("INVALID_INPUT", "Path is required")
-            return
-        }
+    /** App Groups are an iOS notion. */
+    override fun groupContainer(identifier: String): String? = null
 
-        val profile = resolveProfile(options.getString("profile"))
-        val useSecureStorage = options.hasKey("useSecureStorage") && options.getBoolean("useSecureStorage")
+    /** Android leaves `noBackup` out of Auto Backup; other directories follow the app's rules. */
+    override fun excludeFromBackup(path: String): Boolean = false
 
-        scope.launch {
-            try {
-                val encKey: ByteArray? = if (useSecureStorage) {
-                    val dbName = File(path).name
-                    KeystoreHelper.getOrCreateKey(dbName)
-                } else if (options.hasKey("encryptionKeyHex")) {
-                    val hex = options.getString("encryptionKeyHex") ?: ""
-                    if (hex.length == 64) hexToBytes(hex) else null
-                } else {
-                    null
-                }
+    @DoNotStrip
+    external override fun getBindingsInstaller(): BindingsInstallerHolder
 
-                val db = if (options.hasKey("passphrase")) {
-                    val passphrase = options.getString("passphrase") ?: ""
-                    LiliaDatabase.openWithPassphrase(path, profile, passphrase)
-                } else {
-                    LiliaDatabase.open(path, profile, encKey)
-                }
-
-                val handle = UUID.randomUUID().toString()
-                instances[handle] = db
-
-                val result = Arguments.createMap().apply {
-                    putString("handle", handle)
-                    putString("path", path)
-                }
-                promise.resolve(result)
-            } catch (e: Exception) {
-                promise.reject("OPEN_ERROR", e.message, e)
-            }
-        }
+    private fun existing(directory: File): String {
+        directory.mkdirs()
+        return directory.absolutePath
     }
 
-    @ReactMethod
-    fun prepareForBackground(handle: String, promise: Promise) {
-        val db = instances[handle] ?: run {
-            promise.reject("NOT_FOUND", "Database handle not found")
-            return
-        }
-        try {
-            db.prepareForBackground()
-            promise.resolve(true)
-        } catch (e: Exception) {
-            promise.reject("FLUSH_ERROR", e.message, e)
-        }
-    }
+    companion object {
+        const val NAME = "LiliaReactNative"
 
-    @ReactMethod
-    fun kvSet(
-        handle: String,
-        namespace: String,
-        keyHex: String,
-        valHex: String,
-        expiresAtMs: Double?,
-        promise: Promise
-    ) {
-        val db = instances[handle] ?: run {
-            promise.reject("NOT_FOUND", "Database handle not found")
-            return
+        init {
+            System.loadLibrary("lilia_react_native")
         }
-        scope.launch {
-            try {
-                val key = hexToBytes(keyHex)
-                val value = hexToBytes(valHex)
-                val expires = expiresAtMs?.toLong()
-                val version = db.kvSet(namespace, key, value, expires)
-                promise.resolve(version.toDouble())
-            } catch (e: Exception) {
-                promise.reject("KV_ERROR", e.message, e)
-            }
-        }
-    }
-
-    @ReactMethod
-    fun kvGet(handle: String, namespace: String, keyHex: String, promise: Promise) {
-        val db = instances[handle] ?: run {
-            promise.reject("NOT_FOUND", "Database handle not found")
-            return
-        }
-        scope.launch {
-            try {
-                val key = hexToBytes(keyHex)
-                val entry = db.kvGet(namespace, key)
-                if (entry != null) {
-                    val map = Arguments.createMap().apply {
-                        putString("namespace", entry.namespace)
-                        putString("keyHex", bytesToHex(entry.key))
-                        putString("valueHex", bytesToHex(entry.value))
-                        putDouble("version", entry.version.toDouble())
-                        if (entry.expiresAtMs != null) {
-                            putDouble("expiresAtMs", entry.expiresAtMs!!.toDouble())
-                        }
-                    }
-                    promise.resolve(map)
-                } else {
-                    promise.resolve(null)
-                }
-            } catch (e: Exception) {
-                promise.reject("KV_ERROR", e.message, e)
-            }
-        }
-    }
-
-    @ReactMethod
-    fun jsonPut(handle: String, space: String, id: String, valueJson: String, promise: Promise) {
-        val db = instances[handle] ?: run {
-            promise.reject("NOT_FOUND", "Database handle not found")
-            return
-        }
-        scope.launch {
-            try {
-                val version = db.jsonPut(space, id, valueJson)
-                promise.resolve(version.toDouble())
-            } catch (e: Exception) {
-                promise.reject("JSON_ERROR", e.message, e)
-            }
-        }
-    }
-
-    @ReactMethod
-    fun jsonGet(handle: String, space: String, id: String, promise: Promise) {
-        val db = instances[handle] ?: run {
-            promise.reject("NOT_FOUND", "Database handle not found")
-            return
-        }
-        scope.launch {
-            try {
-                val doc = db.jsonGet(space, id)
-                if (doc != null) {
-                    val map = Arguments.createMap().apply {
-                        putString("space", doc.space)
-                        putString("id", doc.id)
-                        putString("valueJson", doc.valueJson)
-                        putDouble("version", doc.version.toDouble())
-                    }
-                    promise.resolve(map)
-                } else {
-                    promise.resolve(null)
-                }
-            } catch (e: Exception) {
-                promise.reject("JSON_ERROR", e.message, e)
-            }
-        }
-    }
-
-    @ReactMethod
-    fun sqlQuery(handle: String, sql: String, paramsJson: String?, promise: Promise) {
-        val db = instances[handle] ?: run {
-            promise.reject("NOT_FOUND", "Database handle not found")
-            return
-        }
-        scope.launch {
-            try {
-                val res = db.sqlQuery(sql, paramsJson)
-                val columns = Arguments.createArray().apply {
-                    res.columns.forEach { pushString(it) }
-                }
-                val rows = Arguments.createArray().apply {
-                    res.rowsJson.forEach { pushString(it) }
-                }
-                val map = Arguments.createMap().apply {
-                    putArray("columns", columns)
-                    putArray("rowsJson", rows)
-                    putDouble("rowsAffected", res.rowsAffected.toDouble())
-                }
-                promise.resolve(map)
-            } catch (e: Exception) {
-                promise.reject("SQL_ERROR", e.message, e)
-            }
-        }
-    }
-
-    @ReactMethod
-    fun close(handle: String, timeoutMs: Double, promise: Promise) {
-        val db = instances.remove(handle) ?: run {
-            promise.resolve(true)
-            return
-        }
-        scope.launch {
-            try {
-                db.close(timeoutMs.toULong())
-                promise.resolve(true)
-            } catch (e: Exception) {
-                promise.reject("CLOSE_ERROR", e.message, e)
-            }
-        }
-    }
-
-    private fun hexToBytes(hex: String): ByteArray {
-        val result = ByteArray(hex.length / 2)
-        for (i in result.indices) {
-            val index = i * 2
-            result[i] = hex.substring(index, index + 2).toInt(16).toByte()
-        }
-        return result
-    }
-
-    private fun bytesToHex(bytes: ByteArray): String {
-        return bytes.joinToString("") { "%02x".format(it) }
     }
 }

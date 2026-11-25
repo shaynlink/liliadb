@@ -9,11 +9,19 @@ repository.workspace = true
 [dependencies]
 lilia-core = { path = "../lilia-core" }
 async-trait = "0.1.89"
-datafusion = { workspace = true, features = ["parquet"] }
+datafusion.workspace = true
+datafusion-functions-json.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.52", default-features = false, features = ["rt-multi-thread"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { version = "1.52", default-features = false, features = ["rt"] }
+# DataFusion stamps each query with `Utc::now()`: in the browser, chrono reads `Date.now()`.
+chrono = { version = "0.4", default-features = false, features = ["clock", "wasmbind"] }
 
 [lints]
 workspace = true

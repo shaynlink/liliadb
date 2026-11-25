@@ -20,11 +20,11 @@ import {
   LiliaBiometricLock,
   LiliaSecureField,
   LiliaStorageBar,
-  LiliaBackupShareButton,
   LiliaDevInspector,
 } from './index.js';
+import { splitSnippet } from './components/fts/LiliaHighlightSnippet.js';
 
-test('All 20 Built-in Components are exported and valid React components', () => {
+test('All 19 Built-in Components are exported and valid React components', () => {
   const components = [
     { name: 'LiliaFlashList', comp: LiliaFlashList },
     { name: 'LiliaSectionList', comp: LiliaSectionList },
@@ -44,11 +44,10 @@ test('All 20 Built-in Components are exported and valid React components', () =>
     { name: 'LiliaBiometricLock', comp: LiliaBiometricLock },
     { name: 'LiliaSecureField', comp: LiliaSecureField },
     { name: 'LiliaStorageBar', comp: LiliaStorageBar },
-    { name: 'LiliaBackupShareButton', comp: LiliaBackupShareButton },
     { name: 'LiliaDevInspector', comp: LiliaDevInspector },
   ];
 
-  assert.equal(components.length, 20);
+  assert.equal(components.length, 19);
   for (const { name, comp } of components) {
     assert.equal(
       typeof comp === 'function',
@@ -75,7 +74,7 @@ test('LiliaSuspense conditional gateway behavior', () => {
     fallback: fallbackEl,
     children: childEl,
   });
-  assert.deepEqual(loadingSuspense.props.children, fallbackEl);
+  assert.deepEqual((loadingSuspense.props as { children: unknown }).children, fallbackEl);
 
   // When ready, renders children
   const readySuspense = LiliaSuspense({
@@ -84,7 +83,7 @@ test('LiliaSuspense conditional gateway behavior', () => {
     fallback: fallbackEl,
     children: childEl,
   });
-  assert.deepEqual(readySuspense.props.children, childEl);
+  assert.deepEqual((readySuspense.props as { children: unknown }).children, childEl);
 });
 
 test('LiliaGraphBreadcrumbs renders path segments and custom separators', () => {
@@ -93,10 +92,25 @@ test('LiliaGraphBreadcrumbs renders path segments and custom separators', () => 
     separator: '>',
   });
   assert.ok(crumbs);
-  assert.ok(crumbs.props.contentContainerStyle);
+  assert.ok((crumbs.props as { contentContainerStyle?: unknown }).contentContainerStyle);
 });
 
-test('React element creation succeeds for all 20 components', () => {
+test('LiliaHighlightSnippet parses engine markers without a backtracking regex', () => {
+  assert.deepEqual(splitSnippet('Found in <b>LiliaDB</b> today'), [
+    { text: 'Found in ', isHighlight: false },
+    { text: 'LiliaDB', isHighlight: true },
+    { text: ' today', isHighlight: false },
+  ]);
+  assert.deepEqual(
+    splitSnippet('Unclosed <b>marker'),
+    [
+      { text: 'Unclosed ', isHighlight: false },
+      { text: '<b>marker', isHighlight: false },
+    ],
+  );
+});
+
+test('React element creation succeeds for all 19 components', () => {
   // Verifies that React.createElement works with all props for every component without syntax or typing errors
   const elements = [
     React.createElement(LiliaFlashList, { estimatedItemSize: 50, renderItem: () => null }),
@@ -117,11 +131,10 @@ test('React element creation succeeds for all 20 components', () => {
     React.createElement(LiliaBiometricLock, null, React.createElement('div', null)),
     React.createElement(LiliaSecureField, { value: 'api-secret-123' }),
     React.createElement(LiliaStorageBar, null),
-    React.createElement(LiliaBackupShareButton, null),
     React.createElement(LiliaDevInspector, { enabled: false }),
   ];
 
-  assert.equal(elements.length, 20);
+  assert.equal(elements.length, 19);
   for (const el of elements) {
     assert.ok(React.isValidElement(el));
   }

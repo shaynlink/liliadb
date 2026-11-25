@@ -1,0 +1,48 @@
+[package]
+name = "lilia-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LiliaDB platform layer: file systems, durability primitives, hardware probe"
+
+[features]
+# The access control of local endpoints and secrets (macOS ACLs; Windows security descriptors,
+# named pipes and the daemon's token), for `lilia-daemon`.
+ipc = ["dep:hex", "dep:rand", "dep:tokio", "dep:uuid"]
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "FileSystemDirectoryHandle",
+  "FileSystemFileHandle",
+  "FileSystemGetDirectoryOptions",
+  "FileSystemGetFileOptions",
+  "FileSystemReadWriteOptions",
+  "FileSystemSyncAccessHandle",
+  "StorageManager",
+  "WorkerGlobalScope",
+  "WorkerNavigator",
+] }
+
+[target.'cfg(windows)'.dependencies]
+hex = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["net"] }
+uuid = { workspace = true, optional = true }
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[target.'cfg(windows)'.dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "rt"] }
+
+[lints]
+workspace = true

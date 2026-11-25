@@ -11,12 +11,12 @@ try {
     Add-LocalGroupMember -Group $users -Member $account
     $env:LILIA_TEST_USER = $name
     $env:LILIA_TEST_PASSWORD = $password
-    $test = 'ipc_windows::tests::cross_account::second_account_cannot_open_private_pipe_or_token'
-    $listed = cargo test -p lilia-daemon $test -- --ignored --exact --list
+    $test = 'ipc::windows::tests::cross_account::second_account_cannot_open_private_pipe_or_token'
+    $listed = cargo test -p lilia-io --features ipc $test -- --ignored --exact --list
     if ($LASTEXITCODE -ne 0 -or $listed -notcontains "${test}: test") {
         throw 'Expected cross-account test was not discovered'
     }
-    cargo test -p lilia-daemon $test -- --ignored --exact
+    cargo test -p lilia-io --features ipc $test -- --ignored --exact
     if ($LASTEXITCODE -ne 0) { throw 'Cross-account test failed' }
 } finally {
     Remove-Item Env:LILIA_TEST_USER, Env:LILIA_TEST_PASSWORD -ErrorAction SilentlyContinue

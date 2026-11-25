@@ -50,6 +50,8 @@ esac
 is_source() {
   case "$1" in
     node_modules/* | */node_modules/* | target/* | */target/* | */generated/* | */vendor/*) return 1 ;;
+    # UniFFI bindings, generated from lilia-ffi by `uniffi-bindgen` (tools/mobile/build-*.sh)
+    packages/apple-spm/Sources/Lilia/Lilia.swift | packages/android-sdk/src/main/java/uniffi/*) return 1 ;;
     *.rs | *.ts | *.tsx | *.js | *.mjs | *.dart | *.swift | *.kt | *.c | *.h) return 0 ;;
     *) return 1 ;;
   esac

@@ -819,6 +819,106 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -842,14 +942,8 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_lilia_ffi_fn_free_liliadatabase(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_lilia_ffi_fn_constructor_liliadatabase_open(`path`: RustBuffer.ByValue,`profile`: RustBuffer.ByValue,`encryptionKey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_lilia_ffi_fn_constructor_liliadatabase_open(`path`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun uniffi_lilia_ffi_fn_constructor_liliadatabase_open_with_passphrase(`path`: RustBuffer.ByValue,`profile`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Pointer
-    fun uniffi_lilia_ffi_fn_method_liliadatabase_backup(`ptr`: Pointer,`destinationPath`: RustBuffer.ByValue,
-    ): Long
-    fun uniffi_lilia_ffi_fn_method_liliadatabase_backup_sync(`ptr`: Pointer,`destinationPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
     fun uniffi_lilia_ffi_fn_method_liliadatabase_checkpoint(`ptr`: Pointer,
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_checkpoint_sync(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -862,14 +956,58 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_delete_sync(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`docId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_fuzzy_search(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`query`: RustBuffer.ByValue,`maxDistance`: Byte,`limit`: Int,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_fuzzy_search_sync(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`query`: RustBuffer.ByValue,`maxDistance`: Byte,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_index(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`docId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_index_sync(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`docId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_load_dictionary(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`words`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_load_dictionary_sync(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`words`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_phonetic_search(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`query`: RustBuffer.ByValue,`limit`: Int,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_phonetic_search_sync(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`query`: RustBuffer.ByValue,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_search(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`query`: RustBuffer.ByValue,`limit`: Int,
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_search_sync(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`query`: RustBuffer.ByValue,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_suggest(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`prefix`: RustBuffer.ByValue,`maxDistance`: Byte,`limit`: Int,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_fts_suggest_sync(`ptr`: Pointer,`collection`: RustBuffer.ByValue,`prefix`: RustBuffer.ByValue,`maxDistance`: Byte,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_add_fence(`ptr`: Pointer,`id`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`category`: RustBuffer.ByValue,`polygonJson`: RustBuffer.ByValue,`metadata`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_add_fence_sync(`ptr`: Pointer,`id`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`category`: RustBuffer.ByValue,`polygonJson`: RustBuffer.ByValue,`metadata`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_contains_point(`ptr`: Pointer,`polygonJson`: RustBuffer.ByValue,`lon`: Double,`lat`: Double,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_contains_point_sync(`ptr`: Pointer,`polygonJson`: RustBuffer.ByValue,`lon`: Double,`lat`: Double,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_find_fences_for_point(`ptr`: Pointer,`lon`: Double,`lat`: Double,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_find_fences_for_point_sync(`ptr`: Pointer,`lon`: Double,`lat`: Double,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_get_track_points(`ptr`: Pointer,`trackId`: RustBuffer.ByValue,`startTime`: RustBuffer.ByValue,`endTime`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_get_track_points_sync(`ptr`: Pointer,`trackId`: RustBuffer.ByValue,`startTime`: RustBuffer.ByValue,`endTime`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_record_gps_points(`ptr`: Pointer,`trackId`: RustBuffer.ByValue,`points`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_record_gps_points_sync(`ptr`: Pointer,`trackId`: RustBuffer.ByValue,`points`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_remove_fence(`ptr`: Pointer,`id`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_remove_fence_sync(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_track_distance(`ptr`: Pointer,`trackId`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_geo_track_distance_sync(`ptr`: Pointer,`trackId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Double
     fun uniffi_lilia_ffi_fn_method_liliadatabase_graph_add_edge(`ptr`: Pointer,`graph`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`target`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_graph_add_edge_sync(`ptr`: Pointer,`graph`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`target`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -898,9 +1036,21 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_graph_set_node_sync(`ptr`: Pointer,`graph`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`metadataJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_integrity_check(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_integrity_check_sync(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_json_create_index(`ptr`: Pointer,`space`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,`filter`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_json_create_index_sync(`ptr`: Pointer,`space`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,`filter`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_lilia_ffi_fn_method_liliadatabase_json_delete(`ptr`: Pointer,`space`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_json_delete_sync(`ptr`: Pointer,`space`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_json_drop_index(`ptr`: Pointer,`space`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_json_drop_index_sync(`ptr`: Pointer,`space`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_lilia_ffi_fn_method_liliadatabase_json_find(`ptr`: Pointer,`space`: RustBuffer.ByValue,`queryJson`: RustBuffer.ByValue,`afterId`: RustBuffer.ByValue,`limit`: Int,
     ): Long
@@ -909,6 +1059,10 @@ internal interface UniffiLib : Library {
     fun uniffi_lilia_ffi_fn_method_liliadatabase_json_get(`ptr`: Pointer,`space`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_json_get_sync(`ptr`: Pointer,`space`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_json_list_indexes(`ptr`: Pointer,`space`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_json_list_indexes_sync(`ptr`: Pointer,`space`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_lilia_ffi_fn_method_liliadatabase_json_put(`ptr`: Pointer,`space`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,`valueJson`: RustBuffer.ByValue,
     ): Long
@@ -930,8 +1084,6 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_kv_set_sync(`ptr`: Pointer,`namespace`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,`value`: RustBuffer.ByValue,`expiresAtMs`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-    fun uniffi_lilia_ffi_fn_method_liliadatabase_prepare_for_background(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
     fun uniffi_lilia_ffi_fn_method_liliadatabase_quick_check(`ptr`: Pointer,
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_quick_check_sync(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -939,6 +1091,54 @@ internal interface UniffiLib : Library {
     fun uniffi_lilia_ffi_fn_method_liliadatabase_sql_query(`ptr`: Pointer,`sql`: RustBuffer.ByValue,`paramsJson`: RustBuffer.ByValue,
     ): Long
     fun uniffi_lilia_ffi_fn_method_liliadatabase_sql_query_sync(`ptr`: Pointer,`sql`: RustBuffer.ByValue,`paramsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_append_points(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`points`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_append_points_sync(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`points`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_apply_retention(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_apply_retention_sync(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_delete_policy(`ptr`: Pointer,`seriesPattern`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_delete_policy_sync(`ptr`: Pointer,`seriesPattern`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_get_policy(`ptr`: Pointer,`seriesPattern`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_get_policy_sync(`ptr`: Pointer,`seriesPattern`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_list_policies(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_list_policies_sync(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_auto(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`startTime`: Long,`endTime`: Long,`maxPoints`: Int,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_auto_sync(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`startTime`: Long,`endTime`: Long,`maxPoints`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`startTime`: Long,`endTime`: Long,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_sync(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`startTime`: Long,`endTime`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_with_resolution(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`resolutionMs`: Long,`startTime`: Long,`endTime`: Long,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_with_resolution_sync(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`resolutionMs`: Long,`startTime`: Long,`endTime`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_stats(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`startTime`: Long,`endTime`: Long,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_stats_sync(`ptr`: Pointer,`seriesId`: RustBuffer.ByValue,`startTime`: Long,`endTime`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_set_policy(`ptr`: Pointer,`policy`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lilia_ffi_fn_method_liliadatabase_ts_set_policy_sync(`ptr`: Pointer,`policy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_lilia_ffi_fn_func_geo_create_circle_polygon(`centerLon`: Double,`centerLat`: Double,`radiusMeters`: Double,`nVertices`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_func_geo_haversine_distance(`lat1`: Double,`lon1`: Double,`lat2`: Double,`lon2`: Double,uniffi_out_err: UniffiRustCallStatus, 
+    ): Double
+    fun uniffi_lilia_ffi_fn_func_ts_compress_points(`points`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_lilia_ffi_fn_func_ts_decompress_points(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_lilia_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1052,9 +1252,13 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_lilia_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_lilia_ffi_checksum_method_liliadatabase_backup(
+    fun uniffi_lilia_ffi_checksum_func_geo_create_circle_polygon(
     ): Short
-    fun uniffi_lilia_ffi_checksum_method_liliadatabase_backup_sync(
+    fun uniffi_lilia_ffi_checksum_func_geo_haversine_distance(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_func_ts_compress_points(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_func_ts_decompress_points(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint(
     ): Short
@@ -1068,13 +1272,57 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_delete_sync(
     ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_fuzzy_search(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_fuzzy_search_sync(
+    ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_index(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_index_sync(
     ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_load_dictionary(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_load_dictionary_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_phonetic_search(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_phonetic_search_sync(
+    ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_search(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_search_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_suggest(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_fts_suggest_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_add_fence(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_add_fence_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_contains_point(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_contains_point_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_find_fences_for_point(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_find_fences_for_point_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_get_track_points(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_get_track_points_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_record_gps_points(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_record_gps_points_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_remove_fence(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_remove_fence_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_track_distance(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_geo_track_distance_sync(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_graph_add_edge(
     ): Short
@@ -1104,9 +1352,21 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_graph_set_node_sync(
     ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_integrity_check(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_integrity_check_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_create_index(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_create_index_sync(
+    ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_delete(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_delete_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_drop_index(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_drop_index_sync(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_find(
     ): Short
@@ -1115,6 +1375,10 @@ internal interface UniffiLib : Library {
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_get(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_get_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_list_indexes(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_list_indexes_sync(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_json_put(
     ): Short
@@ -1136,8 +1400,6 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set_sync(
     ): Short
-    fun uniffi_lilia_ffi_checksum_method_liliadatabase_prepare_for_background(
-    ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check(
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check_sync(
@@ -1146,9 +1408,47 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query_sync(
     ): Short
-    fun uniffi_lilia_ffi_checksum_constructor_liliadatabase_open(
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_append_points(
     ): Short
-    fun uniffi_lilia_ffi_checksum_constructor_liliadatabase_open_with_passphrase(
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_append_points_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_apply_retention(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_apply_retention_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_delete_policy(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_delete_policy_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_get_policy(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_get_policy_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_list_policies(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_list_policies_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_auto(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_auto_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_with_resolution(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_with_resolution_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_stats(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_stats_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_set_policy(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_method_liliadatabase_ts_set_policy_sync(
+    ): Short
+    fun uniffi_lilia_ffi_checksum_constructor_liliadatabase_open(
     ): Short
     fun ffi_lilia_ffi_uniffi_contract_version(
     ): Int
@@ -1167,22 +1467,28 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_backup() != 10561.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_func_geo_create_circle_polygon() != 19111.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_backup_sync() != 48495.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_func_geo_haversine_distance() != 47927.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint() != 635.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_func_ts_compress_points() != 57342.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint_sync() != 30215.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_func_ts_decompress_points() != 34801.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_close() != 56998.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint() != 33202.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_close_sync() != 1049.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint_sync() != 26779.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_close() != 23876.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_close_sync() != 44144.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_delete() != 29000.toShort()) {
@@ -1191,16 +1497,82 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_delete_sync() != 56452.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_fuzzy_search() != 55140.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_fuzzy_search_sync() != 58120.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_index() != 45368.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_index_sync() != 13651.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_load_dictionary() != 56636.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_load_dictionary_sync() != 38104.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_phonetic_search() != 23191.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_phonetic_search_sync() != 42729.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_search() != 42413.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_search_sync() != 32803.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_suggest() != 40469.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_fts_suggest_sync() != 17615.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_add_fence() != 13763.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_add_fence_sync() != 25497.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_contains_point() != 45491.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_contains_point_sync() != 59291.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_find_fences_for_point() != 46178.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_find_fences_for_point_sync() != 28968.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_get_track_points() != 49422.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_get_track_points_sync() != 28244.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_record_gps_points() != 40880.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_record_gps_points_sync() != 38773.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_remove_fence() != 24719.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_remove_fence_sync() != 7035.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_track_distance() != 33913.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_geo_track_distance_sync() != 61115.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_graph_add_edge() != 17706.toShort()) {
@@ -1245,16 +1617,34 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_graph_set_node_sync() != 19832.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_integrity_check() != 34669.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_integrity_check_sync() != 54338.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_create_index() != 47489.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_create_index_sync() != 59759.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_delete() != 63539.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_delete_sync() != 38134.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_find() != 55075.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_drop_index() != 48333.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_find_sync() != 53049.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_drop_index_sync() != 39824.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_find() != 47533.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_find_sync() != 65322.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_get() != 18997.toShort()) {
@@ -1263,10 +1653,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_get_sync() != 1016.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_put() != 21514.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_list_indexes() != 45289.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_put_sync() != 62076.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_list_indexes_sync() != 48676.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_put() != 49079.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_json_put_sync() != 30019.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_delete() != 4740.toShort()) {
@@ -1281,37 +1677,91 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_get_sync() != 58625.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_scan() != 40833.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_scan() != 47799.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_scan_sync() != 39902.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_scan_sync() != 55183.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set() != 25029.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set() != 14577.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set_sync() != 35073.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set_sync() != 15131.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_prepare_for_background() != 45780.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check() != 65241.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check() != 30028.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check_sync() != 19067.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check_sync() != 21148.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query() != 50415.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query() != 38785.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query_sync() != 41971.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query_sync() != 42369.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_append_points() != 36768.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_constructor_liliadatabase_open() != 47429.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_append_points_sync() != 3633.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lilia_ffi_checksum_constructor_liliadatabase_open_with_passphrase() != 46477.toShort()) {
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_apply_retention() != 27954.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_apply_retention_sync() != 56064.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_delete_policy() != 43750.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_delete_policy_sync() != 38757.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_get_policy() != 4775.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_get_policy_sync() != 39898.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_list_policies() != 18205.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_list_policies_sync() != 56154.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_auto() != 61512.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_auto_sync() != 49152.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range() != 17042.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_sync() != 38594.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_with_resolution() != 9464.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_with_resolution_sync() != 11236.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_stats() != 49033.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_stats_sync() != 26547.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_set_policy() != 38391.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_method_liliadatabase_ts_set_policy_sync() != 13700.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lilia_ffi_checksum_constructor_liliadatabase_open() != 55088.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1400,6 +1850,29 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
  * @suppress
  * */
 object NoPointer
+
+/**
+ * @suppress
+ */
+public object FfiConverterUByte: FfiConverter<UByte, Byte> {
+    override fun lift(value: Byte): UByte {
+        return value.toUByte()
+    }
+
+    override fun read(buf: ByteBuffer): UByte {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: UByte): Byte {
+        return value.toByte()
+    }
+
+    override fun allocationSize(value: UByte) = 1UL
+
+    override fun write(value: UByte, buf: ByteBuffer) {
+        buf.put(value.toByte())
+    }
+}
 
 /**
  * @suppress
@@ -1754,31 +2227,93 @@ private class JavaLangRefCleanable(
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
 }
+/**
+ * An open database. Calls share it; `close` closes it once they return.
+ */
 public interface LiliaDatabaseInterface {
     
-    suspend fun `backup`(`destinationPath`: kotlin.String)
-    
-    fun `backupSync`(`destinationPath`: kotlin.String)
-    
+    /**
+     * Writes the memtable to a sorted run: a point to call before the app is suspended.
+     */
     suspend fun `checkpoint`()
     
+    /**
+     * Writes the memtable to a sorted run: a point to call before the app is suspended.
+     */
     fun `checkpointSync`()
     
+    /**
+     * As [`LiliaDatabase::close_sync`], on tokio's blocking pool.
+     */
     suspend fun `close`(`timeoutMs`: kotlin.ULong)
     
+    /**
+     * Closes the database once the calls running on it return, waiting at most `timeout_ms`.
+     * Later calls fail with `Closed`; closing twice does nothing.
+     */
     fun `closeSync`(`timeoutMs`: kotlin.ULong)
     
     suspend fun `ftsDelete`(`collection`: kotlin.String, `docId`: kotlin.String): kotlin.Boolean
     
     fun `ftsDeleteSync`(`collection`: kotlin.String, `docId`: kotlin.String): kotlin.Boolean
     
+    suspend fun `ftsFuzzySearch`(`collection`: kotlin.String, `query`: kotlin.String, `maxDistance`: kotlin.UByte, `limit`: kotlin.UInt): List<FfiFtsFuzzyHit>
+    
+    fun `ftsFuzzySearchSync`(`collection`: kotlin.String, `query`: kotlin.String, `maxDistance`: kotlin.UByte, `limit`: kotlin.UInt): List<FfiFtsFuzzyHit>
+    
     suspend fun `ftsIndex`(`collection`: kotlin.String, `docId`: kotlin.String, `content`: kotlin.String)
     
     fun `ftsIndexSync`(`collection`: kotlin.String, `docId`: kotlin.String, `content`: kotlin.String)
     
+    suspend fun `ftsLoadDictionary`(`collection`: kotlin.String, `words`: List<kotlin.String>)
+    
+    fun `ftsLoadDictionarySync`(`collection`: kotlin.String, `words`: List<kotlin.String>)
+    
+    suspend fun `ftsPhoneticSearch`(`collection`: kotlin.String, `query`: kotlin.String, `limit`: kotlin.UInt): List<FfiFtsPhoneticHit>
+    
+    fun `ftsPhoneticSearchSync`(`collection`: kotlin.String, `query`: kotlin.String, `limit`: kotlin.UInt): List<FfiFtsPhoneticHit>
+    
     suspend fun `ftsSearch`(`collection`: kotlin.String, `query`: kotlin.String, `limit`: kotlin.UInt): List<FfiFtsHit>
     
     fun `ftsSearchSync`(`collection`: kotlin.String, `query`: kotlin.String, `limit`: kotlin.UInt): List<FfiFtsHit>
+    
+    suspend fun `ftsSuggest`(`collection`: kotlin.String, `prefix`: kotlin.String, `maxDistance`: kotlin.UByte, `limit`: kotlin.UInt): List<FfiFtsSuggestion>
+    
+    fun `ftsSuggestSync`(`collection`: kotlin.String, `prefix`: kotlin.String, `maxDistance`: kotlin.UByte, `limit`: kotlin.UInt): List<FfiFtsSuggestion>
+    
+    suspend fun `geoAddFence`(`id`: kotlin.String, `name`: kotlin.String, `category`: kotlin.String, `polygonJson`: kotlin.String, `metadata`: kotlin.String?)
+    
+    fun `geoAddFenceSync`(`id`: kotlin.String, `name`: kotlin.String, `category`: kotlin.String, `polygonJson`: kotlin.String, `metadata`: kotlin.String?)
+    
+    suspend fun `geoContainsPoint`(`polygonJson`: kotlin.String, `lon`: kotlin.Double, `lat`: kotlin.Double): kotlin.Boolean
+    
+    fun `geoContainsPointSync`(`polygonJson`: kotlin.String, `lon`: kotlin.Double, `lat`: kotlin.Double): kotlin.Boolean
+    
+    suspend fun `geoFindFencesForPoint`(`lon`: kotlin.Double, `lat`: kotlin.Double): List<FfiGeofenceMatch>
+    
+    fun `geoFindFencesForPointSync`(`lon`: kotlin.Double, `lat`: kotlin.Double): List<FfiGeofenceMatch>
+    
+    suspend fun `geoGetTrackPoints`(`trackId`: kotlin.String, `startTime`: kotlin.Long?, `endTime`: kotlin.Long?): List<FfiGpsPoint>
+    
+    fun `geoGetTrackPointsSync`(`trackId`: kotlin.String, `startTime`: kotlin.Long?, `endTime`: kotlin.Long?): List<FfiGpsPoint>
+    
+    /**
+     * Records the points of track `track_id`; the fences they enter.
+     */
+    suspend fun `geoRecordGpsPoints`(`trackId`: kotlin.String, `points`: List<FfiGpsPoint>): List<FfiGeofenceMatch>
+    
+    /**
+     * Records the points of track `track_id`; the fences they enter.
+     */
+    fun `geoRecordGpsPointsSync`(`trackId`: kotlin.String, `points`: List<FfiGpsPoint>): List<FfiGeofenceMatch>
+    
+    suspend fun `geoRemoveFence`(`id`: kotlin.String): kotlin.Boolean
+    
+    fun `geoRemoveFenceSync`(`id`: kotlin.String): kotlin.Boolean
+    
+    suspend fun `geoTrackDistance`(`trackId`: kotlin.String): kotlin.Double
+    
+    fun `geoTrackDistanceSync`(`trackId`: kotlin.String): kotlin.Double
     
     suspend fun `graphAddEdge`(`graph`: kotlin.String, `source`: kotlin.String, `target`: kotlin.String, `kind`: kotlin.String)
     
@@ -1808,20 +2343,66 @@ public interface LiliaDatabaseInterface {
     
     fun `graphSetNodeSync`(`graph`: kotlin.String, `id`: kotlin.String, `kind`: kotlin.String, `metadataJson`: kotlin.String)
     
+    /**
+     * Reads every stored entry, verifying each block's checksum, and verifies the ledger.
+     */
+    suspend fun `integrityCheck`(): kotlin.Boolean
+    
+    /**
+     * Reads every stored entry, verifying each block's checksum, and verifies the ledger.
+     */
+    fun `integrityCheckSync`(): kotlin.Boolean
+    
+    /**
+     * Creates index `name` of `space` over `path` (`$.field`, or an expression), backfilled
+     * from the stored documents; with `filter`, a partial index of the documents it selects.
+     */
+    suspend fun `jsonCreateIndex`(`space`: kotlin.String, `name`: kotlin.String, `path`: kotlin.String, `filter`: kotlin.String?)
+    
+    /**
+     * Creates index `name` of `space` over `path` (`$.field`, or an expression), backfilled
+     * from the stored documents; with `filter`, a partial index of the documents it selects.
+     */
+    fun `jsonCreateIndexSync`(`space`: kotlin.String, `name`: kotlin.String, `path`: kotlin.String, `filter`: kotlin.String?)
+    
     suspend fun `jsonDelete`(`space`: kotlin.String, `id`: kotlin.String): kotlin.Boolean
     
     fun `jsonDeleteSync`(`space`: kotlin.String, `id`: kotlin.String): kotlin.Boolean
     
+    suspend fun `jsonDropIndex`(`space`: kotlin.String, `name`: kotlin.String): kotlin.Boolean
+    
+    fun `jsonDropIndexSync`(`space`: kotlin.String, `name`: kotlin.String): kotlin.Boolean
+    
+    /**
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
+     */
     suspend fun `jsonFind`(`space`: kotlin.String, `queryJson`: kotlin.String, `afterId`: kotlin.String?, `limit`: kotlin.UInt): List<FfiJsonEntry>
     
+    /**
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
+     */
     fun `jsonFindSync`(`space`: kotlin.String, `queryJson`: kotlin.String, `afterId`: kotlin.String?, `limit`: kotlin.UInt): List<FfiJsonEntry>
     
     suspend fun `jsonGet`(`space`: kotlin.String, `id`: kotlin.String): FfiJsonEntry?
     
     fun `jsonGetSync`(`space`: kotlin.String, `id`: kotlin.String): FfiJsonEntry?
     
+    suspend fun `jsonListIndexes`(`space`: kotlin.String): List<FfiJsonIndexInfo>
+    
+    fun `jsonListIndexesSync`(`space`: kotlin.String): List<FfiJsonIndexInfo>
+    
+    /**
+     * Stores the document `value_json`; the version of the write.
+     */
     suspend fun `jsonPut`(`space`: kotlin.String, `id`: kotlin.String, `valueJson`: kotlin.String): kotlin.ULong
     
+    /**
+     * Stores the document `value_json`; the version of the write.
+     */
     fun `jsonPutSync`(`space`: kotlin.String, `id`: kotlin.String, `valueJson`: kotlin.String): kotlin.ULong
     
     suspend fun `kvDelete`(`namespace`: kotlin.String, `key`: kotlin.ByteArray): kotlin.Boolean
@@ -1832,31 +2413,100 @@ public interface LiliaDatabaseInterface {
     
     fun `kvGetSync`(`namespace`: kotlin.String, `key`: kotlin.ByteArray): FfiKvEntry?
     
+    /**
+     * The records of `namespace` after `after`, at most `limit` (every one when 0).
+     */
     suspend fun `kvScan`(`namespace`: kotlin.String, `after`: kotlin.ByteArray?, `limit`: kotlin.UInt): List<FfiKvEntry>
     
+    /**
+     * The records of `namespace` after `after`, at most `limit` (every one when 0).
+     */
     fun `kvScanSync`(`namespace`: kotlin.String, `after`: kotlin.ByteArray?, `limit`: kotlin.UInt): List<FfiKvEntry>
     
+    /**
+     * Stores `value` under `key`; the version of the write.
+     */
     suspend fun `kvSet`(`namespace`: kotlin.String, `key`: kotlin.ByteArray, `value`: kotlin.ByteArray, `expiresAtMs`: kotlin.Long?): kotlin.ULong
     
+    /**
+     * Stores `value` under `key`; the version of the write.
+     */
     fun `kvSetSync`(`namespace`: kotlin.String, `key`: kotlin.ByteArray, `value`: kotlin.ByteArray, `expiresAtMs`: kotlin.Long?): kotlin.ULong
     
     /**
-     * Mobile lifecycle helper: flushes the WAL and commits any pending pages before
-     * the mobile OS suspends the app process.
+     * Verifies the ledger, fast; true without a ledger.
      */
-    fun `prepareForBackground`()
-    
     suspend fun `quickCheck`(): kotlin.Boolean
     
+    /**
+     * Verifies the ledger, fast; true without a ledger.
+     */
     fun `quickCheckSync`(): kotlin.Boolean
     
+    /**
+     * A read-only SQL query (`DataFusion` dialect) with `$1`, `$2`... bound to the elements of
+     * `params_json` (a JSON array); each row comes as a JSON array.
+     */
     suspend fun `sqlQuery`(`sql`: kotlin.String, `paramsJson`: kotlin.String?): FfiSqlQueryResult
     
+    /**
+     * A read-only SQL query (`DataFusion` dialect) with `$1`, `$2`... bound to the elements of
+     * `params_json` (a JSON array); each row comes as a JSON array.
+     */
     fun `sqlQuerySync`(`sql`: kotlin.String, `paramsJson`: kotlin.String?): FfiSqlQueryResult
+    
+    suspend fun `tsAppendPoints`(`seriesId`: kotlin.String, `points`: List<FfiTimeSeriesPoint>)
+    
+    fun `tsAppendPointsSync`(`seriesId`: kotlin.String, `points`: List<FfiTimeSeriesPoint>)
+    
+    /**
+     * Applies every series' lifecycle policy as of now.
+     */
+    suspend fun `tsApplyRetention`(): FfiTimeSeriesRetentionStats
+    
+    /**
+     * Applies every series' lifecycle policy as of now.
+     */
+    fun `tsApplyRetentionSync`(): FfiTimeSeriesRetentionStats
+    
+    suspend fun `tsDeletePolicy`(`seriesPattern`: kotlin.String): kotlin.Boolean
+    
+    fun `tsDeletePolicySync`(`seriesPattern`: kotlin.String): kotlin.Boolean
+    
+    suspend fun `tsGetPolicy`(`seriesPattern`: kotlin.String): FfiTimeSeriesLifecyclePolicy?
+    
+    fun `tsGetPolicySync`(`seriesPattern`: kotlin.String): FfiTimeSeriesLifecyclePolicy?
+    
+    suspend fun `tsListPolicies`(): List<FfiTimeSeriesLifecyclePolicy>
+    
+    fun `tsListPoliciesSync`(): List<FfiTimeSeriesLifecyclePolicy>
+    
+    suspend fun `tsQueryAuto`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long, `maxPoints`: kotlin.UInt): List<FfiTimeSeriesPoint>
+    
+    fun `tsQueryAutoSync`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long, `maxPoints`: kotlin.UInt): List<FfiTimeSeriesPoint>
+    
+    suspend fun `tsQueryRange`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long): List<FfiTimeSeriesPoint>
+    
+    fun `tsQueryRangeSync`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long): List<FfiTimeSeriesPoint>
+    
+    suspend fun `tsQueryRangeWithResolution`(`seriesId`: kotlin.String, `resolutionMs`: kotlin.Long, `startTime`: kotlin.Long, `endTime`: kotlin.Long): List<FfiTimeSeriesPoint>
+    
+    fun `tsQueryRangeWithResolutionSync`(`seriesId`: kotlin.String, `resolutionMs`: kotlin.Long, `startTime`: kotlin.Long, `endTime`: kotlin.Long): List<FfiTimeSeriesPoint>
+    
+    suspend fun `tsQueryStats`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long): FfiTimeSeriesStats?
+    
+    fun `tsQueryStatsSync`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long): FfiTimeSeriesStats?
+    
+    suspend fun `tsSetPolicy`(`policy`: FfiTimeSeriesLifecyclePolicy)
+    
+    fun `tsSetPolicySync`(`policy`: FfiTimeSeriesLifecyclePolicy)
     
     companion object
 }
 
+/**
+ * An open database. Calls share it; `close` closes it once they return.
+ */
 open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
 
     constructor(pointer: Pointer) {
@@ -1939,40 +2589,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
-    @Throws(LiliaFfiException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `backup`(`destinationPath`: kotlin.String) {
-        return uniffiRustCallAsync(
-        callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_backup(
-                thisPtr,
-                FfiConverterString.lower(`destinationPath`),
-            )
-        },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_void(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_void(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_void(future) },
-        // lift function
-        { Unit },
-        
-        // Error FFI converter
-        LiliaFfiException.ErrorHandler,
-    )
-    }
-
-    
-    @Throws(LiliaFfiException::class)override fun `backupSync`(`destinationPath`: kotlin.String)
-        = 
-    callWithPointer {
-    uniffiRustCallWithError(LiliaFfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_backup_sync(
-        it, FfiConverterString.lower(`destinationPath`),_status)
-}
-    }
-    
-    
-
-    
+    /**
+     * Writes the memtable to a sorted run: a point to call before the app is suspended.
+     */
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `checkpoint`() {
@@ -1995,6 +2614,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
+    /**
+     * Writes the memtable to a sorted run: a point to call before the app is suspended.
+     */
     @Throws(LiliaFfiException::class)override fun `checkpointSync`()
         = 
     callWithPointer {
@@ -2007,6 +2629,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
 
     
+    /**
+     * As [`LiliaDatabase::close_sync`], on tokio's blocking pool.
+     */
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `close`(`timeoutMs`: kotlin.ULong) {
@@ -2029,6 +2654,10 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
+    /**
+     * Closes the database once the calls running on it return, waiting at most `timeout_ms`.
+     * Later calls fail with `Closed`; closing twice does nothing.
+     */
     @Throws(LiliaFfiException::class)override fun `closeSync`(`timeoutMs`: kotlin.ULong)
         = 
     callWithPointer {
@@ -2077,6 +2706,40 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `ftsFuzzySearch`(`collection`: kotlin.String, `query`: kotlin.String, `maxDistance`: kotlin.UByte, `limit`: kotlin.UInt) : List<FfiFtsFuzzyHit> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_fuzzy_search(
+                thisPtr,
+                FfiConverterString.lower(`collection`),FfiConverterString.lower(`query`),FfiConverterUByte.lower(`maxDistance`),FfiConverterUInt.lower(`limit`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiFtsFuzzyHit.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `ftsFuzzySearchSync`(`collection`: kotlin.String, `query`: kotlin.String, `maxDistance`: kotlin.UByte, `limit`: kotlin.UInt): List<FfiFtsFuzzyHit> {
+            return FfiConverterSequenceTypeFfiFtsFuzzyHit.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_fuzzy_search_sync(
+        it, FfiConverterString.lower(`collection`),FfiConverterString.lower(`query`),FfiConverterUByte.lower(`maxDistance`),FfiConverterUInt.lower(`limit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `ftsIndex`(`collection`: kotlin.String, `docId`: kotlin.String, `content`: kotlin.String) {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
@@ -2111,6 +2774,74 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `ftsLoadDictionary`(`collection`: kotlin.String, `words`: List<kotlin.String>) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_load_dictionary(
+                thisPtr,
+                FfiConverterString.lower(`collection`),FfiConverterSequenceString.lower(`words`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `ftsLoadDictionarySync`(`collection`: kotlin.String, `words`: List<kotlin.String>)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_load_dictionary_sync(
+        it, FfiConverterString.lower(`collection`),FfiConverterSequenceString.lower(`words`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `ftsPhoneticSearch`(`collection`: kotlin.String, `query`: kotlin.String, `limit`: kotlin.UInt) : List<FfiFtsPhoneticHit> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_phonetic_search(
+                thisPtr,
+                FfiConverterString.lower(`collection`),FfiConverterString.lower(`query`),FfiConverterUInt.lower(`limit`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiFtsPhoneticHit.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `ftsPhoneticSearchSync`(`collection`: kotlin.String, `query`: kotlin.String, `limit`: kotlin.UInt): List<FfiFtsPhoneticHit> {
+            return FfiConverterSequenceTypeFfiFtsPhoneticHit.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_phonetic_search_sync(
+        it, FfiConverterString.lower(`collection`),FfiConverterString.lower(`query`),FfiConverterUInt.lower(`limit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `ftsSearch`(`collection`: kotlin.String, `query`: kotlin.String, `limit`: kotlin.UInt) : List<FfiFtsHit> {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
@@ -2136,6 +2867,284 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     uniffiRustCallWithError(LiliaFfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_search_sync(
         it, FfiConverterString.lower(`collection`),FfiConverterString.lower(`query`),FfiConverterUInt.lower(`limit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `ftsSuggest`(`collection`: kotlin.String, `prefix`: kotlin.String, `maxDistance`: kotlin.UByte, `limit`: kotlin.UInt) : List<FfiFtsSuggestion> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_suggest(
+                thisPtr,
+                FfiConverterString.lower(`collection`),FfiConverterString.lower(`prefix`),FfiConverterUByte.lower(`maxDistance`),FfiConverterUInt.lower(`limit`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiFtsSuggestion.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `ftsSuggestSync`(`collection`: kotlin.String, `prefix`: kotlin.String, `maxDistance`: kotlin.UByte, `limit`: kotlin.UInt): List<FfiFtsSuggestion> {
+            return FfiConverterSequenceTypeFfiFtsSuggestion.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_fts_suggest_sync(
+        it, FfiConverterString.lower(`collection`),FfiConverterString.lower(`prefix`),FfiConverterUByte.lower(`maxDistance`),FfiConverterUInt.lower(`limit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `geoAddFence`(`id`: kotlin.String, `name`: kotlin.String, `category`: kotlin.String, `polygonJson`: kotlin.String, `metadata`: kotlin.String?) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_add_fence(
+                thisPtr,
+                FfiConverterString.lower(`id`),FfiConverterString.lower(`name`),FfiConverterString.lower(`category`),FfiConverterString.lower(`polygonJson`),FfiConverterOptionalString.lower(`metadata`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `geoAddFenceSync`(`id`: kotlin.String, `name`: kotlin.String, `category`: kotlin.String, `polygonJson`: kotlin.String, `metadata`: kotlin.String?)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_add_fence_sync(
+        it, FfiConverterString.lower(`id`),FfiConverterString.lower(`name`),FfiConverterString.lower(`category`),FfiConverterString.lower(`polygonJson`),FfiConverterOptionalString.lower(`metadata`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `geoContainsPoint`(`polygonJson`: kotlin.String, `lon`: kotlin.Double, `lat`: kotlin.Double) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_contains_point(
+                thisPtr,
+                FfiConverterString.lower(`polygonJson`),FfiConverterDouble.lower(`lon`),FfiConverterDouble.lower(`lat`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `geoContainsPointSync`(`polygonJson`: kotlin.String, `lon`: kotlin.Double, `lat`: kotlin.Double): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_contains_point_sync(
+        it, FfiConverterString.lower(`polygonJson`),FfiConverterDouble.lower(`lon`),FfiConverterDouble.lower(`lat`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `geoFindFencesForPoint`(`lon`: kotlin.Double, `lat`: kotlin.Double) : List<FfiGeofenceMatch> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_find_fences_for_point(
+                thisPtr,
+                FfiConverterDouble.lower(`lon`),FfiConverterDouble.lower(`lat`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiGeofenceMatch.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `geoFindFencesForPointSync`(`lon`: kotlin.Double, `lat`: kotlin.Double): List<FfiGeofenceMatch> {
+            return FfiConverterSequenceTypeFfiGeofenceMatch.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_find_fences_for_point_sync(
+        it, FfiConverterDouble.lower(`lon`),FfiConverterDouble.lower(`lat`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `geoGetTrackPoints`(`trackId`: kotlin.String, `startTime`: kotlin.Long?, `endTime`: kotlin.Long?) : List<FfiGpsPoint> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_get_track_points(
+                thisPtr,
+                FfiConverterString.lower(`trackId`),FfiConverterOptionalLong.lower(`startTime`),FfiConverterOptionalLong.lower(`endTime`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiGpsPoint.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `geoGetTrackPointsSync`(`trackId`: kotlin.String, `startTime`: kotlin.Long?, `endTime`: kotlin.Long?): List<FfiGpsPoint> {
+            return FfiConverterSequenceTypeFfiGpsPoint.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_get_track_points_sync(
+        it, FfiConverterString.lower(`trackId`),FfiConverterOptionalLong.lower(`startTime`),FfiConverterOptionalLong.lower(`endTime`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Records the points of track `track_id`; the fences they enter.
+     */
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `geoRecordGpsPoints`(`trackId`: kotlin.String, `points`: List<FfiGpsPoint>) : List<FfiGeofenceMatch> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_record_gps_points(
+                thisPtr,
+                FfiConverterString.lower(`trackId`),FfiConverterSequenceTypeFfiGpsPoint.lower(`points`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiGeofenceMatch.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Records the points of track `track_id`; the fences they enter.
+     */
+    @Throws(LiliaFfiException::class)override fun `geoRecordGpsPointsSync`(`trackId`: kotlin.String, `points`: List<FfiGpsPoint>): List<FfiGeofenceMatch> {
+            return FfiConverterSequenceTypeFfiGeofenceMatch.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_record_gps_points_sync(
+        it, FfiConverterString.lower(`trackId`),FfiConverterSequenceTypeFfiGpsPoint.lower(`points`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `geoRemoveFence`(`id`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_remove_fence(
+                thisPtr,
+                FfiConverterString.lower(`id`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `geoRemoveFenceSync`(`id`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_remove_fence_sync(
+        it, FfiConverterString.lower(`id`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `geoTrackDistance`(`trackId`: kotlin.String) : kotlin.Double {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_track_distance(
+                thisPtr,
+                FfiConverterString.lower(`trackId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_f64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_f64(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_f64(future) },
+        // lift function
+        { FfiConverterDouble.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `geoTrackDistanceSync`(`trackId`: kotlin.String): kotlin.Double {
+            return FfiConverterDouble.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_geo_track_distance_sync(
+        it, FfiConverterString.lower(`trackId`),_status)
 }
     }
     )
@@ -2381,6 +3390,88 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
 
     
+    /**
+     * Reads every stored entry, verifying each block's checksum, and verifies the ledger.
+     */
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `integrityCheck`() : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_integrity_check(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Reads every stored entry, verifying each block's checksum, and verifies the ledger.
+     */
+    @Throws(LiliaFfiException::class)override fun `integrityCheckSync`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_integrity_check_sync(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Creates index `name` of `space` over `path` (`$.field`, or an expression), backfilled
+     * from the stored documents; with `filter`, a partial index of the documents it selects.
+     */
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `jsonCreateIndex`(`space`: kotlin.String, `name`: kotlin.String, `path`: kotlin.String, `filter`: kotlin.String?) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_json_create_index(
+                thisPtr,
+                FfiConverterString.lower(`space`),FfiConverterString.lower(`name`),FfiConverterString.lower(`path`),FfiConverterOptionalString.lower(`filter`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Creates index `name` of `space` over `path` (`$.field`, or an expression), backfilled
+     * from the stored documents; with `filter`, a partial index of the documents it selects.
+     */
+    @Throws(LiliaFfiException::class)override fun `jsonCreateIndexSync`(`space`: kotlin.String, `name`: kotlin.String, `path`: kotlin.String, `filter`: kotlin.String?)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_json_create_index_sync(
+        it, FfiConverterString.lower(`space`),FfiConverterString.lower(`name`),FfiConverterString.lower(`path`),FfiConverterOptionalString.lower(`filter`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `jsonDelete`(`space`: kotlin.String, `id`: kotlin.String) : kotlin.Boolean {
@@ -2417,6 +3508,45 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `jsonDropIndex`(`space`: kotlin.String, `name`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_json_drop_index(
+                thisPtr,
+                FfiConverterString.lower(`space`),FfiConverterString.lower(`name`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `jsonDropIndexSync`(`space`: kotlin.String, `name`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_json_drop_index_sync(
+        it, FfiConverterString.lower(`space`),FfiConverterString.lower(`name`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
+     */
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `jsonFind`(`space`: kotlin.String, `queryJson`: kotlin.String, `afterId`: kotlin.String?, `limit`: kotlin.UInt) : List<FfiJsonEntry> {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
@@ -2436,6 +3566,11 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
+    /**
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
+     */
     @Throws(LiliaFfiException::class)override fun `jsonFindSync`(`space`: kotlin.String, `queryJson`: kotlin.String, `afterId`: kotlin.String?, `limit`: kotlin.UInt): List<FfiJsonEntry> {
             return FfiConverterSequenceTypeFfiJsonEntry.lift(
     callWithPointer {
@@ -2485,6 +3620,43 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `jsonListIndexes`(`space`: kotlin.String) : List<FfiJsonIndexInfo> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_json_list_indexes(
+                thisPtr,
+                FfiConverterString.lower(`space`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiJsonIndexInfo.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `jsonListIndexesSync`(`space`: kotlin.String): List<FfiJsonIndexInfo> {
+            return FfiConverterSequenceTypeFfiJsonIndexInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_json_list_indexes_sync(
+        it, FfiConverterString.lower(`space`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Stores the document `value_json`; the version of the write.
+     */
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `jsonPut`(`space`: kotlin.String, `id`: kotlin.String, `valueJson`: kotlin.String) : kotlin.ULong {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
@@ -2504,6 +3676,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
+    /**
+     * Stores the document `value_json`; the version of the write.
+     */
     @Throws(LiliaFfiException::class)override fun `jsonPutSync`(`space`: kotlin.String, `id`: kotlin.String, `valueJson`: kotlin.String): kotlin.ULong {
             return FfiConverterULong.lift(
     callWithPointer {
@@ -2585,6 +3760,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
 
     
+    /**
+     * The records of `namespace` after `after`, at most `limit` (every one when 0).
+     */
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `kvScan`(`namespace`: kotlin.String, `after`: kotlin.ByteArray?, `limit`: kotlin.UInt) : List<FfiKvEntry> {
@@ -2606,6 +3784,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
+    /**
+     * The records of `namespace` after `after`, at most `limit` (every one when 0).
+     */
     @Throws(LiliaFfiException::class)override fun `kvScanSync`(`namespace`: kotlin.String, `after`: kotlin.ByteArray?, `limit`: kotlin.UInt): List<FfiKvEntry> {
             return FfiConverterSequenceTypeFfiKvEntry.lift(
     callWithPointer {
@@ -2619,6 +3800,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
 
     
+    /**
+     * Stores `value` under `key`; the version of the write.
+     */
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `kvSet`(`namespace`: kotlin.String, `key`: kotlin.ByteArray, `value`: kotlin.ByteArray, `expiresAtMs`: kotlin.Long?) : kotlin.ULong {
@@ -2640,6 +3824,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
+    /**
+     * Stores `value` under `key`; the version of the write.
+     */
     @Throws(LiliaFfiException::class)override fun `kvSetSync`(`namespace`: kotlin.String, `key`: kotlin.ByteArray, `value`: kotlin.ByteArray, `expiresAtMs`: kotlin.Long?): kotlin.ULong {
             return FfiConverterULong.lift(
     callWithPointer {
@@ -2654,21 +3841,8 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
 
     
     /**
-     * Mobile lifecycle helper: flushes the WAL and commits any pending pages before
-     * the mobile OS suspends the app process.
+     * Verifies the ledger, fast; true without a ledger.
      */
-    @Throws(LiliaFfiException::class)override fun `prepareForBackground`()
-        = 
-    callWithPointer {
-    uniffiRustCallWithError(LiliaFfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_prepare_for_background(
-        it, _status)
-}
-    }
-    
-    
-
-    
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `quickCheck`() : kotlin.Boolean {
@@ -2690,6 +3864,9 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
+    /**
+     * Verifies the ledger, fast; true without a ledger.
+     */
     @Throws(LiliaFfiException::class)override fun `quickCheckSync`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2703,6 +3880,10 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
 
     
+    /**
+     * A read-only SQL query (`DataFusion` dialect) with `$1`, `$2`... bound to the elements of
+     * `params_json` (a JSON array); each row comes as a JSON array.
+     */
     @Throws(LiliaFfiException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `sqlQuery`(`sql`: kotlin.String, `paramsJson`: kotlin.String?) : FfiSqlQueryResult {
@@ -2724,6 +3905,10 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     }
 
     
+    /**
+     * A read-only SQL query (`DataFusion` dialect) with `$1`, `$2`... bound to the elements of
+     * `params_json` (a JSON array); each row comes as a JSON array.
+     */
     @Throws(LiliaFfiException::class)override fun `sqlQuerySync`(`sql`: kotlin.String, `paramsJson`: kotlin.String?): FfiSqlQueryResult {
             return FfiConverterTypeFfiSqlQueryResult.lift(
     callWithPointer {
@@ -2737,35 +3922,364 @@ open class LiliaDatabase: Disposable, AutoCloseable, LiliaDatabaseInterface {
     
 
     
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsAppendPoints`(`seriesId`: kotlin.String, `points`: List<FfiTimeSeriesPoint>) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_append_points(
+                thisPtr,
+                FfiConverterString.lower(`seriesId`),FfiConverterSequenceTypeFfiTimeSeriesPoint.lower(`points`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsAppendPointsSync`(`seriesId`: kotlin.String, `points`: List<FfiTimeSeriesPoint>)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_append_points_sync(
+        it, FfiConverterString.lower(`seriesId`),FfiConverterSequenceTypeFfiTimeSeriesPoint.lower(`points`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Applies every series' lifecycle policy as of now.
+     */
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsApplyRetention`() : FfiTimeSeriesRetentionStats {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_apply_retention(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeFfiTimeSeriesRetentionStats.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Applies every series' lifecycle policy as of now.
+     */
+    @Throws(LiliaFfiException::class)override fun `tsApplyRetentionSync`(): FfiTimeSeriesRetentionStats {
+            return FfiConverterTypeFfiTimeSeriesRetentionStats.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_apply_retention_sync(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsDeletePolicy`(`seriesPattern`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_delete_policy(
+                thisPtr,
+                FfiConverterString.lower(`seriesPattern`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsDeletePolicySync`(`seriesPattern`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_delete_policy_sync(
+        it, FfiConverterString.lower(`seriesPattern`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsGetPolicy`(`seriesPattern`: kotlin.String) : FfiTimeSeriesLifecyclePolicy? {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_get_policy(
+                thisPtr,
+                FfiConverterString.lower(`seriesPattern`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeFfiTimeSeriesLifecyclePolicy.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsGetPolicySync`(`seriesPattern`: kotlin.String): FfiTimeSeriesLifecyclePolicy? {
+            return FfiConverterOptionalTypeFfiTimeSeriesLifecyclePolicy.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_get_policy_sync(
+        it, FfiConverterString.lower(`seriesPattern`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsListPolicies`() : List<FfiTimeSeriesLifecyclePolicy> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_list_policies(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiTimeSeriesLifecyclePolicy.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsListPoliciesSync`(): List<FfiTimeSeriesLifecyclePolicy> {
+            return FfiConverterSequenceTypeFfiTimeSeriesLifecyclePolicy.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_list_policies_sync(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsQueryAuto`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long, `maxPoints`: kotlin.UInt) : List<FfiTimeSeriesPoint> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_auto(
+                thisPtr,
+                FfiConverterString.lower(`seriesId`),FfiConverterLong.lower(`startTime`),FfiConverterLong.lower(`endTime`),FfiConverterUInt.lower(`maxPoints`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsQueryAutoSync`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long, `maxPoints`: kotlin.UInt): List<FfiTimeSeriesPoint> {
+            return FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_auto_sync(
+        it, FfiConverterString.lower(`seriesId`),FfiConverterLong.lower(`startTime`),FfiConverterLong.lower(`endTime`),FfiConverterUInt.lower(`maxPoints`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsQueryRange`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long) : List<FfiTimeSeriesPoint> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range(
+                thisPtr,
+                FfiConverterString.lower(`seriesId`),FfiConverterLong.lower(`startTime`),FfiConverterLong.lower(`endTime`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsQueryRangeSync`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long): List<FfiTimeSeriesPoint> {
+            return FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_sync(
+        it, FfiConverterString.lower(`seriesId`),FfiConverterLong.lower(`startTime`),FfiConverterLong.lower(`endTime`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsQueryRangeWithResolution`(`seriesId`: kotlin.String, `resolutionMs`: kotlin.Long, `startTime`: kotlin.Long, `endTime`: kotlin.Long) : List<FfiTimeSeriesPoint> {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_with_resolution(
+                thisPtr,
+                FfiConverterString.lower(`seriesId`),FfiConverterLong.lower(`resolutionMs`),FfiConverterLong.lower(`startTime`),FfiConverterLong.lower(`endTime`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsQueryRangeWithResolutionSync`(`seriesId`: kotlin.String, `resolutionMs`: kotlin.Long, `startTime`: kotlin.Long, `endTime`: kotlin.Long): List<FfiTimeSeriesPoint> {
+            return FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_with_resolution_sync(
+        it, FfiConverterString.lower(`seriesId`),FfiConverterLong.lower(`resolutionMs`),FfiConverterLong.lower(`startTime`),FfiConverterLong.lower(`endTime`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsQueryStats`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long) : FfiTimeSeriesStats? {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_stats(
+                thisPtr,
+                FfiConverterString.lower(`seriesId`),FfiConverterLong.lower(`startTime`),FfiConverterLong.lower(`endTime`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeFfiTimeSeriesStats.lift(it) },
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsQueryStatsSync`(`seriesId`: kotlin.String, `startTime`: kotlin.Long, `endTime`: kotlin.Long): FfiTimeSeriesStats? {
+            return FfiConverterOptionalTypeFfiTimeSeriesStats.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_stats_sync(
+        it, FfiConverterString.lower(`seriesId`),FfiConverterLong.lower(`startTime`),FfiConverterLong.lower(`endTime`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LiliaFfiException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `tsSetPolicy`(`policy`: FfiTimeSeriesLifecyclePolicy) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_set_policy(
+                thisPtr,
+                FfiConverterTypeFfiTimeSeriesLifecyclePolicy.lower(`policy`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lilia_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        LiliaFfiException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(LiliaFfiException::class)override fun `tsSetPolicySync`(`policy`: FfiTimeSeriesLifecyclePolicy)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_method_liliadatabase_ts_set_policy_sync(
+        it, FfiConverterTypeFfiTimeSeriesLifecyclePolicy.lower(`policy`),_status)
+}
+    }
+    
+    
+
+    
 
     
     companion object {
         
     /**
-     * Open a database with a specific resource profile and optional encryption key.
-     *
-     * When `encryption_key` (32 bytes / 256 bits) is provided, transparent authenticated
-     * AES-256-GCM encryption is activated on the database file.
+     * Opens (or creates) the database of directory `path`.
      */
-    @Throws(LiliaFfiException::class) fun `open`(`path`: kotlin.String, `profile`: FfiResourceProfile, `encryptionKey`: kotlin.ByteArray?): LiliaDatabase {
+    @Throws(LiliaFfiException::class) fun `open`(`path`: kotlin.String, `options`: FfiOpenOptions): LiliaDatabase {
             return FfiConverterTypeLiliaDatabase.lift(
     uniffiRustCallWithError(LiliaFfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_constructor_liliadatabase_open(
-        FfiConverterString.lower(`path`),FfiConverterTypeFfiResourceProfile.lower(`profile`),FfiConverterOptionalByteArray.lower(`encryptionKey`),_status)
-}
-    )
-    }
-    
-
-        
-    /**
-     * Open with a passphrase using PBKDF2-HMAC-SHA256 key derivation.
-     */
-    @Throws(LiliaFfiException::class) fun `openWithPassphrase`(`path`: kotlin.String, `profile`: FfiResourceProfile, `passphrase`: kotlin.String): LiliaDatabase {
-            return FfiConverterTypeLiliaDatabase.lift(
-    uniffiRustCallWithError(LiliaFfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_constructor_liliadatabase_open_with_passphrase(
-        FfiConverterString.lower(`path`),FfiConverterTypeFfiResourceProfile.lower(`profile`),FfiConverterString.lower(`passphrase`),_status)
+        FfiConverterString.lower(`path`),FfiConverterTypeFfiOpenOptions.lower(`options`),_status)
 }
     )
     }
@@ -2806,6 +4320,54 @@ public object FfiConverterTypeLiliaDatabase: FfiConverter<LiliaDatabase, Pointer
 
 
 
+data class FfiFtsFuzzyHit (
+    var `collection`: kotlin.String, 
+    var `docId`: kotlin.String, 
+    var `snippet`: kotlin.String, 
+    var `rank`: kotlin.Double, 
+    var `editDistance`: kotlin.UByte, 
+    var `matchedTerms`: List<kotlin.String>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiFtsFuzzyHit: FfiConverterRustBuffer<FfiFtsFuzzyHit> {
+    override fun read(buf: ByteBuffer): FfiFtsFuzzyHit {
+        return FfiFtsFuzzyHit(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterUByte.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiFtsFuzzyHit) = (
+            FfiConverterString.allocationSize(value.`collection`) +
+            FfiConverterString.allocationSize(value.`docId`) +
+            FfiConverterString.allocationSize(value.`snippet`) +
+            FfiConverterDouble.allocationSize(value.`rank`) +
+            FfiConverterUByte.allocationSize(value.`editDistance`) +
+            FfiConverterSequenceString.allocationSize(value.`matchedTerms`)
+    )
+
+    override fun write(value: FfiFtsFuzzyHit, buf: ByteBuffer) {
+            FfiConverterString.write(value.`collection`, buf)
+            FfiConverterString.write(value.`docId`, buf)
+            FfiConverterString.write(value.`snippet`, buf)
+            FfiConverterDouble.write(value.`rank`, buf)
+            FfiConverterUByte.write(value.`editDistance`, buf)
+            FfiConverterSequenceString.write(value.`matchedTerms`, buf)
+    }
+}
+
+
+
 data class FfiFtsHit (
     var `collection`: kotlin.String, 
     var `docId`: kotlin.String, 
@@ -2841,6 +4403,182 @@ public object FfiConverterTypeFfiFtsHit: FfiConverterRustBuffer<FfiFtsHit> {
             FfiConverterString.write(value.`docId`, buf)
             FfiConverterString.write(value.`snippet`, buf)
             FfiConverterDouble.write(value.`rank`, buf)
+    }
+}
+
+
+
+data class FfiFtsPhoneticHit (
+    var `collection`: kotlin.String, 
+    var `docId`: kotlin.String, 
+    var `snippet`: kotlin.String, 
+    var `rank`: kotlin.Double, 
+    var `matchedTerms`: List<kotlin.String>, 
+    var `phoneticCodes`: List<kotlin.String>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiFtsPhoneticHit: FfiConverterRustBuffer<FfiFtsPhoneticHit> {
+    override fun read(buf: ByteBuffer): FfiFtsPhoneticHit {
+        return FfiFtsPhoneticHit(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiFtsPhoneticHit) = (
+            FfiConverterString.allocationSize(value.`collection`) +
+            FfiConverterString.allocationSize(value.`docId`) +
+            FfiConverterString.allocationSize(value.`snippet`) +
+            FfiConverterDouble.allocationSize(value.`rank`) +
+            FfiConverterSequenceString.allocationSize(value.`matchedTerms`) +
+            FfiConverterSequenceString.allocationSize(value.`phoneticCodes`)
+    )
+
+    override fun write(value: FfiFtsPhoneticHit, buf: ByteBuffer) {
+            FfiConverterString.write(value.`collection`, buf)
+            FfiConverterString.write(value.`docId`, buf)
+            FfiConverterString.write(value.`snippet`, buf)
+            FfiConverterDouble.write(value.`rank`, buf)
+            FfiConverterSequenceString.write(value.`matchedTerms`, buf)
+            FfiConverterSequenceString.write(value.`phoneticCodes`, buf)
+    }
+}
+
+
+
+data class FfiFtsSuggestion (
+    var `term`: kotlin.String, 
+    var `distance`: kotlin.UByte, 
+    var `docCount`: kotlin.UInt, 
+    var `exactPrefix`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiFtsSuggestion: FfiConverterRustBuffer<FfiFtsSuggestion> {
+    override fun read(buf: ByteBuffer): FfiFtsSuggestion {
+        return FfiFtsSuggestion(
+            FfiConverterString.read(buf),
+            FfiConverterUByte.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiFtsSuggestion) = (
+            FfiConverterString.allocationSize(value.`term`) +
+            FfiConverterUByte.allocationSize(value.`distance`) +
+            FfiConverterUInt.allocationSize(value.`docCount`) +
+            FfiConverterBoolean.allocationSize(value.`exactPrefix`)
+    )
+
+    override fun write(value: FfiFtsSuggestion, buf: ByteBuffer) {
+            FfiConverterString.write(value.`term`, buf)
+            FfiConverterUByte.write(value.`distance`, buf)
+            FfiConverterUInt.write(value.`docCount`, buf)
+            FfiConverterBoolean.write(value.`exactPrefix`, buf)
+    }
+}
+
+
+
+data class FfiGeofenceMatch (
+    var `id`: kotlin.String, 
+    var `name`: kotlin.String, 
+    var `category`: kotlin.String, 
+    var `metadata`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiGeofenceMatch: FfiConverterRustBuffer<FfiGeofenceMatch> {
+    override fun read(buf: ByteBuffer): FfiGeofenceMatch {
+        return FfiGeofenceMatch(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiGeofenceMatch) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`category`) +
+            FfiConverterOptionalString.allocationSize(value.`metadata`)
+    )
+
+    override fun write(value: FfiGeofenceMatch, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`category`, buf)
+            FfiConverterOptionalString.write(value.`metadata`, buf)
+    }
+}
+
+
+
+data class FfiGpsPoint (
+    var `timestamp`: kotlin.Long, 
+    var `latitude`: kotlin.Double, 
+    var `longitude`: kotlin.Double, 
+    var `altitude`: kotlin.Double?, 
+    var `speed`: kotlin.Double?, 
+    var `accuracy`: kotlin.Double?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiGpsPoint: FfiConverterRustBuffer<FfiGpsPoint> {
+    override fun read(buf: ByteBuffer): FfiGpsPoint {
+        return FfiGpsPoint(
+            FfiConverterLong.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiGpsPoint) = (
+            FfiConverterLong.allocationSize(value.`timestamp`) +
+            FfiConverterDouble.allocationSize(value.`latitude`) +
+            FfiConverterDouble.allocationSize(value.`longitude`) +
+            FfiConverterOptionalDouble.allocationSize(value.`altitude`) +
+            FfiConverterOptionalDouble.allocationSize(value.`speed`) +
+            FfiConverterOptionalDouble.allocationSize(value.`accuracy`)
+    )
+
+    override fun write(value: FfiGpsPoint, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`timestamp`, buf)
+            FfiConverterDouble.write(value.`latitude`, buf)
+            FfiConverterDouble.write(value.`longitude`, buf)
+            FfiConverterOptionalDouble.write(value.`altitude`, buf)
+            FfiConverterOptionalDouble.write(value.`speed`, buf)
+            FfiConverterOptionalDouble.write(value.`accuracy`, buf)
     }
 }
 
@@ -2966,6 +4704,45 @@ public object FfiConverterTypeFfiJsonEntry: FfiConverterRustBuffer<FfiJsonEntry>
 
 
 
+/**
+ * A secondary index of a JSON space.
+ */
+data class FfiJsonIndexInfo (
+    var `space`: kotlin.String, 
+    var `indexName`: kotlin.String, 
+    var `jsonPath`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiJsonIndexInfo: FfiConverterRustBuffer<FfiJsonIndexInfo> {
+    override fun read(buf: ByteBuffer): FfiJsonIndexInfo {
+        return FfiJsonIndexInfo(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiJsonIndexInfo) = (
+            FfiConverterString.allocationSize(value.`space`) +
+            FfiConverterString.allocationSize(value.`indexName`) +
+            FfiConverterString.allocationSize(value.`jsonPath`)
+    )
+
+    override fun write(value: FfiJsonIndexInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`space`, buf)
+            FfiConverterString.write(value.`indexName`, buf)
+            FfiConverterString.write(value.`jsonPath`, buf)
+    }
+}
+
+
+
 data class FfiKvEntry (
     var `namespace`: kotlin.String, 
     var `key`: kotlin.ByteArray, 
@@ -3010,6 +4787,63 @@ public object FfiConverterTypeFfiKvEntry: FfiConverterRustBuffer<FfiKvEntry> {
 
 
 
+/**
+ * How a database opens.
+ */
+data class FfiOpenOptions (
+    var `profile`: FfiResourceProfile, 
+    var `durability`: FfiDurability, 
+    /**
+     * Keep a tamper-evident ledger of every record write; a database that keeps one must
+     * always be opened with it.
+     */
+    var `ledger`: kotlin.Boolean = false, 
+    /**
+     * How long old versions stay readable, in milliseconds; a week when absent, 0 keeps none.
+     */
+    var `historyRetentionMs`: kotlin.ULong? = null, 
+    /**
+     * Commits that can be undone; none by default.
+     */
+    var `undoDepth`: kotlin.UInt = 0u
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiOpenOptions: FfiConverterRustBuffer<FfiOpenOptions> {
+    override fun read(buf: ByteBuffer): FfiOpenOptions {
+        return FfiOpenOptions(
+            FfiConverterTypeFfiResourceProfile.read(buf),
+            FfiConverterTypeFfiDurability.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiOpenOptions) = (
+            FfiConverterTypeFfiResourceProfile.allocationSize(value.`profile`) +
+            FfiConverterTypeFfiDurability.allocationSize(value.`durability`) +
+            FfiConverterBoolean.allocationSize(value.`ledger`) +
+            FfiConverterOptionalULong.allocationSize(value.`historyRetentionMs`) +
+            FfiConverterUInt.allocationSize(value.`undoDepth`)
+    )
+
+    override fun write(value: FfiOpenOptions, buf: ByteBuffer) {
+            FfiConverterTypeFfiResourceProfile.write(value.`profile`, buf)
+            FfiConverterTypeFfiDurability.write(value.`durability`, buf)
+            FfiConverterBoolean.write(value.`ledger`, buf)
+            FfiConverterOptionalULong.write(value.`historyRetentionMs`, buf)
+            FfiConverterUInt.write(value.`undoDepth`, buf)
+    }
+}
+
+
+
 data class FfiSqlQueryResult (
     var `columns`: List<kotlin.String>, 
     var `rowsJson`: List<kotlin.String>, 
@@ -3046,6 +4880,190 @@ public object FfiConverterTypeFfiSqlQueryResult: FfiConverterRustBuffer<FfiSqlQu
 
 
 
+data class FfiTimeSeriesLifecyclePolicy (
+    var `seriesPattern`: kotlin.String, 
+    var `rules`: List<FfiTimeSeriesRetentionRule>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiTimeSeriesLifecyclePolicy: FfiConverterRustBuffer<FfiTimeSeriesLifecyclePolicy> {
+    override fun read(buf: ByteBuffer): FfiTimeSeriesLifecyclePolicy {
+        return FfiTimeSeriesLifecyclePolicy(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeFfiTimeSeriesRetentionRule.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiTimeSeriesLifecyclePolicy) = (
+            FfiConverterString.allocationSize(value.`seriesPattern`) +
+            FfiConverterSequenceTypeFfiTimeSeriesRetentionRule.allocationSize(value.`rules`)
+    )
+
+    override fun write(value: FfiTimeSeriesLifecyclePolicy, buf: ByteBuffer) {
+            FfiConverterString.write(value.`seriesPattern`, buf)
+            FfiConverterSequenceTypeFfiTimeSeriesRetentionRule.write(value.`rules`, buf)
+    }
+}
+
+
+
+data class FfiTimeSeriesPoint (
+    var `timestamp`: kotlin.Long, 
+    var `value`: kotlin.Double
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiTimeSeriesPoint: FfiConverterRustBuffer<FfiTimeSeriesPoint> {
+    override fun read(buf: ByteBuffer): FfiTimeSeriesPoint {
+        return FfiTimeSeriesPoint(
+            FfiConverterLong.read(buf),
+            FfiConverterDouble.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiTimeSeriesPoint) = (
+            FfiConverterLong.allocationSize(value.`timestamp`) +
+            FfiConverterDouble.allocationSize(value.`value`)
+    )
+
+    override fun write(value: FfiTimeSeriesPoint, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`timestamp`, buf)
+            FfiConverterDouble.write(value.`value`, buf)
+    }
+}
+
+
+
+data class FfiTimeSeriesRetentionRule (
+    var `resolutionMs`: kotlin.Long, 
+    var `retentionMs`: kotlin.Long?, 
+    var `aggregation`: FfiDownsampleAggregation
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiTimeSeriesRetentionRule: FfiConverterRustBuffer<FfiTimeSeriesRetentionRule> {
+    override fun read(buf: ByteBuffer): FfiTimeSeriesRetentionRule {
+        return FfiTimeSeriesRetentionRule(
+            FfiConverterLong.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterTypeFfiDownsampleAggregation.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiTimeSeriesRetentionRule) = (
+            FfiConverterLong.allocationSize(value.`resolutionMs`) +
+            FfiConverterOptionalLong.allocationSize(value.`retentionMs`) +
+            FfiConverterTypeFfiDownsampleAggregation.allocationSize(value.`aggregation`)
+    )
+
+    override fun write(value: FfiTimeSeriesRetentionRule, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`resolutionMs`, buf)
+            FfiConverterOptionalLong.write(value.`retentionMs`, buf)
+            FfiConverterTypeFfiDownsampleAggregation.write(value.`aggregation`, buf)
+    }
+}
+
+
+
+data class FfiTimeSeriesRetentionStats (
+    var `seriesProcessed`: kotlin.ULong, 
+    var `downsampledPointsCreated`: kotlin.ULong, 
+    var `chunksPruned`: kotlin.ULong, 
+    var `bytesReclaimedApprox`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiTimeSeriesRetentionStats: FfiConverterRustBuffer<FfiTimeSeriesRetentionStats> {
+    override fun read(buf: ByteBuffer): FfiTimeSeriesRetentionStats {
+        return FfiTimeSeriesRetentionStats(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiTimeSeriesRetentionStats) = (
+            FfiConverterULong.allocationSize(value.`seriesProcessed`) +
+            FfiConverterULong.allocationSize(value.`downsampledPointsCreated`) +
+            FfiConverterULong.allocationSize(value.`chunksPruned`) +
+            FfiConverterULong.allocationSize(value.`bytesReclaimedApprox`)
+    )
+
+    override fun write(value: FfiTimeSeriesRetentionStats, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`seriesProcessed`, buf)
+            FfiConverterULong.write(value.`downsampledPointsCreated`, buf)
+            FfiConverterULong.write(value.`chunksPruned`, buf)
+            FfiConverterULong.write(value.`bytesReclaimedApprox`, buf)
+    }
+}
+
+
+
+data class FfiTimeSeriesStats (
+    var `min`: kotlin.Double, 
+    var `max`: kotlin.Double, 
+    var `avg`: kotlin.Double, 
+    var `sum`: kotlin.Double, 
+    var `count`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiTimeSeriesStats: FfiConverterRustBuffer<FfiTimeSeriesStats> {
+    override fun read(buf: ByteBuffer): FfiTimeSeriesStats {
+        return FfiTimeSeriesStats(
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiTimeSeriesStats) = (
+            FfiConverterDouble.allocationSize(value.`min`) +
+            FfiConverterDouble.allocationSize(value.`max`) +
+            FfiConverterDouble.allocationSize(value.`avg`) +
+            FfiConverterDouble.allocationSize(value.`sum`) +
+            FfiConverterULong.allocationSize(value.`count`)
+    )
+
+    override fun write(value: FfiTimeSeriesStats, buf: ByteBuffer) {
+            FfiConverterDouble.write(value.`min`, buf)
+            FfiConverterDouble.write(value.`max`, buf)
+            FfiConverterDouble.write(value.`avg`, buf)
+            FfiConverterDouble.write(value.`sum`, buf)
+            FfiConverterULong.write(value.`count`, buf)
+    }
+}
+
+
+
 
 enum class FfiDirection {
     
@@ -3069,6 +5087,84 @@ public object FfiConverterTypeFfiDirection: FfiConverterRustBuffer<FfiDirection>
     override fun allocationSize(value: FfiDirection) = 4UL
 
     override fun write(value: FfiDirection, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class FfiDownsampleAggregation {
+    
+    AVG,
+    MIN,
+    MAX,
+    SUM,
+    FIRST,
+    LAST,
+    COUNT;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiDownsampleAggregation: FfiConverterRustBuffer<FfiDownsampleAggregation> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiDownsampleAggregation.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiDownsampleAggregation) = 4UL
+
+    override fun write(value: FfiDownsampleAggregation, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * What survives a crash or a power loss.
+ */
+
+enum class FfiDurability {
+    
+    /**
+     * Every acknowledged commit survives power loss.
+     */
+    DURABLE,
+    /**
+     * The journal stays consistent across power loss; the latest commits may be lost.
+     */
+    BALANCED,
+    /**
+     * No sync on commit: commits survive a process crash, not power loss.
+     */
+    PERFORMANCE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiDurability: FfiConverterRustBuffer<FfiDurability> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiDurability.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiDurability) = 4UL
+
+    override fun write(value: FfiDurability, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -3144,7 +5240,23 @@ sealed class LiliaFfiException: kotlin.Exception() {
             get() = "v1=${ v1 }"
     }
     
-    class Crypto(
+    class Closed(
+        
+        val v1: kotlin.String
+        ) : LiliaFfiException() {
+        override val message
+            get() = "v1=${ v1 }"
+    }
+    
+    class Timeout(
+        
+        val v1: kotlin.String
+        ) : LiliaFfiException() {
+        override val message
+            get() = "v1=${ v1 }"
+    }
+    
+    class Unsupported(
         
         val v1: kotlin.String
         ) : LiliaFfiException() {
@@ -3188,10 +5300,16 @@ public object FfiConverterTypeLiliaFfiError : FfiConverterRustBuffer<LiliaFfiExc
             4 -> LiliaFfiException.Conflict(
                 FfiConverterString.read(buf),
                 )
-            5 -> LiliaFfiException.Crypto(
+            5 -> LiliaFfiException.Closed(
                 FfiConverterString.read(buf),
                 )
-            6 -> LiliaFfiException.Generic(
+            6 -> LiliaFfiException.Timeout(
+                FfiConverterString.read(buf),
+                )
+            7 -> LiliaFfiException.Unsupported(
+                FfiConverterString.read(buf),
+                )
+            8 -> LiliaFfiException.Generic(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -3220,7 +5338,17 @@ public object FfiConverterTypeLiliaFfiError : FfiConverterRustBuffer<LiliaFfiExc
                 4UL
                 + FfiConverterString.allocationSize(value.v1)
             )
-            is LiliaFfiException.Crypto -> (
+            is LiliaFfiException.Closed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.v1)
+            )
+            is LiliaFfiException.Timeout -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.v1)
+            )
+            is LiliaFfiException.Unsupported -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
                 + FfiConverterString.allocationSize(value.v1)
@@ -3255,19 +5383,61 @@ public object FfiConverterTypeLiliaFfiError : FfiConverterRustBuffer<LiliaFfiExc
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is LiliaFfiException.Crypto -> {
+            is LiliaFfiException.Closed -> {
                 buf.putInt(5)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
-            is LiliaFfiException.Generic -> {
+            is LiliaFfiException.Timeout -> {
                 buf.putInt(6)
+                FfiConverterString.write(value.v1, buf)
+                Unit
+            }
+            is LiliaFfiException.Unsupported -> {
+                buf.putInt(7)
+                FfiConverterString.write(value.v1, buf)
+                Unit
+            }
+            is LiliaFfiException.Generic -> {
+                buf.putInt(8)
                 FfiConverterString.write(value.v1, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
 }
 
 
@@ -3298,6 +5468,38 @@ public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
         } else {
             buf.put(1)
             FfiConverterLong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalDouble: FfiConverterRustBuffer<kotlin.Double?> {
+    override fun read(buf: ByteBuffer): kotlin.Double? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterDouble.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Double?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterDouble.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Double?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterDouble.write(value, buf)
         }
     }
 }
@@ -3468,6 +5670,70 @@ public object FfiConverterOptionalTypeFfiKvEntry: FfiConverterRustBuffer<FfiKvEn
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeFfiTimeSeriesLifecyclePolicy: FfiConverterRustBuffer<FfiTimeSeriesLifecyclePolicy?> {
+    override fun read(buf: ByteBuffer): FfiTimeSeriesLifecyclePolicy? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiTimeSeriesLifecyclePolicy.read(buf)
+    }
+
+    override fun allocationSize(value: FfiTimeSeriesLifecyclePolicy?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiTimeSeriesLifecyclePolicy.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiTimeSeriesLifecyclePolicy?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiTimeSeriesLifecyclePolicy.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiTimeSeriesStats: FfiConverterRustBuffer<FfiTimeSeriesStats?> {
+    override fun read(buf: ByteBuffer): FfiTimeSeriesStats? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiTimeSeriesStats.read(buf)
+    }
+
+    override fun allocationSize(value: FfiTimeSeriesStats?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiTimeSeriesStats.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiTimeSeriesStats?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiTimeSeriesStats.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -3486,6 +5752,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiFtsFuzzyHit: FfiConverterRustBuffer<List<FfiFtsFuzzyHit>> {
+    override fun read(buf: ByteBuffer): List<FfiFtsFuzzyHit> {
+        val len = buf.getInt()
+        return List<FfiFtsFuzzyHit>(len) {
+            FfiConverterTypeFfiFtsFuzzyHit.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiFtsFuzzyHit>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiFtsFuzzyHit.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiFtsFuzzyHit>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiFtsFuzzyHit.write(it, buf)
         }
     }
 }
@@ -3524,6 +5818,118 @@ public object FfiConverterSequenceTypeFfiFtsHit: FfiConverterRustBuffer<List<Ffi
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeFfiFtsPhoneticHit: FfiConverterRustBuffer<List<FfiFtsPhoneticHit>> {
+    override fun read(buf: ByteBuffer): List<FfiFtsPhoneticHit> {
+        val len = buf.getInt()
+        return List<FfiFtsPhoneticHit>(len) {
+            FfiConverterTypeFfiFtsPhoneticHit.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiFtsPhoneticHit>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiFtsPhoneticHit.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiFtsPhoneticHit>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiFtsPhoneticHit.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiFtsSuggestion: FfiConverterRustBuffer<List<FfiFtsSuggestion>> {
+    override fun read(buf: ByteBuffer): List<FfiFtsSuggestion> {
+        val len = buf.getInt()
+        return List<FfiFtsSuggestion>(len) {
+            FfiConverterTypeFfiFtsSuggestion.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiFtsSuggestion>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiFtsSuggestion.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiFtsSuggestion>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiFtsSuggestion.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiGeofenceMatch: FfiConverterRustBuffer<List<FfiGeofenceMatch>> {
+    override fun read(buf: ByteBuffer): List<FfiGeofenceMatch> {
+        val len = buf.getInt()
+        return List<FfiGeofenceMatch>(len) {
+            FfiConverterTypeFfiGeofenceMatch.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiGeofenceMatch>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiGeofenceMatch.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiGeofenceMatch>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiGeofenceMatch.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiGpsPoint: FfiConverterRustBuffer<List<FfiGpsPoint>> {
+    override fun read(buf: ByteBuffer): List<FfiGpsPoint> {
+        val len = buf.getInt()
+        return List<FfiGpsPoint>(len) {
+            FfiConverterTypeFfiGpsPoint.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiGpsPoint>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiGpsPoint.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiGpsPoint>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiGpsPoint.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFfiJsonEntry: FfiConverterRustBuffer<List<FfiJsonEntry>> {
     override fun read(buf: ByteBuffer): List<FfiJsonEntry> {
         val len = buf.getInt()
@@ -3542,6 +5948,34 @@ public object FfiConverterSequenceTypeFfiJsonEntry: FfiConverterRustBuffer<List<
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFfiJsonEntry.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiJsonIndexInfo: FfiConverterRustBuffer<List<FfiJsonIndexInfo>> {
+    override fun read(buf: ByteBuffer): List<FfiJsonIndexInfo> {
+        val len = buf.getInt()
+        return List<FfiJsonIndexInfo>(len) {
+            FfiConverterTypeFfiJsonIndexInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiJsonIndexInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiJsonIndexInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiJsonIndexInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiJsonIndexInfo.write(it, buf)
         }
     }
 }
@@ -3577,8 +6011,130 @@ public object FfiConverterSequenceTypeFfiKvEntry: FfiConverterRustBuffer<List<Ff
 
 
 
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiTimeSeriesLifecyclePolicy: FfiConverterRustBuffer<List<FfiTimeSeriesLifecyclePolicy>> {
+    override fun read(buf: ByteBuffer): List<FfiTimeSeriesLifecyclePolicy> {
+        val len = buf.getInt()
+        return List<FfiTimeSeriesLifecyclePolicy>(len) {
+            FfiConverterTypeFfiTimeSeriesLifecyclePolicy.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiTimeSeriesLifecyclePolicy>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiTimeSeriesLifecyclePolicy.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiTimeSeriesLifecyclePolicy>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiTimeSeriesLifecyclePolicy.write(it, buf)
+        }
+    }
+}
 
 
 
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiTimeSeriesPoint: FfiConverterRustBuffer<List<FfiTimeSeriesPoint>> {
+    override fun read(buf: ByteBuffer): List<FfiTimeSeriesPoint> {
+        val len = buf.getInt()
+        return List<FfiTimeSeriesPoint>(len) {
+            FfiConverterTypeFfiTimeSeriesPoint.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiTimeSeriesPoint>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiTimeSeriesPoint.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiTimeSeriesPoint>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiTimeSeriesPoint.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiTimeSeriesRetentionRule: FfiConverterRustBuffer<List<FfiTimeSeriesRetentionRule>> {
+    override fun read(buf: ByteBuffer): List<FfiTimeSeriesRetentionRule> {
+        val len = buf.getInt()
+        return List<FfiTimeSeriesRetentionRule>(len) {
+            FfiConverterTypeFfiTimeSeriesRetentionRule.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiTimeSeriesRetentionRule>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiTimeSeriesRetentionRule.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiTimeSeriesRetentionRule>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiTimeSeriesRetentionRule.write(it, buf)
+        }
+    }
+}
+
+
+
+
+
+
+
+ fun `geoCreateCirclePolygon`(`centerLon`: kotlin.Double, `centerLat`: kotlin.Double, `radiusMeters`: kotlin.Double, `nVertices`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_func_geo_create_circle_polygon(
+        FfiConverterDouble.lower(`centerLon`),FfiConverterDouble.lower(`centerLat`),FfiConverterDouble.lower(`radiusMeters`),FfiConverterUInt.lower(`nVertices`),_status)
+}
+    )
+    }
+    
+ fun `geoHaversineDistance`(`lat1`: kotlin.Double, `lon1`: kotlin.Double, `lat2`: kotlin.Double, `lon2`: kotlin.Double): kotlin.Double {
+            return FfiConverterDouble.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_func_geo_haversine_distance(
+        FfiConverterDouble.lower(`lat1`),FfiConverterDouble.lower(`lon1`),FfiConverterDouble.lower(`lat2`),FfiConverterDouble.lower(`lon2`),_status)
+}
+    )
+    }
+    
+
+    @Throws(LiliaFfiException::class) fun `tsCompressPoints`(`points`: List<FfiTimeSeriesPoint>): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_func_ts_compress_points(
+        FfiConverterSequenceTypeFfiTimeSeriesPoint.lower(`points`),_status)
+}
+    )
+    }
+    
+
+    @Throws(LiliaFfiException::class) fun `tsDecompressPoints`(`bytes`: kotlin.ByteArray): List<FfiTimeSeriesPoint> {
+            return FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(
+    uniffiRustCallWithError(LiliaFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lilia_ffi_fn_func_ts_decompress_points(
+        FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+    
 
 

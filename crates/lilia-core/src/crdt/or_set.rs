@@ -12,8 +12,16 @@ use super::CvRdt;
 /// the tombstone set. Concurrent additions generate distinct tags that are not yet
 /// observed by the removing replica, so the addition wins on merge.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize,
-    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
 )]
 #[rkyv(crate = rkyv)]
 pub struct OrSet<T: Ord + Clone> {

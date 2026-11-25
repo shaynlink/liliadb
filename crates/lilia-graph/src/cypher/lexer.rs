@@ -37,7 +37,10 @@ pub enum Token {
     NumberLiteral(f64),
 }
 
-#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
+#[allow(
+    clippy::too_many_lines,
+    reason = "one sequential procedure over shared state; splitting it would only thread that state through helpers"
+)]
 pub fn tokenize(input: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = input.chars().collect();

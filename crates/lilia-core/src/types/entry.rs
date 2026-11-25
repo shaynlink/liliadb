@@ -6,7 +6,19 @@ use serde_json::Value;
 use super::graph::default_edge_weight;
 use super::vector::VectorElementType;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum Durability {
@@ -16,7 +28,9 @@ pub enum Durability {
     Performance,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct KvEntry {
     pub namespace: String,
@@ -29,7 +43,9 @@ pub struct KvEntry {
     pub expires_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct JsonEntry {
     pub space: String,
@@ -40,7 +56,9 @@ pub struct JsonEntry {
     pub version: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct BitemporalEntry {
     pub space: String,
@@ -122,7 +140,9 @@ impl JsonEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 #[serde(tag = "model", rename_all = "snake_case")]
 pub enum BatchOperation {
@@ -261,20 +281,9 @@ pub enum BatchOperation {
     CrdtJsonMerge {
         space: String,
         id: String,
+        /// The JSON of the merged `LwwJsonDocument`.
         #[serde(with = "serde_bytes")]
         state: Vec<u8>,
-    },
-    JsonPutHlc {
-        space: String,
-        id: String,
-        #[rkyv(with = crate::zero_copy::AsJsonString)]
-        value: Value,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hlc: Option<crate::hlc::Hlc>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_hlc: Option<crate::hlc::Hlc>,
-        #[serde(default)]
-        strategy: crate::hlc::ConflictResolutionStrategy,
     },
     BitemporalPut {
         space: String,
@@ -298,23 +307,12 @@ pub enum BatchOperation {
     },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Default, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct MutationResult {
     #[serde(default, with = "crate::version::optional")]
     pub version: Option<u64>,
     pub deleted: bool,
-    #[serde(default, skip_serializing_if = "crate::StorageTier::is_disk")]
-    pub tier: crate::StorageTier,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub buffered: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hlc: Option<crate::hlc::Hlc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conflict_detected: Option<bool>,
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)]
-const fn is_false(value: &bool) -> bool {
-    !*value
 }

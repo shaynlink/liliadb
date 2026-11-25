@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Parses SQLite FTS5 highlight tags (<b>match</b>) and renders styled TextSpan highlights.
+/// Renders a full-text search snippet, styling the matched terms it marks as `<b>match</b>`.
 class LiliaHighlightSnippet extends StatelessWidget {
   final String snippet;
   final TextStyle? textStyle;

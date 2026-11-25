@@ -1,4 +1,4 @@
-use lilia_protocol::{read_frame, write_frame, Operation, Request};
+use lilia_protocol::{read_frame, write_frame, Operation, Request, PROTOCOL_MAJOR};
 
 #[tokio::test]
 async fn frame_round_trip() {
@@ -7,7 +7,10 @@ async fn frame_round_trip() {
         id: "018f0000-0000-7000-8000-000000000001".into(),
         token: "secret".into(),
         deadline_ms: Some(1_000),
-        operation: Operation::Handshake { major: 1, minor: 0 },
+        operation: Operation::Handshake {
+            major: PROTOCOL_MAJOR,
+            minor: 0,
+        },
     };
     let expected_id = request.id.clone();
     let writer = tokio::spawn(async move { write_frame(&mut client, &request).await });
@@ -16,7 +19,10 @@ async fn frame_round_trip() {
     assert_eq!(decoded.id, expected_id);
     assert!(matches!(
         decoded.operation,
-        Operation::Handshake { major: 1, minor: 0 }
+        Operation::Handshake {
+            major: PROTOCOL_MAJOR,
+            minor: 0
+        }
     ));
 }
 
@@ -33,56 +39,50 @@ async fn rejects_empty_frame() {
 }
 
 #[tokio::test]
-async fn subscribe_and_event_frame_round_trip() {
-    use lilia_core::DatabaseEvent;
+async fn responses_of_the_storage_round_trip() {
+    use lilia_db::{LevelStats, StorageStats, UndoStep};
     use lilia_protocol::{Response, ResponseValue};
 
     let (mut client, mut server) = tokio::io::duplex(4_096);
-    let request = Request {
-        id: "sub-123".into(),
-        token: "tok".into(),
-        deadline_ms: None,
-        operation: Operation::Subscribe {
-            namespace: Some("users".into()),
-        },
+    let stats = StorageStats {
+        levels: vec![LevelStats {
+            runs: 2,
+            bytes: 4_096,
+        }],
+        memtable_bytes: 512,
+        immutable_memtables: 0,
+        version: 42,
+        oldest_version: 7,
     };
-    write_frame(&mut client, &request)
-        .await
-        .expect("write request");
-    let decoded_req: Request = read_frame(&mut server).await.expect("read request");
-    assert_eq!(decoded_req.id, "sub-123");
-    assert!(matches!(
-        decoded_req.operation,
-        Operation::Subscribe { namespace: Some(ref ns) } if ns == "users"
-    ));
-
-    let response = Response {
-        id: "sub-123".into(),
-        result: Ok(ResponseValue::Event(DatabaseEvent::KvMutated {
-            namespace: "users".into(),
-            key: b"alice".to_vec(),
-            version: Some(42),
-            deleted: false,
+    let responses = [
+        ResponseValue::StorageStats(stats.clone()),
+        ResponseValue::UndoStep(Some(UndoStep {
+            version: 9,
+            keys: 3,
         })),
-    };
-    write_frame(&mut server, &response)
-        .await
-        .expect("write response");
-    let decoded_resp: Response = read_frame(&mut client).await.expect("read response");
-    assert_eq!(decoded_resp.id, "sub-123");
-    match decoded_resp.result.unwrap() {
-        ResponseValue::Event(DatabaseEvent::KvMutated {
-            namespace,
-            key,
-            version,
-            deleted,
-        }) => {
-            assert_eq!(namespace, "users");
-            assert_eq!(key, b"alice");
-            assert_eq!(version, Some(42));
-            assert!(!deleted);
+    ];
+    for value in responses {
+        let response = Response {
+            id: "r".into(),
+            result: Ok(value),
+        };
+        write_frame(&mut server, &response)
+            .await
+            .expect("write response");
+        let decoded: Response = read_frame(&mut client).await.expect("read response");
+        match decoded.result.unwrap() {
+            ResponseValue::StorageStats(decoded) => assert_eq!(decoded, stats),
+            ResponseValue::UndoStep(step) => {
+                assert_eq!(
+                    step,
+                    Some(UndoStep {
+                        version: 9,
+                        keys: 3
+                    })
+                );
+            }
+            other => panic!("unexpected response value: {other:?}"),
         }
-        other => panic!("unexpected response value: {other:?}"),
     }
 }
 
@@ -107,7 +107,9 @@ async fn rkyv_zero_copy_frame_round_trip() {
     };
 
     let writer = tokio::spawn(async move {
-        write_archived_frame(&mut client, &msg).await.expect("write archived frame");
+        write_archived_frame(&mut client, &msg)
+            .await
+            .expect("write archived frame");
     });
 
     let mut buf = AlignedVec::new();
@@ -121,4 +123,116 @@ async fn rkyv_zero_copy_frame_round_trip() {
     assert_eq!(archived.session_id.to_native(), 10007);
     assert_eq!(archived.command.as_str(), "QUERY_AGGREGATE");
     assert_eq!(archived.payload.as_slice(), &[1, 2, 3, 4, 5]);
+}
+
+/// A batch request whose key and condition test the byte and `u64` encodings.
+fn batch_request() -> Request {
+    use lilia_core::BatchOperation;
+    Request {
+        id: "r1".into(),
+        token: "tok".into(),
+        deadline_ms: None,
+        operation: Operation::Batch {
+            operations: vec![BatchOperation::KvSet {
+                namespace: "ns".into(),
+                key: vec![0, 159, 255],
+                value: b"v".to_vec(),
+                if_version: Some(u64::MAX),
+                expires_at_ms: None,
+            }],
+        },
+    }
+}
+
+fn assert_batch(decoded: Request) {
+    use lilia_core::BatchOperation;
+    let Operation::Batch { operations } = decoded.operation else {
+        panic!("the batch survives");
+    };
+    assert!(matches!(
+        &operations[0],
+        BatchOperation::KvSet { key, if_version: Some(u64::MAX), .. } if key == &[0, 159, 255]
+    ));
+}
+
+#[tokio::test]
+async fn rkyv_clients_exchange_archives_after_their_preface() {
+    use lilia_core::{ErrorCode, LiliaError};
+    use lilia_protocol::{Codec, Response};
+
+    let (mut client, mut server) = tokio::io::duplex(8_192);
+    Codec::Rkyv.announce(&mut client).await.unwrap();
+    write_frame(&mut client, &batch_request()).await.unwrap();
+    let codec = Codec::accept(&mut server).await.unwrap();
+    assert_eq!(codec, Codec::Rkyv);
+    assert_batch(codec.read_request(&mut server).await.unwrap());
+    let response = Response {
+        id: "r1".into(),
+        result: Err(LiliaError::new(ErrorCode::Conflict, "stale", true)),
+    };
+    codec.write_response(&mut server, &response).await.unwrap();
+    let decoded: Response = read_frame(&mut client).await.unwrap();
+    let error = decoded.result.unwrap_err();
+    assert_eq!((error.code, error.retryable), (ErrorCode::Conflict, true));
+
+    let (mut client, mut server) = tokio::io::duplex(64);
+    tokio::io::AsyncWriteExt::write_all(&mut client, b"HTTP")
+        .await
+        .unwrap();
+    let refused = Codec::accept(&mut server).await.unwrap_err();
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[tokio::test]
+async fn js_clients_send_message_pack_and_receive_js_frames() {
+    use lilia_core::KvEntry;
+    use lilia_protocol::{to_msgpack, Codec, Response, ResponseValue};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (mut client, mut server) = tokio::io::duplex(8_192);
+    client.write_all(&Codec::Js.preface()).await.unwrap();
+    let request = to_msgpack(&batch_request()).unwrap();
+    client
+        .write_u32(u32::try_from(request.len()).unwrap())
+        .await
+        .unwrap();
+    client.write_all(&request).await.unwrap();
+    let codec = Codec::accept(&mut server).await.unwrap();
+    assert_eq!(codec, Codec::Js);
+    assert_batch(codec.read_request(&mut server).await.unwrap());
+
+    let response = Response {
+        id: "r1".into(),
+        result: Ok(ResponseValue::Kv(Some(KvEntry {
+            namespace: "ns".into(),
+            key: vec![0, 159, 255],
+            value: b"v".to_vec(),
+            version: u64::MAX,
+            expires_at_ms: None,
+        }))),
+    };
+    codec.write_response(&mut server, &response).await.unwrap();
+    let length = client.read_u32().await.unwrap() as usize;
+    let mut frame = vec![0; length];
+    client.read_exact(&mut frame).await.unwrap();
+    let json = u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize;
+    let value: serde_json::Value = serde_json::from_slice(&frame[4..4 + json]).unwrap();
+    let entry = &value["result"]["Ok"]["value"];
+    assert_eq!(value["result"]["Ok"]["type"], "kv");
+    assert_eq!(
+        entry["version"],
+        u64::MAX.to_string(),
+        "versions are decimal strings"
+    );
+    let segments = 8 + json;
+    let key = usize::try_from(entry["key"].as_u64().unwrap()).unwrap();
+    let at = |i: usize, field: usize| {
+        let offset = segments + i * 8 + field * 4;
+        u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap()) as usize
+    };
+    let bytes = segments + 2 * 8;
+    assert_eq!(
+        &frame[bytes + at(key, 0)..bytes + at(key, 0) + at(key, 1)],
+        &[0, 159, 255]
+    );
 }

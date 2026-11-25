@@ -1,51 +1,63 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect } from "node:net";
-import { spawn, type ChildProcess } from "node:child_process";
 import test from "node:test";
 
 import {
   Database,
   LiliaError,
-  isKvEntry,
+  geo,
   isJsonEntry,
+  isKvEntry,
+  quantization,
+  timeseries,
   type DatabaseMode,
   type JsonEntry,
   type KvEntry,
 } from "./index.js";
+import { tryLoadNative } from "./native.js";
+import type { Transport } from "./transport.js";
+import type { Operation, ResponseValue } from "@liliadb/client";
 
-import { existsSync } from "node:fs";
+const native = tryLoadNative();
+const daemonBinary =
+  process.env.LILIA_DAEMON_BIN ??
+  ["lilia-daemon", "lilia-daemon.exe"]
+    .map((name) => new URL(`../../../target/debug/${name}`, import.meta.url).pathname)
+    .find((path) => existsSync(path));
 
-const candidateNative = [
-  new URL("../../../target/release/liblilia_node_native.dylib", import.meta.url).pathname,
-  new URL("../../../target/release/liblilia_node_native.so", import.meta.url).pathname,
-  new URL("../../../target/release/lilia_node_native.dll", import.meta.url).pathname,
-  new URL("../../../packages/node-darwin-arm64/lilia_node_native.node", import.meta.url).pathname,
-  new URL("../../../target/debug/liblilia_node_native.dylib", import.meta.url).pathname,
-  new URL("../../../target/debug/liblilia_node_native.so", import.meta.url).pathname,
-  new URL("../../../target/debug/lilia_node_native.dll", import.meta.url).pathname,
-].find(p => existsSync(p));
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
-const candidateDaemon = [
-  new URL("../../../target/debug/lilia-daemon", import.meta.url).pathname,
-  new URL("../../../target/debug/lilia-daemon.exe", import.meta.url).pathname,
-].find(p => existsSync(p));
+/** A database over `transport`, as `Database.open` builds one. */
+function over(transport: Transport): Database {
+  return Reflect.construct(Database, [transport]) as Database;
+}
 
-const nativePath = process.env.LILIA_NATIVE_PATH ?? candidateNative;
-const daemonBinary = process.env.LILIA_DAEMON_BIN ?? candidateDaemon;
+/** A transport answering every operation with `answer`. */
+function fake(answer: (operation: Operation) => ResponseValue | Promise<ResponseValue>, onClose: () => void = () => {}): Transport {
+  return {
+    execute: async (operation) => answer(operation),
+    close: async () => onClose(),
+  };
+}
 
-test("close timeout drains accepted JS calls and can be awaited again", async () => {
-  let release!: (value: []) => void;
+async function withDirectory(prefix: string, body: (directory: string) => Promise<void>): Promise<void> {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+  try {
+    await body(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test("close waits for the calls already made and refuses later ones", async () => {
+  const { promise: delayed, resolve: release } = Promise.withResolvers<ResponseValue>();
   let closes = 0;
-  const delayed = new Promise<[]>((resolve) => { release = resolve; });
-  // Inject a deterministic delayed client through the runtime constructor. No
-  // native timing assumptions are needed to exercise the SDK admission boundary.
-  const database = Reflect.construct(Database, [{
-    batch: () => delayed,
-    close: async () => { closes += 1; },
-  }]) as Database;
+  const database = over(fake(() => delayed, () => { closes += 1; }));
   await assert.rejects(database.close({ timeoutMs: -1 }), RangeError);
   const accepted = database.batch([]);
   await assert.rejects(database.close({ timeoutMs: 0 }), (error: unknown) =>
@@ -53,649 +65,368 @@ test("close timeout drains accepted JS calls and can be awaited again", async ()
   assert.equal(closes, 0);
   await assert.rejects(database.batch([]), (error: unknown) =>
     error instanceof LiliaError && error.code === "CLOSED" && !!error.requestId);
-  release([]);
-  await accepted;
+  release({ type: "mutations", value: [] });
+  assert.deepEqual(await accepted, []);
   await Promise.all([database.close(), database.close()]);
   assert.equal(closes, 1);
 });
 
-test("embedded close drains submitted writes and releases storage", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-close-"));
-  const path = join(directory, "db.lilia");
-  try {
-    const database = await Database.open({ path });
-    const writes = Array.from({ length: 16 }, (_, index) =>
-      database.json.put("drain", String(index), { index }));
-    await database.close();
-    await Promise.all(writes);
-    const reopened = await Database.open({ path });
-    try {
-      assert.equal((await reopened.json.scan("drain")).length, 16);
-      assert.equal(await reopened.integrityCheck(), true);
-    } finally { await reopened.close(); }
-  } finally { await rm(directory, { recursive: true, force: true }); }
+test("protocol errors and unexpected responses surface as LiliaErrors", async () => {
+  const database = over(fake((operation) =>
+    operation.type === "kv_get" ? { type: "bool", value: true } : { type: "ack" }));
+  await assert.rejects(database.kv.get("ns", "k"), (error: unknown) =>
+    error instanceof LiliaError && error.code === "PROTOCOL");
+  await database.close();
 });
 
-test("checkpoint policy rejects invalid values before opening native storage", async () => {
-  for (const value of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 32]) {
-    await assert.rejects(Database.open({ path: "unused.lilia", checkpointPolicy: { walBytes: value } }), RangeError);
-    await assert.rejects(Database.open({ path: "unused.lilia", checkpointPolicy: { intervalMs: value } }), RangeError);
-  }
-});
-
-test("embedded KV, JSON, and rollback conformance", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-node-"));
-  try { await conformance("embedded", join(directory, "embedded.lilia")); }
-  finally { await rm(directory, { recursive: true, force: true }); }
-});
-
-test("embedded synchronous db.sync KV, JSON, SQL and batch conformance", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-sync-"));
-  const path = join(directory, "sync.lilia");
-  try {
-    const db = await Database.open({ path });
-    const enc = new TextEncoder();
-    const dec = new TextDecoder();
-
-    // 1. Sync KV
-    const setRes = db.sync.kv.set("cfg", enc.encode("k1"), enc.encode("v1"));
-    assert.equal(setRes.version, 1n);
-    assert.equal(setRes.deleted, false);
-
-    const getRes = db.sync.kv.get("cfg", enc.encode("k1"));
-    assert.ok(getRes !== undefined);
-    assert.equal(dec.decode(getRes.value), "v1");
-    assert.equal(getRes.version, 1n);
-
-    const scanRes = db.sync.kv.scan("cfg");
-    assert.equal(scanRes.length, 1);
-    assert.equal(dec.decode(scanRes[0]!.value), "v1");
-
-    const delRes = db.sync.kv.delete("cfg", enc.encode("k1"));
-    assert.equal(delRes.deleted, true);
-    assert.equal(db.sync.kv.get("cfg", enc.encode("k1")), undefined);
-
-    // 2. Sync JSON
-    const putRes = db.sync.json.put("docs", "d1", { title: "Fast", count: 42 });
-    assert.equal(putRes.version, 1n);
-
-    const doc = db.sync.json.get("docs", "d1");
-    assert.ok(doc !== undefined);
-    assert.deepEqual(doc.value, { title: "Fast", count: 42 });
-
-    const scanJson = db.sync.json.scan("docs");
-    assert.equal(scanJson.length, 1);
-    assert.equal(scanJson[0]!.id, "d1");
-
-    // 3. Sync SQL
-    const sqlRows = db.sync.sql.query<{ id: string; version: number }>(
-      "SELECT id, version FROM lilia_json WHERE space = ?1",
-      ["docs"]
-    );
-    assert.equal(sqlRows.length, 1);
-    assert.equal(sqlRows[0]?.id, "d1");
-
-    const sqlExec = db.sync.sql.execute(
-      "UPDATE _lilia_json SET version = version + 1 WHERE space = ?1 AND id = ?2",
-      ["docs", "d1"]
-    );
-    assert.equal(sqlExec.rowsAffected, 1);
-
-    const updatedDoc = db.sync.json.get("docs", "d1");
-    assert.equal(updatedDoc?.version, 2n);
-
-    // 4. Sync Batch
-    const batchRes = db.sync.batch([
-      { model: "kv_set", namespace: "b", key: enc.encode("k_a"), value: enc.encode("v_a") },
-      { model: "json_put", space: "b", id: "j_a", value: { ok: true } },
-    ]);
-    assert.equal(batchRes.length, 2);
-    assert.equal(batchRes[0]?.deleted, false);
-    assert.equal(batchRes[1]?.deleted, false);
-
-    await db.close();
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("daemon KV and JSON conformance", { skip: !daemonBinary }, async () => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "lilia-daemon-")));
-  const path = join(directory, "daemon.lilia");
-  const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\liliadb-test-${process.pid}` : `${path}.sock`;
-  const tokenFile = process.platform === "win32" ? join(directory, "ipc", "token") : `${path}.token`;
-  let daemon: ChildProcess | undefined;
-  try {
-    daemon = spawn(daemonBinary!, ["--database", path, "--endpoint", endpoint, "--token-file", tokenFile], {
-      stdio: ["ignore", "inherit", "inherit"],
-    });
-    await waitUntilReady(tokenFile, endpoint, daemon);
-    await conformance("daemon", path, endpoint, tokenFile);
-  } finally {
-    daemon?.kill();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("embedded db.watch receives live CDC events filtered by namespace", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-watch-emb-"));
-  const path = join(directory, "watch_emb.lilia");
-  try {
-    const db = await Database.open({ path });
-    const events: any[] = [];
-    const sub = await db.watch("orders", (event) => {
-      events.push(event);
-    });
-
-    const enc = new TextEncoder();
-    // Non-matching mutation
-    await db.kv.set("inventory", enc.encode("item_1"), enc.encode("in_stock"));
-
-    // Matching mutations
-    await db.kv.set("orders", enc.encode("ord_1"), enc.encode("paid"));
-    await db.json.put("orders", "doc_1", { status: "pending" });
-
-    // Wait a brief moment for events to dispatch
-    for (let i = 0; i < 20; i++) {
-      if (events.length >= 2) break;
-      await new Promise(r => setTimeout(r, 25));
+test("streams page through scans and respect limits", async () => {
+  const keys = Array.from({ length: 25 }, (_, i) => i);
+  const database = over(fake((operation) => {
+    if (operation.type === "kv_scan") {
+      const start = operation.after === undefined ? 0 : operation.after[0]! + 1;
+      return {
+        type: "kv_page",
+        value: keys.slice(start, start + operation.limit).map((i) => ({
+          namespace: operation.namespace,
+          key: new Uint8Array([i]),
+          value: new Uint8Array([i * 2]),
+          version: i + 1,
+          expires_at_ms: null,
+        })),
+      };
     }
+    if (operation.type === "json_scan") {
+      const start = operation.after === undefined ? 0 : Number(operation.after) + 1;
+      return {
+        type: "json_page",
+        value: keys.slice(start, start + operation.limit).map((i) => ({ space: operation.space, id: String(i), value: { v: i }, version: i + 1 })),
+      };
+    }
+    return { type: "ack" };
+  }));
 
-    assert.equal(events.length, 2);
-    assert.equal(events[0].type, "kv_mutated");
-    assert.equal(events[0].namespace, "orders");
-    assert.equal(new TextDecoder().decode(events[0].key), "ord_1");
-    assert.equal(events[1].type, "json_mutated");
-    assert.equal(events[1].space, "orders");
-    assert.equal(events[1].id, "doc_1");
+  const all: KvEntry[] = [];
+  for await (const entry of database.kv.scanStream("test", { batchSize: 5 })) all.push(entry);
+  assert.equal(all.length, 25);
+  assert.equal(all[24]!.key[0], 24);
+  assert.equal(all[24]!.version, 25n);
 
-    await sub.unsubscribe();
-    await db.close();
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+  const limited: KvEntry[] = [];
+  for await (const entry of database.kv.scanStream("test", { batchSize: 5, limit: 12 })) limited.push(entry);
+  assert.equal(limited.length, 12);
+
+  const documents: JsonEntry[] = [];
+  for await (const chunk of database.json.createReadStream("items", { batchSize: 10, limit: 8 })) documents.push(chunk as JsonEntry);
+  assert.deepEqual(documents.map((d) => d.id), ["0", "1", "2", "3", "4", "5", "6", "7"]);
+
+  const none: KvEntry[] = [];
+  for await (const entry of database.kv.scanStream("empty", { limit: 0 })) none.push(entry);
+  assert.equal(none.length, 0);
+  await database.close();
 });
 
-test("daemon db.watch receives live CDC events over binary IPC", { skip: !daemonBinary }, async () => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "l-w-")));
-  const path = join(directory, "d.lilia");
-  const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\liliadb-watch-${process.pid}` : `${path}.sock`;
-  const tokenFile = process.platform === "win32" ? join(directory, "ipc", "token") : `${path}.token`;
-  let daemon: ChildProcess | undefined;
-  try {
-    daemon = spawn(daemonBinary!, ["--database", path, "--endpoint", endpoint, "--token-file", tokenFile], {
-      stdio: ["ignore", "inherit", "inherit"],
-    });
-    await waitUntilReady(tokenFile, endpoint, daemon);
-
-    const db = await Database.open({ path, mode: "daemon", endpoint, tokenFile });
-    const events: any[] = [];
-    const sub = await db.watch("telemetry", (event) => {
-      events.push(event);
-    });
-
-    const enc = new TextEncoder();
-    // Non-matching write
-    await db.kv.set("logs", enc.encode("log_1"), enc.encode("info"));
-
-    // Matching writes
-    await db.kv.set("telemetry", enc.encode("sensor_1"), enc.encode("24.5"));
-    await db.json.put("telemetry", "metric_1", { cpu: 85 });
-
-    for (let i = 0; i < 20; i++) {
-      if (events.length >= 2) break;
-      await new Promise(r => setTimeout(r, 25));
-    }
-
-    assert.equal(events.length, 2);
-    assert.equal(events[0].type, "kv_mutated");
-    assert.equal(events[0].namespace, "telemetry");
-    assert.equal(new TextDecoder().decode(events[0].key), "sensor_1");
-    assert.equal(events[1].type, "json_mutated");
-    assert.equal(events[1].space, "telemetry");
-    assert.equal(events[1].id, "metric_1");
-
-    await sub.unsubscribe();
-    await db.close();
-  } finally {
-    daemon?.kill();
-    await rm(directory, { recursive: true, force: true });
-  }
+test("helpers quantize vectors, downsample series and measure positions", () => {
+  const { quantized, scale } = quantization.toInt8([1, -0.5, 0]);
+  assert.deepEqual([...quantized], [127, -64, 0]);
+  assert.ok(Math.abs(quantization.fromInt8(quantized, scale)[0]! - 1) < 1e-6);
+  assert.deepEqual([...quantization.toBit([1, -1, 1, 0, 0, 0, 0, 0, 1])], [0b1010_0000, 0b1000_0000]);
+  assert.deepEqual(
+    timeseries.downsample([{ timestamp: -1, value: 1 }, { timestamp: 0, value: 2 }, { timestamp: 9, value: 4 }], 10, "max"),
+    [{ timestamp: -10, value: 1 }, { timestamp: 0, value: 4 }]
+  );
+  const eiffelToArc = geo.haversineDistance(48.8584, 2.2945, 48.8738, 2.295);
+  assert.ok(eiffelToArc > 1_600 && eiffelToArc < 1_800, String(eiffelToArc));
+  const circle = JSON.parse(geo.circleToGeopoly(2.35, 48.85, 100, 8)) as [number, number][];
+  assert.equal(circle.length, 9);
+  assert.deepEqual(circle[0], circle[8]);
 });
 
 async function conformance(mode: DatabaseMode, path: string, endpoint?: string, tokenFile?: string): Promise<void> {
-  const database = await Database.open({ path, mode, endpoint, tokenFile,
-    checkpointPolicy: mode === "embedded" ? { walBytes: 4096, intervalMs: 25 } : undefined });
-  const bytes = new TextEncoder();
+  const database = await Database.open({ path, mode, endpoint, tokenFile, durability: "performance" });
   try {
-    const write = await database.kv.set("cache", bytes.encode("answer"), bytes.encode("42"), { ifVersion: 0n });
-    assert.equal(write.version, 1n);
-    assert.equal(new TextDecoder().decode((await database.kv.get("cache", bytes.encode("answer")))?.value), "42");
-    const document = await database.json.put("people", "ada", { name: "Ada" }, { ifVersion: 0n });
-    assert.equal(document.version, 1n);
+    const write = await database.kv.set("cache", "answer", "42", { ifVersion: 0n });
+    assert.ok(write.version! > 0n);
+    const entry = await database.kv.get("cache", "answer");
+    assert.equal(decoder.decode(entry?.value), "42");
+    assert.equal(entry?.version, write.version);
+
+    const put = await database.json.put("people", "ada", { name: "Ada" }, { ifVersion: 0n });
+    assert.ok(put.version! > write.version!, "versions are engine sequences");
     assert.deepEqual((await database.json.get("people", "ada"))?.value, { name: "Ada" });
     await assert.rejects(
       database.batch([
         { model: "json_put", space: "people", id: "grace", value: { name: "Grace" } },
         { model: "json_delete", space: "people", id: "missing", ifVersion: 1n },
       ]),
-      (error: unknown) => error instanceof LiliaError || error instanceof Error,
+      (error: unknown) => error instanceof LiliaError && error.code === "CONFLICT" && error.retryable
     );
-    assert.equal(await database.json.get("people", "grace"), undefined);
-    // Verify streaming with real engine
-    const streamItems: JsonEntry[] = [];
-    for await (const entry of database.json.scanStream("people", { batchSize: 1 })) {
-      streamItems.push(entry);
-    }
-    assert.equal(streamItems.length, 1);
-    assert.equal(streamItems[0]?.id, "ada");
+    assert.equal(await database.json.get("people", "grace"), undefined, "a failed batch writes nothing");
 
-    const streamKv: KvEntry[] = [];
-    for await (const entry of database.kv.scanStream("cache", { batchSize: 1 })) {
-      streamKv.push(entry);
-    }
-    assert.equal(streamKv.length, 1);
-    assert.equal(new TextDecoder().decode(streamKv[0]?.value), "42");
+    const streamed: JsonEntry[] = [];
+    for await (const document of database.json.scanStream("people", { batchSize: 1 })) streamed.push(document);
+    assert.deepEqual(streamed.map((d) => d.id), ["ada"]);
 
-    // Verify SQL query, raw, and execute
-    interface PersonRow {
-      id: string;
-      name: string;
-      version: number;
-    }
-    const sqlRows = await database.sql.query<PersonRow>(
-      "SELECT id, json_extract(value, '$.name') AS name, version FROM lilia_json WHERE space = ?1",
-      ["people"],
+    const rows = await database.sql.query<{ id: string; name: string }>(
+      "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = $1",
+      ["people"]
     );
-    assert.equal(sqlRows.length, 1);
-    assert.equal(sqlRows[0]?.id, "ada");
-    assert.equal(sqlRows[0]?.name, "Ada");
-    assert.equal(sqlRows[0]?.version, 1);
+    assert.deepEqual(rows, [{ id: "ada", name: "Ada" }]);
+    const raw = await database.sql.raw("SELECT id FROM people");
+    assert.deepEqual(raw.columns, ["id"]);
+    assert.deepEqual(raw.rows, [["ada"]]);
+    await assert.rejects(database.sql.query("SELECT * FROM missing_space.nope"), LiliaError);
 
-    const raw = await database.sql.raw(
-      "SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = ?1",
-      ["people"],
-    );
-    assert.deepEqual(raw.columns, ["id", "name"]);
-    assert.deepEqual(raw.rows, [["ada", "Ada"]]);
-    assert.equal(raw.rowsAffected, 0);
+    await database.graph.setNode("workspace", "a", "service", { env: "prod" });
+    await database.graph.setNode("workspace", "b", "database");
+    await database.graph.addEdge("workspace", "a", "b", "depends_on");
+    assert.deepEqual(await database.graph.neighbors("workspace", "a", { direction: "outgoing" }), ["b"]);
+    assert.deepEqual(await database.graph.reachability("workspace", ["a"]), ["a", "b"]);
 
-    const affected = await database.sql.execute(
-      "UPDATE _lilia_json SET version = version + 1 WHERE space = ?1 AND id = ?2",
-      ["people", "ada"],
-    );
-    assert.equal(affected.rowsAffected, 1);
-    const updatedDoc = await database.json.get("people", "ada");
-    assert.equal(updatedDoc?.version, 2n);
-
-    await assert.rejects(
-      database.sql.query("SELECT * FROM non_existent_table"),
-      (error: unknown) => error instanceof LiliaError || error instanceof Error,
-    );
-
-    // Verify Graph
-    await database.graph.setNode("workspace", "nodeA", "service", { env: "prod" });
-    await database.graph.setNode("workspace", "nodeB", "database");
-    await database.graph.addEdge("workspace", "nodeA", "nodeB", "depends_on");
-    const neighbors = await database.graph.neighbors("workspace", "nodeA", { direction: "outgoing" });
-    assert.deepEqual(neighbors, ["nodeB"]);
-    const reachable = await database.graph.reachability("workspace", ["nodeA"], { direction: "outgoing" });
-    assert.deepEqual(reachable, ["nodeA", "nodeB"]);
-
-    // Verify FTS
     await database.fts.index("articles", "art1", "hello world search in liliadb");
     const hits = await database.fts.search("articles", "world");
-    assert.equal(hits.length, 1);
-    assert.equal(hits[0]?.docId, "art1");
+    assert.deepEqual(hits.map((h) => h.docId), ["art1"]);
 
-    // Verify Vector & Hybrid Search
-    await database.vector.set("docs", "vec1", [1.0, 0.0, 0.0]);
-    await database.vector.set("docs", "vec2", [0.0, 1.0, 0.0]);
-    const vecHits = await database.vector.search("docs", [0.95, 0.05, 0.0], { limit: 1 });
-    assert.equal(vecHits.length, 1);
-    assert.equal(vecHits[0]?.id, "vec1");
+    await database.vector.set("docs", "v1", [1, 0, 0]);
+    await database.vector.set("docs", "v2", [0, 1, 0]);
+    const near = await database.vector.search("docs", [0.95, 0.05, 0], { limit: 1 });
+    assert.deepEqual(near.map((h) => h.id), ["v1"]);
+    await database.vector.set("articles", "art1", [1, 0, 0]);
+    const hybrid = await database.hybrid.search("articles", { query: "hello", vector: [1, 0, 0], limit: 5 });
+    assert.equal(hybrid[0]?.id, "art1");
+    assert.ok(hybrid[0]!.rrfScore > 0 && hybrid[0]!.ftsRank === 1 && hybrid[0]!.vectorRank === 1);
 
-    await database.vector.set("articles", "art1", [1.0, 0.0, 0.0]);
-    const hybridHits = await database.hybrid.search("articles", {
-      query: "hello",
-      vector: [1.0, 0.0, 0.0],
-      limit: 5,
-    });
-    assert.equal(hybridHits.length, 1);
-    assert.equal(hybridHits[0]?.id, "art1");
-    assert.ok(hybridHits[0]?.rrfScore > 0);
-
-    // Verify JSON Indexing & find
-    await database.json.put("users", "u1", { name: "Alice", role: "admin", level: 10, active: true });
-    await database.json.put("users", "u2", { name: "Bob", role: "member", level: 5, active: true });
-    await database.json.put("users", "u3", { name: "Charlie", role: "admin", level: 8, active: false });
-
-    // 1. find fallback without index
-    const adminsFallback = await database.json.find("users", { role: "admin" });
-    assert.equal(adminsFallback.length, 2);
-    assert.equal(adminsFallback[0]?.id, "u1");
-    assert.equal(adminsFallback[1]?.id, "u3");
-
-    // 2. createIndex
-    await database.json.createIndex("users", "role");
-    const indexes = await database.json.listIndexes("users");
-    assert.equal(indexes.length, 1);
-    assert.equal(indexes[0]?.indexName, "role");
-
-    // 3. find with index acceleration
-    const adminsIndexed = await database.json.find("users", { role: "admin" });
-    assert.equal(adminsIndexed.length, 2);
-    assert.equal(adminsIndexed[0]?.id, "u1");
-    assert.equal(adminsIndexed[1]?.id, "u3");
-
-    // 4. findByIndex
-    const members = await database.json.findByIndex("users", "role", "member");
-    assert.equal(members.length, 1);
-    assert.equal(members[0]?.id, "u2");
-
-    // 5. multi-condition find
-    const activeAdmins = await database.json.find("users", { role: "admin", active: true });
-    assert.equal(activeAdmins.length, 1);
-    assert.equal(activeAdmins[0]?.id, "u1");
-
-    // 6. findStream
-    const streamed: JsonEntry[] = [];
-    for await (const doc of database.json.findStream("users", { role: "admin" })) {
-      streamed.push(doc);
+    for (const [id, role, active] of [["u1", "admin", true], ["u2", "member", true], ["u3", "admin", false]] as const) {
+      await database.json.put("users", id, { role, active });
     }
-    assert.equal(streamed.length, 2);
-    assert.equal(streamed[0]?.id, "u1");
-    assert.equal(streamed[1]?.id, "u3");
-
-    // 7. dropIndex
-    const dropped = await database.json.dropIndex("users", "role");
-    assert.equal(dropped, true);
-    const indexesAfter = await database.json.listIndexes("users");
-    assert.equal(indexesAfter.length, 0);
+    assert.deepEqual((await database.json.find("users", { role: "admin" })).map((d) => d.id), ["u1", "u3"], "without an index: a scan");
+    await database.json.createIndex("users", "role");
+    await database.json.createIndex("users", "active");
+    assert.deepEqual((await database.json.listIndexes("users")).map((i) => i.indexName).sort(), ["active", "role"]);
+    assert.deepEqual((await database.json.find("users", { role: "admin" })).map((d) => d.id), ["u1", "u3"]);
+    assert.deepEqual((await database.json.find("users", { role: "admin", active: true })).map((d) => d.id), ["u1"]);
+    assert.deepEqual((await database.json.findByIndex("users", "role", "member")).map((d) => d.id), ["u2"]);
+    const admins: JsonEntry[] = [];
+    for await (const document of database.json.findStream("users", { role: "admin" }, { batchSize: 1 })) admins.push(document);
+    assert.deepEqual(admins.map((d) => d.id), ["u1", "u3"]);
+    assert.equal(await database.json.dropIndex("users", "role"), true);
 
     assert.equal(await database.integrityCheck(), true);
   } finally {
     await database.close();
   }
-  await assert.rejects(database.integrityCheck(), (error: unknown) =>
-    error instanceof LiliaError && error.code === "CLOSED");
+  await assert.rejects(database.integrityCheck(), (error: unknown) => error instanceof LiliaError && error.code === "CLOSED");
 }
 
-test("scanStream and createReadStream paginate across batches and respect limits", async () => {
-  const entries: KvEntry[] = Array.from({ length: 25 }, (_, i) => ({
-    namespace: "test",
-    key: new Uint8Array([i]),
-    value: new Uint8Array([i * 2]),
-    version: BigInt(i + 1),
-  }));
-
-  const mockClient = {
-    kvScan: async (_ns: string, after: Uint8Array | undefined, limit: number) => {
-      const startIndex = after !== undefined ? after[0]! + 1 : 0;
-      return entries.slice(startIndex, startIndex + limit);
-    },
-    jsonScan: async (_sp: string, after: string | undefined, limit: number) => {
-      const startIndex = after !== undefined ? Number(after) + 1 : 0;
-      return entries.slice(startIndex, startIndex + limit).map(e => ({
-        space: "items",
-        id: String(e.key[0]),
-        value: { v: e.key[0] },
-        version: e.version,
-      }));
-    },
-    close: async () => {},
-  };
-
-  const db = Reflect.construct(Database, [mockClient]) as Database;
-
-  // 1. Full stream with batchSize 5
-  const full: KvEntry[] = [];
-  for await (const entry of db.kv.scanStream("test", { batchSize: 5 })) {
-    full.push(entry);
-  }
-  assert.equal(full.length, 25);
-  assert.equal(full[0]!.key[0], 0);
-  assert.equal(full[24]!.key[0], 24);
-
-  // 2. Global limit 12 with batchSize 5 (3 batches: 5, 5, 2)
-  const limited: KvEntry[] = [];
-  for await (const entry of db.kv.stream("test", { batchSize: 5, limit: 12 })) {
-    limited.push(entry);
-  }
-  assert.equal(limited.length, 12);
-  assert.equal(limited[11]!.key[0], 11);
-
-  // 3. Early break in for await
-  const earlyBreak: KvEntry[] = [];
-  for await (const entry of db.kv.scanStream("test", { batchSize: 5 })) {
-    earlyBreak.push(entry);
-    if (earlyBreak.length === 7) break;
-  }
-  assert.equal(earlyBreak.length, 7);
-
-  // 4. JSON scanStream
-  const jsonItems: JsonEntry[] = [];
-  for await (const item of db.json.scanStream("items", { batchSize: 10, limit: 15 })) {
-    jsonItems.push(item);
-  }
-  assert.equal(jsonItems.length, 15);
-  assert.equal(jsonItems[0]!.id, "0");
-  assert.equal(jsonItems[14]!.id, "14");
-
-  // 5. createReadStream Node.js stream
-  const chunks: JsonEntry[] = [];
-  const stream = db.json.createReadStream("items", { batchSize: 10, limit: 8 });
-  for await (const chunk of stream) {
-    chunks.push(chunk as JsonEntry);
-  }
-  assert.equal(chunks.length, 8);
-  assert.equal(chunks[7]!.id, "7");
-
-  // 6. Empty scanStream
-  const empty: KvEntry[] = [];
-  for await (const entry of db.kv.scanStream("empty", { limit: 0 })) {
-    empty.push(entry);
-  }
-  assert.equal(empty.length, 0);
+test("embedded conformance", { skip: !native }, async () => {
+  await withDirectory("lilia-node-", (directory) => conformance("embedded", join(directory, "embedded")));
 });
 
-test("explicit resource management with await using closes database automatically", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-using-"));
-  const path = join(directory, "using.lilia");
-  try {
-    let dbRef!: Database;
+test("daemon conformance over the JS codec", { skip: !daemonBinary }, async () => {
+  await withDirectory("lilia-daemon-", async (directory) => {
+    const path = join(directory, "db");
+    const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\liliadb-test-${process.pid}` : join(directory, "d.sock");
+    const tokenFile = join(directory, "token");
+    const daemon = spawn(daemonBinary!, ["--database", path, "--endpoint", endpoint, "--token-file", tokenFile], {
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    try {
+      await waitUntilServing(path, endpoint, tokenFile, daemon);
+      await conformance("daemon", path, endpoint, tokenFile);
+      const database = await Database.open({ path, mode: "daemon", endpoint, tokenFile });
+      assert.throws(() => database.sync, (error: unknown) => error instanceof LiliaError && error.code === "UNSUPPORTED");
+      await database.close();
+    } finally {
+      daemon.kill();
+    }
+  });
+});
+
+test("the synchronous API runs the same calls in place", { skip: !native }, async () => {
+  await withDirectory("lilia-sync-", async (directory) => {
+    const db = await Database.open({ path: join(directory, "db"), durability: "performance" });
+    const set = db.sync.kv.set("cfg", "k1", "v1");
+    assert.equal(set.deleted, false);
+    assert.equal(db.sync.kv.get("cfg", "k1")?.version, set.version);
+    assert.equal(db.sync.kv.scan("cfg").length, 1);
+    assert.equal(db.sync.kv.delete("cfg", "k1").deleted, true);
+    assert.equal(db.sync.kv.get("cfg", "k1"), undefined);
+
+    db.sync.json.put("docs", "d1", { title: "Fast", count: 42 });
+    assert.deepEqual(db.sync.json.get("docs", "d1")?.value, { title: "Fast", count: 42 });
+    const rows = db.sync.sql.query<{ id: string }>("SELECT id FROM lilia_json WHERE space = $1", ["docs"]);
+    assert.deepEqual(rows, [{ id: "d1" }]);
+    const results = db.sync.batch([
+      { model: "kv_set", namespace: "b", key: encoder.encode("k"), value: encoder.encode("v") },
+      { model: "json_put", space: "b", id: "j", value: { ok: true } },
+    ]);
+    assert.equal(results.length, 2);
+    await db.close();
+    assert.throws(() => db.sync, (error: unknown) => error instanceof LiliaError && error.code === "CLOSED");
+  });
+});
+
+test("every model answers through the embedded transport", { skip: !native }, async () => {
+  await withDirectory("lilia-models-", async (directory) => {
+    await using db = await Database.open({ path: join(directory, "db"), durability: "performance", undoDepth: 8 });
+
+    await db.json.put("steps", "s1", { title: "start" });
+    for (const id of ["s1", "s2", "s3"]) await db.graph.setNode("flow", id, "step", {}, { docSpace: "steps" });
+    for (const [source, target] of [["s1", "s2"], ["s2", "s3"], ["s3", "s1"]] as const) {
+      await db.graph.addEdge("flow", source, target, "next", { weight: 2 });
+    }
+    assert.deepEqual(await db.graph.getNodeDocument("flow", "s1"), { title: "start" });
+    assert.equal((await db.graph.getNode("flow", "s2"))?.docSpace, "steps");
+    assert.deepEqual((await db.graph.shortestPath("flow", "s1", "s3"))?.nodes, ["s1", "s2", "s3"]);
+    assert.equal((await db.graph.pagerank("flow")).length, 3);
+    assert.equal((await db.graph.centrality("flow", "degree", { direction: "both" })).length, 3);
+    assert.equal(await db.graph.hasCycle("flow"), true);
+    assert.equal((await db.graph.connectedComponents("flow", "strongly_connected")).length, 1);
+    const cypher = await db.graph.cypher<{ id: string }>("flow", "MATCH (s:step) RETURN s.id AS id");
+    assert.deepEqual(cypher.records.map((r) => r.id).sort(), ["s1", "s2", "s3"]);
+    assert.equal((await db.graph.listEdges("flow")).length, 3);
+
+    await db.fts.index("notes", "n1", "persistent storage engine");
+    assert.ok((await db.fts.suggest("notes", "stor")).some((s) => s.term === "storage"));
+    assert.deepEqual((await db.fts.fuzzySearch("notes", "storaje")).map((h) => h.docId), ["n1"]);
+
+    await db.vector.createIndex("emb", { dim: 2, metric: "l2" });
+    assert.equal((await db.vector.getIndexInfo("emb"))?.dim, 2);
+    await db.vector.set("emb", "e1", [1, 2]);
+    assert.deepEqual([...new Float32Array((await db.vector.get("emb", "e1"))!.buffer)], [1, 2]);
+    assert.equal(await db.vector.dropIndex("emb"), true);
+
+    await db.timeseries.appendPoints("cpu", Array.from({ length: 10 }, (_, i) => ({ timestamp: i * 1_000, value: i })));
+    assert.equal((await db.timeseries.queryStats("cpu", 0, 10_000))?.count, 10);
+    await db.timeseries.setPolicy({ seriesPattern: "cpu*", rules: [{ resolutionMs: 0, retentionMs: 86_400_000, aggregation: "avg" }] });
+    assert.deepEqual(await db.timeseries.listPolicies(), [
+      { seriesPattern: "cpu*", rules: [{ resolutionMs: 0, retentionMs: 86_400_000, aggregation: "avg" }] },
+    ]);
+    assert.equal((await db.timeseries.applyRetention()).seriesProcessed >= 0, true);
+
+    const square = "[[2.0,48.0],[3.0,48.0],[3.0,49.0],[2.0,49.0],[2.0,48.0]]";
+    await db.geo.addFence("zone", "Zone", "test", square);
+    assert.deepEqual((await db.geo.findFencesForPoint(2.5, 48.5)).map((f) => f.id), ["zone"]);
+    const crossings = await db.geo.recordGpsPoints("t", [
+      { timestamp: 1_000, latitude: 48.5, longitude: 2.5 },
+      { timestamp: 2_000, latitude: 48.5, longitude: 2.6 },
+    ]);
+    assert.ok(crossings.length >= 1);
+    assert.equal((await db.geo.getTrackPoints("t")).length, 2);
+    assert.ok((await db.geo.trackDistance("t")) > 5_000);
+
+    await db.crdt.counter.increment("c", "hits", "n1", 3);
+    assert.equal(await db.crdt.counter.get("c", "hits"), 3);
+    assert.equal(await db.crdt.counter.merge("c", "hits", await db.crdt.counter.state("c", "hits")), 3);
+    await db.crdt.set.add("c", "tags", "n1", "x");
+    assert.deepEqual(await db.crdt.set.read("c", "tags"), ["x"]);
+    await db.crdt.json.setField("c", "doc", "n1", "title", "draft");
+    assert.deepEqual(await db.crdt.json.get("c", "doc"), { title: "draft" });
+    const state = await db.crdt.json.state("c", "doc");
+    assert.equal((await db.crdt.json.merge("c", "doc", state!)).version, undefined, "merging its own state changes nothing");
+    const remote = structuredClone(state!);
+    remote.fields["/title"] = { value: "final", clock: { clock: { timestampMs: Date.now() + 60_000, counter: 0 }, actorId: "n2" }, isDeleted: false };
+    assert.ok((await db.crdt.json.merge("c", "doc", remote)).version! > 0n);
+    assert.deepEqual(await db.crdt.json.get("c", "doc"), { title: "final" });
+
+    const first = await db.json.put("docs", "d", { n: 1 });
+    const second = await db.json.put("docs", "d", { n: 2 });
+    assert.deepEqual((await db.json.getAtVersion("docs", "d", first.version!))?.value, { n: 1 });
+    assert.deepEqual((await db.json.history("docs", "d")).map((r) => r.document?.value), [{ n: 1 }, { n: 2 }]);
+    assert.notEqual(await db.json.diff("docs", "d", first.version!, second.version!), null);
+    const undone = await db.undo();
+    assert.ok(undone && undone.version > first.version! && undone.version <= second.version!, "the commit of the second write");
+    assert.deepEqual((await db.json.get("docs", "d"))?.value, { n: 1 });
+    assert.ok((await db.redo()) !== undefined);
+    assert.deepEqual((await db.json.get("docs", "d"))?.value, { n: 2 });
+    assert.ok((await db.undoHistory()).length > 0);
+
+    await db.checkpoint();
+    const stats = await db.storageStats();
+    assert.ok(stats.levels.some((level) => level.runs > 0) && stats.version >= second.version!);
+    assert.equal(await db.quickCheck(), true);
+  });
+});
+
+test("close drains submitted writes and reopening finds them", { skip: !native }, async () => {
+  await withDirectory("lilia-close-", async (directory) => {
+    const path = join(directory, "db");
+    const database = await Database.open({ path });
+    const writes = Array.from({ length: 16 }, (_, index) => database.json.put("drain", String(index), { index }));
+    await database.close();
+    await Promise.all(writes);
+    await using reopened = await Database.open({ path });
+    assert.equal((await reopened.json.scan("drain")).length, 16);
+    assert.equal(await reopened.integrityCheck(), true);
+  });
+});
+
+test("await using closes the database at the end of its scope", { skip: !native }, async () => {
+  await withDirectory("lilia-using-", async (directory) => {
+    let escaped!: Database;
     {
-      await using db = await Database.open({ path });
-      dbRef = db;
+      await using db = await Database.open({ path: join(directory, "db") });
+      escaped = db;
       await db.json.put("test", "id1", { val: 123 });
-      const doc = await db.json.get<{ val: number }>("test", "id1");
-      assert.equal(doc?.value?.val, 123);
+      assert.equal((await db.json.get<{ val: number }>("test", "id1"))?.value.val, 123);
     }
-    // db should now be closed automatically upon exiting the scope!
-    await assert.rejects(dbRef.json.get("test", "id1"), (err: unknown) =>
-      err instanceof LiliaError && err.code === "CLOSED"
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+    await assert.rejects(escaped.json.get("test", "id1"), (error: unknown) => error instanceof LiliaError && error.code === "CLOSED");
+  });
 });
 
-test("explicit resource management with using auto-unsubscribes watch", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-sub-"));
-  const path = join(directory, "sub.lilia");
-  try {
-    await using db = await Database.open({ path });
-    const events: any[] = [];
-    {
-      using sub = await db.watch("orders", (event) => events.push(event));
-      assert.ok(typeof sub[Symbol.dispose] === "function");
-      await db.json.put("orders", "o1", { amount: 100 });
-      for (let i = 0; i < 20 && events.length === 0; i++) {
-        await new Promise(r => setTimeout(r, 20));
-      }
-      assert.equal(events.length, 1);
-    }
-    // Out of scope: sub was synchronously disposed via using!
-    await db.json.put("orders", "o2", { amount: 200 });
-    await new Promise(r => setTimeout(r, 50));
-    assert.equal(events.length, 1);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("SQL tagged template literals parameterize queries safely", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-sql-tag-"));
-  const path = join(directory, "tag.lilia");
-  try {
-    await using db = await Database.open({ path });
+test("tagged SQL templates bind their values as parameters", { skip: !native }, async () => {
+  await withDirectory("lilia-sql-", async (directory) => {
+    await using db = await Database.open({ path: join(directory, "db") });
     await db.json.put("users", "u1", { name: "Alice", role: "admin" });
     await db.json.put("users", "u2", { name: "Bob", role: "guest" });
-
-    interface UserRow {
-      id: string;
-      name: string;
-    }
-
-    // Async tagged template
-    const role = "admin";
-    const rows = await db.sql<UserRow>`SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'users' AND json_extract(value, '$.role') = ${role}`;
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0]?.name, "Alice");
-
-    // Sync tagged template
-    const syncRows = db.sync.sql<UserRow>`SELECT id, json_extract(value, '$.name') AS name FROM lilia_json WHERE space = 'users' AND json_extract(value, '$.role') = ${"guest"}`;
-    assert.equal(syncRows.length, 1);
-    assert.equal(syncRows[0]?.name, "Bob");
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+    const role = "admin' OR '1'='1";
+    assert.deepEqual(await db.sql<{ id: string }>`SELECT id FROM users WHERE json_get_str(value, 'role') = ${role}`, []);
+    const rows = await db.sql<{ name: string }>`SELECT value->>'name' AS name FROM users WHERE json_get_str(value, 'role') = ${"admin"}`;
+    assert.deepEqual(rows, [{ name: "Alice" }]);
+    const syncRows = db.sync.sql<{ name: string }>`SELECT value->>'name' AS name FROM users WHERE json_get_str(value, 'role') = ${"guest"}`;
+    assert.deepEqual(syncRows, [{ name: "Bob" }]);
+  });
 });
 
-test("AbortSignal cancels operations proactively", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-abort-"));
-  const path = join(directory, "abort.lilia");
-  try {
-    await using db = await Database.open({ path });
-
-    // 1. Pre-aborted signal throws immediately
-    const preAborted = AbortSignal.abort(new Error("pre-aborted"));
-    await assert.rejects(
-      db.json.get("test", "id", { signal: preAborted }),
-      /pre-aborted/
-    );
-
-    // 2. AbortSignal in watch auto-unsubscribes
-    const controller = new AbortController();
-    const events: any[] = [];
-    await db.watch("auto", (e) => events.push(e), { signal: controller.signal });
-    await db.json.put("auto", "1", { ok: 1 });
-    for (let i = 0; i < 20 && events.length === 0; i++) {
-      await new Promise(r => setTimeout(r, 20));
-    }
-    assert.equal(events.length, 1);
-
-    // Abort controller
-    controller.abort();
-    await db.json.put("auto", "2", { ok: 2 });
-    await new Promise(r => setTimeout(r, 50));
-    assert.equal(events.length, 1);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+test("an aborted signal rejects before the call starts", { skip: !native }, async () => {
+  await withDirectory("lilia-abort-", async (directory) => {
+    await using db = await Database.open({ path: join(directory, "db") });
+    await assert.rejects(db.json.get("test", "id", { signal: AbortSignal.abort(new Error("pre-aborted")) }), /pre-aborted/);
+  });
 });
 
-test("WHATWG ReadableStream streams entries according to web standards", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-webstream-"));
-  const path = join(directory, "ws.lilia");
-  try {
-    await using db = await Database.open({ path });
-    for (let i = 0; i < 10; i++) {
-      await db.json.put("items", `id_${i}`, { index: i });
-    }
+test("web streams and string keys follow the platform's conventions", { skip: !native }, async () => {
+  await withDirectory("lilia-web-", async (directory) => {
+    await using db = await Database.open({ path: join(directory, "db") });
+    for (let i = 0; i < 10; i++) await db.json.put("items", `id_${i}`, { index: i });
+    const documents = db.json.readableStream<{ index: number }>("items", { batchSize: 3 });
+    assert.ok(documents instanceof ReadableStream);
+    const indexes: number[] = [];
+    for await (const document of documents) indexes.push(document.value.index);
+    assert.deepEqual(indexes, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-    // 1. JSON readableStream
-    const jsonStream = db.json.readableStream<{ index: number }>("items", { batchSize: 3 });
-    assert.ok(jsonStream instanceof ReadableStream);
-    const jsonItems: { index: number }[] = [];
-    for await (const doc of jsonStream) {
-      jsonItems.push(doc.value);
-    }
-    assert.equal(jsonItems.length, 10);
-    assert.equal(jsonItems[0]?.index, 0);
-    assert.equal(jsonItems[9]?.index, 9);
-
-    // 2. KV readableStream
-    await db.kv.set("cache", "k1", "v1");
-    await db.kv.set("cache", "k2", "v2");
-    const kvStream = db.kv.readableStream("cache", { batchSize: 1 });
-    assert.ok(kvStream instanceof ReadableStream);
-    const kvEntries: KvEntry[] = [];
-    for await (const entry of kvStream) {
-      kvEntries.push(entry);
-    }
-    assert.equal(kvEntries.length, 2);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("KV string ergonomics and type guards conform to standards", { skip: !nativePath }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lilia-ergonomics-"));
-  const path = join(directory, "ergo.lilia");
-  try {
-    await using db = await Database.open({ path });
-
-    // Async KV string key & value
     await db.kv.set("users", "user:alice", "developer");
     const entry = await db.kv.get("users", "user:alice");
-    assert.ok(entry !== undefined);
     assert.ok(isKvEntry(entry));
-    assert.equal(new TextDecoder().decode(entry.value), "developer");
-
-    // Sync KV string key & value
-    db.sync.kv.set("users", "user:bob", "designer");
-    const syncEntry = db.sync.kv.get("users", "user:bob");
-    assert.ok(syncEntry !== undefined);
-    assert.ok(isKvEntry(syncEntry));
-    assert.equal(new TextDecoder().decode(syncEntry.value), "designer");
-
-    // Generic JSON entry and isJsonEntry
-    interface Profile { name: string; age: number }
-    await db.json.put<Profile>("profiles", "p1", { name: "Alice", age: 30 });
-    const profileDoc = await db.json.get<Profile>("profiles", "p1");
-    assert.ok(profileDoc !== undefined);
-    assert.ok(isJsonEntry(profileDoc));
-    assert.equal(profileDoc.value.name, "Alice");
-    assert.equal(profileDoc.value.age, 30);
-
-    // LiliaError cause support
-    const err = new LiliaError({ message: "top error", cause: new Error("underlying") });
-    assert.ok(LiliaError.isLiliaError(err));
-    assert.equal(err.name, "LiliaError");
-    assert.ok(err.cause instanceof Error);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+    assert.equal(decoder.decode(entry.value), "developer");
+    await db.json.put("profiles", "p1", { name: "Alice", age: 30 });
+    assert.ok(isJsonEntry(await db.json.get("profiles", "p1")));
+    const error = new LiliaError({ message: "top", cause: new Error("under") });
+    assert.ok(LiliaError.isLiliaError(error) && error.cause instanceof Error);
+  });
 });
 
-async function waitUntilReady(tokenFile: string, endpoint: string, daemon: ChildProcess): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
+/** Waits until the daemon of `path` accepts a client. */
+async function waitUntilServing(path: string, endpoint: string, tokenFile: string, daemon: ChildProcess): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
     if (daemon.exitCode !== null) throw new Error(`daemon exited with ${daemon.exitCode}`);
     try {
-      const { access } = await import("node:fs/promises");
-      await access(tokenFile);
-      // The token is created before SQLite is opened and the IPC listener is bound.
-      await new Promise<void>((resolve, reject) => {
-        const socket = connect(endpoint);
-        socket.once("connect", () => { socket.destroy(); resolve(); });
-        socket.once("error", error => { socket.destroy(); reject(error); });
-      });
+      const database = await Database.open({ path, mode: "daemon", endpoint, tokenFile });
+      await database.close();
       return;
-    } catch {
-      await new Promise(resolve => setTimeout(resolve, 25));
+    } catch (error) {
+      if (Date.now() > deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
-  throw new Error("daemon startup timed out");
 }

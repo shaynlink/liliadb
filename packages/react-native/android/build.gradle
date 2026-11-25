@@ -1,28 +1,59 @@
 buildscript {
-    ext.kotlin_version = "1.9.22"
+    // The app's value of a setting (its root project's `ext`), else this module's default.
+    ext.lilia = { name, fallback -> rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback }
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        classpath "com.android.tools.build:gradle:8.2.1"
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath "com.android.tools.build:gradle:9.2.1"
     }
 }
 
+// Android Gradle Plugin 9 compiles Kotlin itself, as React Native's own modules do.
 apply plugin: "com.android.library"
-apply plugin: "kotlin-android"
+// Generates NativeLiliaReactNativeSpec from src/NativeLiliaReactNative.ts.
+apply plugin: "com.facebook.react"
+
+react {
+    jsRootDir = file("../src/")
+    libraryName = "LiliaReactNativeSpec"
+    codegenJavaPackageName = "io.liliadb.reactnative"
+}
 
 android {
-    compileSdkVersion 34
+    namespace "io.liliadb.reactnative"
+    compileSdk lilia("compileSdkVersion", 37)
 
     defaultConfig {
-        minSdkVersion 21
-        targetSdkVersion 34
+        minSdk lilia("minSdkVersion", 24)
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
     }
 
-    lintOptions {
-        abortOnError false
+    externalNativeBuild {
+        cmake {
+            path "CMakeLists.txt"
+        }
+    }
+
+    buildFeatures {
+        prefab true
+    }
+
+    sourceSets {
+        main {
+            // The engine's C ABI, packaged with the module that links it.
+            jniLibs.srcDirs = ["../../../release/android/jniLibs"]
+        }
+    }
+
+    packagingOptions {
+        // React Native's own libraries come with the app.
+        excludes += ["**/libc++_shared.so", "**/libfbjni.so", "**/libjsi.so", "**/libreactnative.so"]
     }
 }
 
@@ -32,11 +63,5 @@ repositories {
 }
 
 dependencies {
-    implementation "com.facebook.react:react-android:+"
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0"
-    implementation "net.java.dev.jna:jna:5.14.0@aar"
-
-    // Reference to local Android SDK project or local AAR
-    compileOnly project(":packages:android-sdk")
+    implementation "com.facebook.react:react-android"
 }

@@ -4,6 +4,46 @@ All notable changes to the `@liliadb/node` SDK will be documented in this file.
 
 ---
 
+## [Unreleased] - v0.2 (lilia-db)
+
+### Changed
+- The SDK runs on the native `lilia-db` engine instead of SQLite. `path` is a directory.
+  Versions are engine sequences: they grow with every write, not per record from 1.
+- One client for both modes: every call is a protocol operation, sent to the native addon
+  (`execute`) or to the daemon (after an `LJS1` preface), so daemon mode works again with the
+  `rkyv` daemon. Requests are MessagePack (`msgpackr`, replacing `@msgpack/msgpack`); results
+  are JS frames: one JSON text written straight from the stored documents and read by V8's
+  `JSON.parse`, then raw bytes. A `json.get` takes about half the time it took through
+  MessagePack, synchronous calls reuse one output buffer, and asynchronous calls run on the
+  libuv thread pool.
+- `db.sync` has every call of the asynchronous API, not only KV, JSON, batches and SQL.
+- The calls, the wire format and the database lifecycle live in `@liliadb/client`, shared with
+  `@liliadb/react-native`; this package adds the native and daemon transports and Node's
+  streams, and re-exports the client.
+- A batch `crdt_json_merge` takes the state object `crdt.json.state` returns, not bytes.
+- SQL is DataFusion and read-only: parameters are `$1`, `$2`...; JSON is read with
+  `value->>'field'` and `json_get_*`. Every JSON space is also a table.
+- `json.find` terms are field paths or index names; an index serves the query when one
+  covers a term, else the space is scanned.
+- Open options: `durability`, `profile`, `ledger`, `historyRetentionMs`, `undoDepth`.
+- `json.history` returns `{ version, document? }`; `undo`, `redo` and `undoHistory` return
+  `{ version, keys }`; `storageStats` describes the engine's levels and memtables;
+  `crdt.set.prune` returns whether anything was pruned; `crdt.json.merge` returns a
+  `MutationResult`; `timeseries.applyRetention({ nowMs })` applies every policy.
+
+### Added
+- `fts.suggest`, `fts.fuzzySearch`, `fts.phoneticSearch`, `fts.loadDictionary`.
+
+### Removed
+- Retired with SQLite: `watch` and CDC events, `liveQuery`, materialized views, HLC writes
+  and conflicts, dictionary training, automatic embeddings (`searchText`,
+  `waitForEmbeddings`, `setAutoEmbed`), content-addressed blobs, sharding, `backup`,
+  `checkpointStats`, `sql.execute`, and the SQLite open options (`busyTimeoutMs`,
+  `writerQueueCapacity`, `readPoolSize`, `checkpointPolicy`, `jsonOptions`,
+  `timeseriesOptions`, `casOptions`, `sharding`, `nodeId`, `maxDriftMs`, `encryptionKey`).
+
+---
+
 ## [0.1.0-alpha.9] - 2026-11-20
 
 ### Added

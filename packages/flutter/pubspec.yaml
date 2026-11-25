@@ -1,6 +1,6 @@
 name: liliadb_flutter
-description: Local-first multimodel embedded database (KV, JSON, Graph, FTS5, SQL) for Flutter with transparent AES-256-GCM hardware encryption.
-version: 0.1.0-alpha.9
+description: Local-first multimodel embedded database (key-value, JSON documents, graph, full-text search, read-only SQL) for Flutter, on the LiliaDB engine through dart:ffi.
+version: 0.2.0-alpha.1
 homepage: https://github.com/shaynlink/lilia
 repository: https://github.com/shaynlink/lilia/tree/main/packages/flutter
 

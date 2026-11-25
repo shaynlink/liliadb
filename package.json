@@ -1,9 +1,10 @@
 {
   "name": "@liliadb/workspace",
-  "version": "0.1.0-alpha.9",
+  "version": "0.2.0-alpha.1",
   "private": true,
   "license": "Apache-2.0",
   "packageManager": "pnpm@11.5.2",
+  "workspaces": ["packages/*", "apps/lilia-vscode", "examples/*"],
   "engines": {
     "node": ">=22"
   },
@@ -14,17 +15,17 @@
     "test": "nx run-many -t test",
     "lint": "nx run-many -t lint",
     "bench": "nx run-many -t bench --parallel=1",
-    "bench:compare": "node tools/benchmarks/run_comparative_suite.mjs --workload all",
+    "bench:compare": "node tools/build-prebuilds.mjs && pnpm --filter @liliadb/node build && cargo build --release -p lilia-daemon && cargo run --release --manifest-path tools/lilia-bench/Cargo.toml -- suite",
+    "bench:compare:quick": "node tools/build-prebuilds.mjs && pnpm --filter @liliadb/node build && cargo build --release -p lilia-daemon && cargo run --release --manifest-path tools/lilia-bench/Cargo.toml -- suite --profile quick --out target/benchmarks-quick.jsonl --report target/benchmarks-quick.md",
     "graph": "nx graph",
     "prebuild": "node ./tools/build-prebuilds.mjs",
-    "build:wasm": "node ./tools/build-wasm.mjs",
+    "build:wasm": "bash tools/wasm/build.sh",
     "lilia": "cargo run -p lilia-cli --"
   },
   "devDependencies": {
     "@msgpack/msgpack": "3.1.2",
     "@nx/js": "23.2.1",
     "@types/react": "^18.3.31",
-    "better-sqlite3": "^13.0.3",
     "nx": "23.2.1",
     "react-native": "^0.88.1",
     "typescript": "6.0.2"

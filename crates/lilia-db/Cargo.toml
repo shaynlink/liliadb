@@ -1,0 +1,42 @@
+[package]
+name = "lilia-db"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LiliaDB data models over the native engine: key-value, JSON documents with secondary indexes, transactions, row-level security and a Merkle ledger"
+
+[dependencies]
+lilia-core = { path = "../lilia-core", default-features = false }
+lilia-engine = { path = "../lilia-engine" }
+lilia-io = { path = "../lilia-io" }
+lilia-analytics = { path = "../lilia-analytics", optional = true }
+blake3.workspace = true
+bytes.workspace = true
+hex.workspace = true
+parking_lot.workspace = true
+rkyv.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[features]
+## SQL over the data models, on DataFusion ([`sql`]).
+sql = ["dep:lilia-analytics"]
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+js-sys = "0.3"
+wasm-bindgen-test = "0.3"
+
+[dev-dependencies]
+hex.workspace = true
+tempfile = "3.27.0"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "sql"
+required-features = ["sql"]

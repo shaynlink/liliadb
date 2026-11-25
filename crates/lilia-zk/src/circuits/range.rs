@@ -21,10 +21,12 @@ pub fn enforce_gte<const BITS: usize>(
     val_native: Option<u64>,
     threshold_native: Option<u64>,
 ) -> Result<(), SynthesisError> {
-    assert!(
-        BITS <= 64,
-        "BITS must be <= 64 for unsigned integer comparisons"
-    );
+    const {
+        assert!(
+            BITS <= 64,
+            "BITS must be <= 64 for unsigned integer comparisons"
+        );
+    }
     let cs = val_var.cs();
 
     let diff_var = val_var - threshold_var;

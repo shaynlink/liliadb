@@ -18,9 +18,49 @@ interface SnippetPart {
   isHighlight: boolean;
 }
 
+const OPENING_TAG = '<b>';
+const CLOSING_TAG = '</b>';
+
 /**
- * Idiomatic text component parsing SQLite FTS5 snippet tags (<b>match</b>)
- * and applying customizable highlight styling to matched terms.
+ * Split the engine's trusted `<b>…</b>` markers without a backtracking regular
+ * expression: search snippets are still external input once they reach the UI.
+ */
+export function splitSnippet(snippet: string): SnippetPart[] {
+  const result: SnippetPart[] = [];
+  let cursor = 0;
+
+  while (cursor < snippet.length) {
+    const openingIndex = snippet.indexOf(OPENING_TAG, cursor);
+    if (openingIndex === -1) {
+      result.push({ text: snippet.slice(cursor), isHighlight: false });
+      break;
+    }
+
+    if (openingIndex > cursor) {
+      result.push({ text: snippet.slice(cursor, openingIndex), isHighlight: false });
+    }
+
+    const contentStart = openingIndex + OPENING_TAG.length;
+    const closingIndex = snippet.indexOf(CLOSING_TAG, contentStart);
+    if (closingIndex === -1) {
+      // Preserve malformed markup as text, just as a non-matching marker would.
+      result.push({ text: snippet.slice(openingIndex), isHighlight: false });
+      break;
+    }
+
+    result.push({
+      text: snippet.slice(contentStart, closingIndex),
+      isHighlight: true,
+    });
+    cursor = closingIndex + CLOSING_TAG.length;
+  }
+
+  return result;
+}
+
+/**
+ * Idiomatic text component showing the snippet of a full-text hit, whose matches the engine
+ * wraps in <b>match</b>, with customizable highlight styling for the matched terms.
  */
 export function LiliaHighlightSnippet({
   snippet,
@@ -29,37 +69,7 @@ export function LiliaHighlightSnippet({
   style,
   ...textProps
 }: LiliaHighlightSnippetProps): React.ReactElement {
-  const parts = useMemo<SnippetPart[]>(() => {
-    if (!snippet) return [];
-
-    const result: SnippetPart[] = [];
-    const regex = /<b>(.*?)<\/b>/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = regex.exec(snippet)) !== null) {
-      if (match.index > lastIndex) {
-        result.push({
-          text: snippet.substring(lastIndex, match.index),
-          isHighlight: false,
-        });
-      }
-      result.push({
-        text: match[1],
-        isHighlight: true,
-      });
-      lastIndex = regex.lastIndex;
-    }
-
-    if (lastIndex < snippet.length) {
-      result.push({
-        text: snippet.substring(lastIndex),
-        isHighlight: false,
-      });
-    }
-
-    return result;
-  }, [snippet]);
+  const parts = useMemo<SnippetPart[]>(() => splitSnippet(snippet), [snippet]);
 
   return (
     <Text style={[styles.defaultText, textStyle, style]} {...textProps}>

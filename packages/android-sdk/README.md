@@ -17,20 +17,19 @@ The SDK is a Gradle library module shipping:
 
 ## 1. Key Features
 
-- **Multimodel, transactional**: Key/Value, JSON documents, Graph, Full-Text
-  Search (FTS5), and declarative SQL share a single SQLite ACID database file.
+- **Multimodel, transactional**: Key/Value, JSON documents with secondary indexes,
+  Graph, Full-Text Search, time series, geofences and read-only SQL (DataFusion)
+  share one LiliaDB database (the `lilia-db` engine, a directory on disk).
 - **Async & blocking APIs**: every operation is exposed both as a Kotlin
   `suspend` function and as a `*Sync` blocking variant for main-thread-free,
   coroutine-friendly usage.
-- **Resource profiles**: tuned SQLite cache / WAL / mmap settings for phones
-  (`MOBILE`), wearables and TV dongles (`CONSTRAINED`), or server-class hardware
-  (`SERVER`).
-- **Encryption at rest**: transparent authenticated AES-256-GCM via a raw
-  256-bit key or a passphrase (PBKDF2-HMAC-SHA256 key derivation).
-- **Exact 64-bit versioning**: entries carry `ULong` versions, without IEEE-754
-  precision loss.
-- **Mobile lifecycle aware**: `prepareForBackground()` flushes the WAL before the
-  OS suspends the process; `close(timeoutMs)` drains in-flight work gracefully.
+- **Resource profiles**: engine buffers sized for phones (`MOBILE`), wearables and
+  TV dongles (`CONSTRAINED`), or the whole machine (`SERVER`).
+- **Exact 64-bit versioning**: entries carry `ULong` versions (engine sequences),
+  without IEEE-754 precision loss.
+- **Mobile lifecycle aware**: `checkpoint()` writes recent commits to their sorted
+  runs before the OS suspends the process; `close(timeoutMs)` waits for in-flight
+  calls.
 - **Broad device support**: `minSdk 21` covers Android 5.0+, Wear OS 1.0+, and
   Android TV.
 
@@ -145,14 +144,15 @@ packages/android-sdk/
 ## 5. Quick Start
 
 ```kotlin
+import uniffi.lilia_ffi.FfiDurability
+import uniffi.lilia_ffi.FfiOpenOptions
 import uniffi.lilia_ffi.FfiResourceProfile
 import uniffi.lilia_ffi.LiliaDatabase
 
 class AppRepository(context: Context) {
     private val db = LiliaDatabase.open(
-        path = File(context.filesDir, "app.lilia").absolutePath,
-        profile = FfiResourceProfile.MOBILE,
-        encryptionKey = null, // or a 32-byte ByteArray
+        path = File(context.filesDir, "app-data").absolutePath, // a directory
+        options = FfiOpenOptions(FfiResourceProfile.MOBILE, FfiDurability.BALANCED),
     )
 
     fun bootstrap() {
@@ -172,9 +172,9 @@ class AppRepository(context: Context) {
         // 4. Full-text search
         db.ftsIndexSync("articles", "art:1", "LiliaDB delivers local-first multimodel storage.")
 
-        // 5. Declarative SQL
+        // 5. Read-only SQL over the models
         val rows = db.sqlQuerySync(
-            "SELECT id FROM lilia_json WHERE space = 'users'",
+            "SELECT id, value->>'name' AS name FROM users",
             paramsJson = null,
         )
     }
@@ -190,34 +190,36 @@ class AppRepository(context: Context) {
 ## 6. Opening a Database
 
 ```kotlin
-// Raw 256-bit key (exactly 32 bytes, otherwise a Crypto error is thrown)
-val key = SecureRandom().generateSeed(32)
-val db = LiliaDatabase.open(path, FfiResourceProfile.MOBILE, encryptionKey = key)
-
-// Passphrase with PBKDF2-HMAC-SHA256 key derivation
-val db2 = LiliaDatabase.openWithPassphrase(path, FfiResourceProfile.MOBILE, "correct horse")
-
-// Unencrypted
-val db3 = LiliaDatabase.open(path, FfiResourceProfile.CONSTRAINED, encryptionKey = null)
+val db = LiliaDatabase.open(
+    path,
+    FfiOpenOptions(
+        profile = FfiResourceProfile.MOBILE,
+        durability = FfiDurability.BALANCED, // DURABLE, BALANCED or PERFORMANCE
+        ledger = false,                      // a tamper-evident ledger of every write
+        historyRetentionMs = null,           // old versions stay readable a week by default
+        undoDepth = 0u,                      // commits that can be undone
+    ),
+)
 ```
 
-- `path` is the database file path; use app-private storage such as
-  `Context.filesDir` (or `noBackupFilesDir` to exclude it from cloud backups).
-- When a key or passphrase is supplied, transparent authenticated AES-256-GCM
-  encryption protects values, vectors, and WAL frames on disk.
+- `path` is the database directory, created if missing; use app-private storage
+  such as `Context.filesDir` (or `noBackupFilesDir` to exclude it from cloud
+  backups).
+- Encryption at rest arrives with the engine's native encryption; the SQLite-era
+  codec (`encryptionKey`, `openWithPassphrase`) is gone.
 
 ### Resource Profiles
 
-| Profile                          | Tuned for                         | Durability | Busy timeout | Writer queue | Read pool | WAL checkpoint | mmap     | Page cache |
-| -------------------------------- | --------------------------------- | ---------- | ------------ | ------------ | --------- | -------------- | -------- | ---------- |
-| `FfiResourceProfile.SERVER`      | Server-class hardware             | `durable`  | 5 000 ms     | 64           | 4         | 16 MB / 5 s    | 256 MB   | 64 MB      |
-| `FfiResourceProfile.MOBILE`      | Phones, Wear OS, Android TV       | `balanced` | 5 000 ms     | 32           | 2         | 4 MB / 3 s     | 32 MB    | 8 MB       |
-| `FfiResourceProfile.CONSTRAINED` | Wear OS 32-bit, budget TV dongles | `balanced` | 3 000 ms     | 16           | 1         | 1 MB / 1.5 s   | disabled | 2 MB       |
+| Profile                          | Tuned for                         | Engine buffers sized from                        |
+| -------------------------------- | --------------------------------- | ------------------------------------------------ |
+| `FfiResourceProfile.SERVER`      | Server-class hardware             | the whole machine                                |
+| `FfiResourceProfile.MOBILE`      | Phones, Wear OS, Android TV       | a quarter of its memory, one compaction thread   |
+| `FfiResourceProfile.CONSTRAINED` | Wear OS 32-bit, budget TV dongles | a sixteenth of its memory, one compaction thread |
 
 `LiliaDatabase` implements `AutoCloseable`, so `use { }` also works:
 
 ```kotlin
-LiliaDatabase.open(path, FfiResourceProfile.MOBILE, null).use { db ->
+LiliaDatabase.open(path, FfiOpenOptions(FfiResourceProfile.MOBILE, FfiDurability.BALANCED)).use { db ->
     db.jsonPutSync("events", "evt:1", """{"kind":"tap"}""")
 }
 ```
@@ -303,7 +305,9 @@ val name = doc?.valueJson?.let { JSONObject(it).optString("name") }
 
 val deleted: Boolean = db.jsonDeleteSync("users", "usr:1")
 
-// Filtered query: a JSON object of field-equality predicates combined with AND.
+// Query: field paths (or index names) and values, combined with AND. An index on a
+// term serves the query; without one, the space is scanned.
+db.jsonCreateIndexSync("users", "role", "$.role", filter = null)
 // Array fields match when any element equals the value (multikey).
 val admins: List<FfiJsonEntry> = db.jsonFindSync(
     "users",
@@ -350,7 +354,8 @@ the generated bindings.
 
 ## 11. Full-Text Search (`fts*`)
 
-SQLite FTS5 with BM25 ranking and snippet extraction.
+BM25 ranking with snippets; `ftsSuggest`, `ftsFuzzySearch` and `ftsPhoneticSearch`
+tolerate typos, `ftsLoadDictionary` adds words suggestions draw from.
 
 ```kotlin
 db.ftsIndexSync("articles", "art:1", "LiliaDB delivers local-first multimodel storage.")
@@ -369,46 +374,48 @@ db.ftsDeleteSync("articles", "art:1")
 
 ## 12. Declarative SQL (`sqlQuery`)
 
-SQLite views over the multimodel storage:
+Read-only SQL (the DataFusion dialect) over tables of every model:
 
-| View                | Columns                                                           |
-| ------------------- | ----------------------------------------------------------------- |
-| `lilia_json`        | `(space, id, value, version)` — decoded plaintext JSON            |
-| `lilia_kv`          | `(namespace, key, value, version, expires_at_ms)` — decoded bytes |
-| `lilia_graph_nodes` | `(graph, id, kind, metadata)`                                     |
-| `lilia_graph_edges` | `(graph, source, target, kind)`                                   |
+| Table               | Columns                                                         |
+| ------------------- | --------------------------------------------------------------- |
+| `lilia_json`        | `space`, `id`, `value` (JSON text), `version`                   |
+| `lilia_kv`          | `namespace`, `key`, `value` (bytes), `version`, `expires_at_ms` |
+| `lilia_graph_nodes` | `graph`, `id`, `kind`, `metadata` (JSON text)                   |
+| `lilia_graph_edges` | `graph`, `source`, `target`, `kind`, `weight`                   |
+| `lilia_timeseries`  | `series`, `timestamp`, `value`                                  |
+| `<space>`           | one table per JSON space: `id`, `value`, `version`              |
 
-Positional parameters are bound by passing a JSON array of values as
-`paramsJson` (or `null` for none):
+JSON is read with `value->>'field'` and `json_get_str` / `json_get_int` /
+`json_get_float` / `json_get_bool`. Parameters `$1`, `$2`... are bound from a JSON
+array passed as `paramsJson` (or `null` for none):
 
 ```kotlin
 val result: FfiSqlQueryResult = db.sqlQuerySync(
     """
-    SELECT id, json_extract(value, '$.name') AS name
+    SELECT id, value->>'name' AS name
     FROM lilia_json
-    WHERE space = ?1
+    WHERE space = $1
     """.trimIndent(),
     paramsJson = """["users"]""",
 )
 
 result.columns      // ["id", "name"]
 result.rowsJson    // each row serialized as a JSON array, e.g. """["usr:1","Alice"]"""
-result.rowsAffected // 0 for SELECT, mutation count otherwise
+result.rowsAffected // 0: SQL is read-only
 ```
 
 ---
 
-## 13. Maintenance, Backup & Lifecycle
+## 13. Maintenance & Lifecycle
 
 ```kotlin
-// SQLite PRAGMA quick_check integrity verification
+// Verifies the ledger, fast (true without a ledger)
 val ok: Boolean = db.quickCheckSync()
+// Reads every stored entry, verifying block checksums, and verifies the ledger
+val intact: Boolean = db.integrityCheckSync()
 
-// Explicit WAL checkpoint
+// Writes recent commits to their sorted runs
 db.checkpointSync()
-
-// Atomic online backup to another file
-db.backupSync("${context.filesDir}/backup.lilia")
 
 // Graceful close: drain accepted in-flight operations, then release resources.
 db.closeSync(5_000uL) // timeout in milliseconds, as ULong
@@ -417,18 +424,18 @@ db.closeSync(5_000uL) // timeout in milliseconds, as ULong
 - `close` drains accepted in-flight operations before releasing resources; the
   timeout bounds the wait in milliseconds.
 - Operations started after `close` fail.
-- The `suspend` variants `quickCheck`, `checkpoint`, `backup`, and `close` behave
-  identically for coroutine-based callers.
+- The `suspend` variants `quickCheck`, `integrityCheck`, `checkpoint`, and `close`
+  behave identically for coroutine-based callers.
 
 ### Android Lifecycle Integration
 
-`prepareForBackground()` flushes the WAL and commits pending pages before the
-OS suspends your process — call it when your app goes to the background:
+`checkpoint()` writes recent commits to their sorted runs before the OS suspends
+your process — call it when your app goes to the background:
 
 ```kotlin
 class LiliaLifecycleObserver(private val db: LiliaDatabase) : DefaultLifecycleObserver {
     override fun onStop(owner: LifecycleOwner) {
-        db.prepareForBackground()
+        db.checkpointSync()
     }
 }
 
@@ -445,11 +452,13 @@ message payload:
 
 | Variant                          | Meaning                                                              |
 | -------------------------------- | -------------------------------------------------------------------- |
-| `LiliaFfiException.Storage`      | SQLite / storage engine failure                                      |
+| `LiliaFfiException.Storage`      | Storage engine failure                                               |
 | `LiliaFfiException.InvalidInput` | Malformed JSON, invalid key length, bad arguments                    |
 | `LiliaFfiException.NotFound`     | Requested entry does not exist                                       |
 | `LiliaFfiException.Conflict`     | Optimistic concurrency or busy conflict                              |
-| `LiliaFfiException.Crypto`       | Encryption / decryption failure (e.g. wrong key, invalid key length) |
+| `LiliaFfiException.Closed`       | The database is closed                                               |
+| `LiliaFfiException.Timeout`      | `close` still waiting for calls after its timeout                    |
+| `LiliaFfiException.Unsupported`  | An operation this engine version does not have                       |
 | `LiliaFfiException.Generic`      | Any other engine error                                               |
 
 ```kotlin
@@ -457,8 +466,8 @@ try {
     db.jsonPutSync("users", "usr:1", payload)
 } catch (e: LiliaFfiException.InvalidInput) {
     Log.w("Lilia", "Malformed JSON payload: ${e.v1}")
-} catch (e: LiliaFfiException.Crypto) {
-    Log.e("Lilia", "Decryption failed (wrong key?): ${e.v1}")
+} catch (e: LiliaFfiException.Closed) {
+    Log.w("Lilia", "The database is closed")
 } catch (e: LiliaFfiException) {
     Log.e("Lilia", "Database error: ${e.message}")
 }
@@ -480,21 +489,22 @@ full minification is enabled — add to your app's `proguard-rules.pro`:
 
 ## 16. API Reference
 
-Every method exists as a `suspend` function and as a `*Sync` blocking variant
-(except `prepareForBackground`, which is sync-only).
+Every method exists as a `suspend` function and as a `*Sync` blocking variant.
 
 | Area        | Methods                                                                                                                     | Notes                                                     |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Open        | `LiliaDatabase.open`, `LiliaDatabase.openWithPassphrase`                                                                    | Companion constructors; profile + optional key/passphrase |
+| Open        | `LiliaDatabase.open(path, options)`                                                                                         | `FfiOpenOptions`: profile, durability, ledger, history, undo |
 | KV          | `kvSet`, `kvGet`, `kvScan`, `kvDelete`                                                                                      | Binary keys/values; TTL via `expiresAtMs`                 |
-| JSON        | `jsonPut`, `jsonGet`, `jsonDelete`, `jsonFind`                                                                              | JSON strings; equality filters with keyset pagination     |
+| JSON        | `jsonPut`, `jsonGet`, `jsonDelete`, `jsonFind`, `jsonCreateIndex`, `jsonDropIndex`, `jsonListIndexes`                       | JSON strings; indexed queries with keyset pagination      |
 | Graph       | `graphSetNode`, `graphGetNode`, `graphDeleteNode`, `graphAddEdge`, `graphRemoveEdge`, `graphNeighbors`, `graphReachability` | `FfiDirection.OUTGOING` / `INCOMING` / `BOTH`             |
-| FTS         | `ftsIndex`, `ftsSearch`, `ftsDelete`                                                                                        | FTS5, BM25 rank, snippets                                 |
-| SQL         | `sqlQuery`                                                                                                                  | Views + positional JSON params                            |
-| Maintenance | `checkpoint`, `backup`, `quickCheck`, `prepareForBackground`, `close`                                                       | `close(timeoutMs: ULong)`                                 |
+| FTS         | `ftsIndex`, `ftsSearch`, `ftsDelete`, `ftsSuggest`, `ftsFuzzySearch`, `ftsPhoneticSearch`, `ftsLoadDictionary`              | BM25 rank, snippets, typo tolerance                       |
+| SQL         | `sqlQuery`                                                                                                                  | Read-only DataFusion; `$n` params as a JSON array         |
+| Time-series | `tsAppendPoints`, `tsQueryRange`, `tsQueryStats`, `tsQueryAuto`, `tsQueryRangeWithResolution`, `tsSetPolicy`, `tsGetPolicy`, `tsListPolicies`, `tsDeletePolicy`, `tsApplyRetention` | Rollups and retention policies |
+| Geofencing  | `geoAddFence`, `geoRemoveFence`, `geoContainsPoint`, `geoFindFencesForPoint`, `geoRecordGpsPoints`, `geoGetTrackPoints`, `geoTrackDistance` | Polygon fences, GPS tracks, fence entries |
+| Maintenance | `checkpoint`, `quickCheck`, `integrityCheck`, `close`                                                                       | `close(timeoutMs: ULong)`                                 |
 
 Related documentation: [Architecture](../../docs/architecture.md) |
-[Node.js SDK](../../docs/node_sdk.md) | [HTTP REST API](../../docs/http_api.md) |
+[Node.js SDK](../node/README.md) | [HTTP REST API](../../docs/http_api.md) |
 [Security Policy](../../SECURITY.md). For React Native integration, see
 [`@liliadb/react-native`](../react-native/README.md), which links this module on
 Android.

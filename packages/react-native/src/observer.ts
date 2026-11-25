@@ -1,61 +1,48 @@
-import type { DatabaseChangeEvent } from './types.js';
+// Listeners of change topics (see `changes.ts`).
+
+/** The topic every change reaches. */
+export const ANY_CHANGE = "*";
 
 export class DatabaseObserver {
   private readonly listeners = new Map<string, Set<() => void>>();
 
-  subscribe(pattern: string, callback: () => void): () => void {
-    let set = this.listeners.get(pattern);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(pattern, set);
+  /** Calls `listener` after each write that changes one of `topics`; returns the unsubscribe. */
+  subscribe(topics: string | readonly string[], listener: () => void): () => void {
+    const names = typeof topics === "string" ? [topics] : [...topics];
+    for (const topic of names) {
+      let set = this.listeners.get(topic);
+      if (!set) {
+        set = new Set();
+        this.listeners.set(topic, set);
+      }
+      set.add(listener);
     }
-    set.add(callback);
-
     return () => {
-      const current = this.listeners.get(pattern);
-      if (current) {
-        current.delete(callback);
-        if (current.size === 0) {
-          this.listeners.delete(pattern);
-        }
+      for (const topic of names) {
+        const set = this.listeners.get(topic);
+        set?.delete(listener);
+        if (set?.size === 0) this.listeners.delete(topic);
       }
     };
   }
 
-  emit(event: DatabaseChangeEvent): void {
-    const targets: string[] = ['*'];
-
-    switch (event.type) {
-      case 'kv':
-        targets.push(`kv:${event.namespace}`);
-        targets.push(`kv:${event.namespace}:${event.key}`);
-        break;
-      case 'json':
-        targets.push(`json:${event.space}`);
-        targets.push(`json:${event.space}:${event.id}`);
-        break;
-      case 'table':
-        targets.push(`table:${event.table}`);
-        break;
-      case 'custom':
-        targets.push(`tag:${event.tag}`);
-        break;
-    }
-
-    const notified = new Set<() => void>();
-    for (const target of targets) {
-      const set = this.listeners.get(target);
-      if (set) {
-        for (const cb of set) {
-          if (!notified.has(cb)) {
-            notified.add(cb);
-            try {
-              cb();
-            } catch (err) {
-              console.error('[LiliaDB Observer] Error in subscriber callback:', err);
-            }
-          }
-        }
+  /**
+   * Calls, once each, the listeners of `topics` and of `ANY_CHANGE`; every listener when
+   * `topics` is `undefined`. A listener that throws does not stop the others: its error is
+   * thrown again on its own, after them.
+   */
+  emit(topics: readonly string[] | undefined): void {
+    if (topics?.length === 0) return;
+    const sets = topics === undefined ? [...this.listeners.values()] : [...topics, ANY_CHANGE].map((topic) => this.listeners.get(topic));
+    // A snapshot, each listener once: a listener may subscribe or unsubscribe while they run.
+    const listeners = new Set(sets.flatMap((set) => (set ? [...set] : [])));
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error;
+        });
       }
     }
   }

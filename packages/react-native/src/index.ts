@@ -1,9 +1,15 @@
-export * from './types.js';
-export { LiliaDatabase } from './database.js';
-export { DatabaseObserver } from './observer.js';
-export { resolveDatabasePath } from './sandbox.js';
-export { LiliaContext, useDatabase, useLilia, LiliaConsumer } from './context.js';
-export { LiliaProvider } from './provider.js';
+// @liliadb/react-native: a LiliaDB database in a React Native app, through JSI, with hooks and
+// components that show its data and follow its writes.
+
+export * from "@liliadb/client";
+export * from "./types.js";
+export { LiliaDatabase } from "./database.js";
+export { DatabaseObserver, ANY_CHANGE } from "./observer.js";
+export { changedTopics, topics } from "./changes.js";
+export { resolveDatabasePath } from "./paths.js";
+export { decodeUtf8 } from "./utf8.js";
+export { LiliaContext, useDatabase, useLilia, LiliaConsumer } from "./context.js";
+export { LiliaProvider } from "./provider.js";
 export {
   useLiliaDatabase,
   useKv,
@@ -15,7 +21,7 @@ export {
   useSqlQuery,
   useMutation,
   useDatabaseMaintenance,
-} from './hooks.js';
+} from "./hooks.js";
 
 // ==========================================
 // BUILT-IN IDIOMATIC MOBILE COMPONENTS
@@ -67,7 +73,7 @@ export {
   type LiliaOptimisticButtonProps,
 } from './components/feedback/LiliaOptimisticButton.js';
 
-// Full-Text Search (FTS5)
+// Full-Text Search
 export {
   LiliaSearchBar,
   type LiliaSearchBarProps,
@@ -102,10 +108,6 @@ export {
   LiliaStorageBar,
   type LiliaStorageBarProps,
 } from './components/storage/LiliaStorageBar.js';
-export {
-  LiliaBackupShareButton,
-  type LiliaBackupShareButtonProps,
-} from './components/storage/LiliaBackupShareButton.js';
 
 // DevTools
 export {

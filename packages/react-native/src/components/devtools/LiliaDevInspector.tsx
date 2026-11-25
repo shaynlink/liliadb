@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useContext, useState } from 'react';
 import {
   View,
   Text,
@@ -12,8 +12,10 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { getDefaultDatabase, type LiliaDatabase } from '../../database.js';
-import { useDatabase } from '../../context.js';
+import type { JsonValue, SqlQueryResult } from '@liliadb/client';
+import { LiliaContext } from '../../context.js';
+import type { LiliaDatabase } from '../../database.js';
+import { decodeUtf8 } from '../../utf8.js';
 import { LiliaStorageBar } from '../storage/LiliaStorageBar.js';
 
 export interface LiliaDevInspectorProps {
@@ -26,19 +28,21 @@ type TabType = 'sql' | 'storage' | 'kv';
 
 /**
  * Idiomatic mobile DevTools floating inspector for LiliaDB.
- * Provides an on-device SQL console, live storage telemetry, and KV inspector in __DEV__.
+ * Provides an on-device SQL console, live storage statistics, and KV inspector in __DEV__.
  */
 export function LiliaDevInspector({
   enabled = typeof __DEV__ !== 'undefined' ? __DEV__ : true,
   position = 'bottom-right',
   db: explicitDb,
 }: LiliaDevInspectorProps): React.ReactElement | null {
+  const provided = useContext(LiliaContext);
+  const db = explicitDb ?? provided;
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('sql');
 
   // SQL Console State
-  const [sqlQuery, setSqlQuery] = useState('SELECT 1 as status, "Hello LiliaDB" as msg;');
-  const [sqlResults, setSqlResults] = useState<{ columns: string[]; rows: any[]; rowsAffected?: number } | null>(null);
+  const [sqlQuery, setSqlQuery] = useState("SELECT space, id FROM lilia_json LIMIT 20");
+  const [sqlResults, setSqlResults] = useState<SqlQueryResult<Record<string, JsonValue>> | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [isExecutingSql, setIsExecutingSql] = useState(false);
 
@@ -52,35 +56,15 @@ export function LiliaDevInspector({
     return null;
   }
 
-  let resolvedDb: LiliaDatabase | null = null;
-  try {
-    resolvedDb = useDatabase(explicitDb);
-  } catch {
-    resolvedDb = explicitDb ?? getDefaultDatabase();
-  }
-
-  const getDb = (): LiliaDatabase | null => {
-    return resolvedDb;
-  };
-
   const handleRunSql = async () => {
-    const db = getDb();
     if (!db) {
-      setSqlError('No active LiliaDB instance found.');
+      setSqlError('No open LiliaDB database.');
       return;
     }
-
     setIsExecutingSql(true);
     setSqlError(null);
     try {
-      // Use synchronous JSI if available, fallback to async
-      let res;
-      if (db.sync?.sql?.query) {
-        res = db.sync.sql.query(sqlQuery);
-      } else {
-        res = await db.sql.query(sqlQuery);
-      }
-      setSqlResults(res);
+      setSqlResults(await db.sql.raw<Record<string, JsonValue>>(sqlQuery));
     } catch (err) {
       setSqlError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -89,24 +73,21 @@ export function LiliaDevInspector({
   };
 
   const handleKvGet = () => {
-    const db = getDb();
     if (!db) return;
     try {
-      const val = db.sync?.kv?.peek(kvNamespace, kvKey);
-      setKvValue(val ?? '<nil>');
-      setKvStatus('Read completed');
+      const entry = db.sync.kv.get(kvNamespace, kvKey);
+      setKvValue(entry ? decodeUtf8(entry.value) : null);
+      setKvStatus(entry ? `Read version ${entry.version}` : 'No such key');
     } catch (err) {
       setKvStatus(`Error: ${String(err)}`);
     }
   };
 
   const handleKvSet = async () => {
-    const db = getDb();
-    if (!db || !kvValue) return;
+    if (!db || kvValue === null) return;
     try {
-      db.sync?.kv?.set(kvNamespace, kvKey, kvValue);
-      await db.kv.set(kvNamespace, kvKey, kvValue);
-      setKvStatus('Saved successfully');
+      const written = await db.kv.set(kvNamespace, kvKey, kvValue);
+      setKvStatus(`Saved as version ${written.version}`);
     } catch (err) {
       setKvStatus(`Save error: ${String(err)}`);
     }
@@ -145,7 +126,7 @@ export function LiliaDevInspector({
             <View>
               <Text style={styles.modalTitle}>LiliaDB Dev Inspector</Text>
               <Text style={styles.modalSubtitle} numberOfLines={1}>
-                {getDb()?.path ?? 'In-Memory / Default'}
+                {db?.path ?? 'No open database'}
               </Text>
             </View>
             <TouchableOpacity onPress={() => setIsOpen(false)} style={styles.closeButton}>
@@ -205,7 +186,7 @@ export function LiliaDevInspector({
                   {isExecutingSql ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
-                    <Text style={styles.runButtonText}>Execute Query (⚡ JSI)</Text>
+                    <Text style={styles.runButtonText}>Run Query</Text>
                   )}
                 </TouchableOpacity>
 
@@ -218,8 +199,7 @@ export function LiliaDevInspector({
                 {sqlResults && (
                   <View style={styles.resultsBox}>
                     <Text style={styles.resultsSummary}>
-                      {sqlResults.rows.length} rows returned{' '}
-                      {sqlResults.rowsAffected != null ? `(${sqlResults.rowsAffected} affected)` : ''}
+                      {sqlResults.records.length} rows returned
                     </Text>
 
                     <ScrollView horizontal>
@@ -234,11 +214,11 @@ export function LiliaDevInspector({
                         </View>
 
                         {/* Table Rows */}
-                        {sqlResults.rows.map((row, i) => (
+                        {sqlResults.records.map((row, i) => (
                           <View key={i} style={[styles.tableRow, i % 2 === 1 && styles.tableRowAlt]}>
                             {sqlResults.columns.map((col) => (
                               <Text key={col} style={styles.tableCell}>
-                                {String(row[col] ?? 'NULL')}
+                                {row[col] === null || row[col] === undefined ? 'NULL' : typeof row[col] === 'object' ? JSON.stringify(row[col]) : String(row[col])}
                               </Text>
                             ))}
                           </View>
@@ -252,7 +232,7 @@ export function LiliaDevInspector({
 
             {activeTab === 'storage' && (
               <View style={{ paddingTop: 8 }}>
-                <LiliaStorageBar db={getDb()} />
+                <LiliaStorageBar db={db} />
               </View>
             )}
 

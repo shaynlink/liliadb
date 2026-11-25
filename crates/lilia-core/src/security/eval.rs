@@ -13,6 +13,10 @@ pub fn eval_security_condition(expr: &Expr, doc: &Value, ctx: Option<&SecurityCo
 }
 
 /// Evaluates a raw string condition against a JSON document and an optional security context.
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidInput`](crate::ErrorCode::InvalidInput) when `condition` does not parse.
 pub fn eval_security_condition_str(
     condition: &str,
     doc: &Value,
@@ -117,9 +121,8 @@ fn eval_function(
             let Some(first_arg) = args.first() else {
                 return EvaluatedValue::Null;
             };
-            let key = match eval_node(first_arg, doc, ctx) {
-                EvaluatedValue::String(s) => s,
-                _ => return EvaluatedValue::Null,
+            let EvaluatedValue::String(key) = eval_node(first_arg, doc, ctx) else {
+                return EvaluatedValue::Null;
             };
             match ctx.and_then(|c| c.get(&key)) {
                 Some(val) => EvaluatedValue::String(val.to_string()),
@@ -130,9 +133,8 @@ fn eval_function(
             let Some(first_arg) = args.first() else {
                 return EvaluatedValue::Bool(false);
             };
-            let role = match eval_node(first_arg, doc, ctx) {
-                EvaluatedValue::String(s) => s,
-                _ => return EvaluatedValue::Bool(false),
+            let EvaluatedValue::String(role) = eval_node(first_arg, doc, ctx) else {
+                return EvaluatedValue::Bool(false);
             };
             EvaluatedValue::Bool(ctx.is_some_and(|c| c.has_role(&role)))
         }
@@ -154,10 +156,8 @@ fn eval_function(
                 (doc.clone(), &args[0])
             };
 
-            let path_val = eval_node(path_expr, doc, ctx);
-            let path_str = match path_val {
-                EvaluatedValue::String(s) => s,
-                _ => return EvaluatedValue::Null,
+            let EvaluatedValue::String(path_str) = eval_node(path_expr, doc, ctx) else {
+                return EvaluatedValue::Null;
             };
             extract_path_from_value(&target_doc, &path_str)
         }

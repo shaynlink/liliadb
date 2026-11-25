@@ -18,7 +18,7 @@ use crate::predicate::{ZkProofBundle, ZkVerificationReport};
 pub struct ZkVerifier;
 
 impl ZkVerifier {
-    /// Mathematically verifies a proof bundle against a VerifyingKey.
+    /// Mathematically verifies a proof bundle against a `VerifyingKey`.
     ///
     /// Runs 3 pairing evaluations on the BN254 elliptic curve and validates that
     /// the prover indeed knew secret values satisfying the committed public conditions.
@@ -28,8 +28,10 @@ impl ZkVerifier {
     ) -> Result<ZkVerificationReport> {
         let start = Instant::now();
 
-        let default_keys = default_solde_age_keys();
-        let vk = vk_override.unwrap_or(&default_keys.1);
+        let vk = match vk_override {
+            Some(vk) => vk,
+            None => &default_solde_age_keys()?.1,
+        };
 
         // 1. Deserialize 128-byte compressed proof
         let proof_bytes = bundle

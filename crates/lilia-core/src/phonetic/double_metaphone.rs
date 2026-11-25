@@ -3,6 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::remove_accents;
+use letters::{char_at, is_vowel, push, push_both, starts_at, starts_with, truncate_to};
+
+mod letters;
 
 /// Result containing the primary and optional alternate Double Metaphone phonetic codes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -53,7 +56,10 @@ impl DoubleMetaphoneResult {
 
 /// Encodes a word into its primary and alternate Double Metaphone phonetic keys (up to 4 characters).
 #[must_use]
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the published algorithm: one pass over the letters, one case per letter"
+)]
 pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
     let unaccented = remove_accents(word);
     let raw = unaccented.to_ascii_uppercase();
@@ -107,14 +113,14 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
             }
             'C' => {
                 if current > 1
-                    && !is_vowel(char_at(&s, current - 2))
-                    && char_at(&s, current - 1) == Some('A')
+                    && !is_vowel(char_at(&s, current.wrapping_sub(2)))
+                    && char_at(&s, current.wrapping_sub(1)) == Some('A')
                     && char_at(&s, current + 1) == Some('H')
                     && char_at(&s, current + 2) != Some('I')
                     && (char_at(&s, current + 2) != Some('E')
-                        || (char_at(&s, current - 3) == Some('B')
-                            || char_at(&s, current - 3) == Some('M')
-                            || char_at(&s, current - 3) == Some('R')))
+                        || (char_at(&s, current.wrapping_sub(3)) == Some('B')
+                            || char_at(&s, current.wrapping_sub(3)) == Some('M')
+                            || char_at(&s, current.wrapping_sub(3)) == Some('R')))
                 {
                     push_both(&mut primary, &mut alternate, 'K');
                     current += 2;
@@ -145,7 +151,9 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
                         }
                         current += 2;
                     }
-                } else if starts_at(&s, current, "CZ") && !starts_at(&s, current - 2, "WICZ") {
+                } else if starts_at(&s, current, "CZ")
+                    && !starts_at(&s, current.wrapping_sub(2), "WICZ")
+                {
                     push(&mut primary, 'S');
                     push(&mut alternate, 'X');
                     current += 2;
@@ -233,7 +241,7 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
             }
             'G' => {
                 if char_at(&s, current + 1) == Some('H') {
-                    if current > 0 && !is_vowel(char_at(&s, current - 1)) {
+                    if current > 0 && !is_vowel(char_at(&s, current.wrapping_sub(1))) {
                         push_both(&mut primary, &mut alternate, 'K');
                         current += 2;
                     } else if current == 0 {
@@ -244,9 +252,9 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
                         }
                         current += 2;
                     } else if current > 1
-                        && (char_at(&s, current - 2) == Some('B')
-                            || char_at(&s, current - 2) == Some('H')
-                            || char_at(&s, current - 2) == Some('D'))
+                        && (char_at(&s, current.wrapping_sub(2)) == Some('B')
+                            || char_at(&s, current.wrapping_sub(2)) == Some('H')
+                            || char_at(&s, current.wrapping_sub(2)) == Some('D'))
                     {
                         current += 2;
                     } else {
@@ -311,7 +319,7 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
                 }
             }
             'H' => {
-                if (current == 0 || is_vowel(char_at(&s, current - 1)))
+                if (current == 0 || is_vowel(char_at(&s, current.wrapping_sub(1))))
                     && is_vowel(char_at(&s, current + 1))
                 {
                     push_both(&mut primary, &mut alternate, 'H');
@@ -327,7 +335,8 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
                 } else if current == 0 {
                     push(&mut primary, 'J');
                     push(&mut alternate, 'A');
-                } else if is_vowel(char_at(&s, current - 1)) && !is_vowel(char_at(&s, current + 1))
+                } else if is_vowel(char_at(&s, current.wrapping_sub(1)))
+                    && !is_vowel(char_at(&s, current + 1))
                 {
                     push(&mut primary, 'J');
                     push(&mut alternate, 'H');
@@ -352,9 +361,9 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
             'L' => {
                 if char_at(&s, current + 1) == Some('L') {
                     if (current == len - 3
-                        && (starts_at(&s, current - 1, "ILLO")
-                            || starts_at(&s, current - 1, "ILLA")
-                            || starts_at(&s, current - 1, "ALLE")))
+                        && (starts_at(&s, current.wrapping_sub(1), "ILLO")
+                            || starts_at(&s, current.wrapping_sub(1), "ILLA")
+                            || starts_at(&s, current.wrapping_sub(1), "ALLE")))
                         || (starts_at(&s, len - 2, "AS") || starts_at(&s, len - 2, "OS"))
                     {
                         push(&mut primary, 'L');
@@ -493,10 +502,10 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
             }
             'X' => {
                 if !(current == len - 1
-                    && (starts_at(&s, current - 3, "IAU")
-                        || starts_at(&s, current - 3, "EAU")
-                        || starts_at(&s, current - 2, "AU")
-                        || starts_at(&s, current - 2, "OU")))
+                    && (starts_at(&s, current.wrapping_sub(3), "IAU")
+                        || starts_at(&s, current.wrapping_sub(3), "EAU")
+                        || starts_at(&s, current.wrapping_sub(2), "AU")
+                        || starts_at(&s, current.wrapping_sub(2), "OU")))
                 {
                     push(&mut primary, 'K');
                     push(&mut primary, 'S');
@@ -543,107 +552,5 @@ pub fn double_metaphone(word: &str) -> DoubleMetaphoneResult {
     }
 }
 
-#[inline]
-fn is_vowel(c: Option<char>) -> bool {
-    matches!(c, Some('A' | 'E' | 'I' | 'O' | 'U' | 'Y'))
-}
-
-#[inline]
-fn char_at(s: &[char], idx: usize) -> Option<char> {
-    s.get(idx).copied()
-}
-
-#[inline]
-fn starts_with(s: &[char], prefix: &str) -> bool {
-    starts_at(s, 0, prefix)
-}
-
-#[inline]
-fn starts_at(s: &[char], offset: usize, prefix: &str) -> bool {
-    let p_chars: Vec<char> = prefix.chars().collect();
-    if offset + p_chars.len() > s.len() {
-        return false;
-    }
-    for (i, &pc) in p_chars.iter().enumerate() {
-        if s[offset + i] != pc {
-            return false;
-        }
-    }
-    true
-}
-
-#[inline]
-fn push(target: &mut String, c: char) {
-    if target.len() < 4 {
-        target.push(c);
-    }
-}
-
-#[inline]
-fn push_both(primary: &mut String, alternate: &mut String, c: char) {
-    push(primary, c);
-    push(alternate, c);
-}
-
-#[inline]
-fn truncate_to(s: &mut String, max_len: usize) {
-    if s.len() > max_len {
-        s.truncate(max_len);
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_smith_smyth() {
-        let r_smith = double_metaphone("Smith");
-        let r_smyth = double_metaphone("Smyth");
-
-        assert_eq!(r_smith.primary, "SM0");
-        assert_eq!(r_smith.alternate.as_deref(), Some("SMT"));
-
-        assert_eq!(r_smyth.primary, "SM0");
-        assert_eq!(r_smyth.alternate.as_deref(), Some("SMT"));
-
-        assert!(
-            r_smith.matches(&r_smyth),
-            "Smith and Smyth must match in Double Metaphone"
-        );
-    }
-
-    #[test]
-    fn test_pfizer_fizer() {
-        let r_pfizer = double_metaphone("Pfizer");
-        let r_fizer = double_metaphone("Fizer");
-
-        assert_eq!(r_pfizer.primary, "FSR");
-        assert_eq!(r_fizer.primary, "FSR");
-
-        assert!(
-            r_pfizer.matches(&r_fizer),
-            "Pfizer and Fizer must match in Double Metaphone"
-        );
-    }
-
-    #[test]
-    fn test_gerard_guerard() {
-        let r_gerard = double_metaphone("Gérard");
-        let r_guerard = double_metaphone("Guerard");
-
-        assert!(
-            r_gerard.matches(&r_guerard),
-            "Gérard and Guerard must match in Double Metaphone: gerard={r_gerard:?}, guerard={r_guerard:?}"
-        );
-    }
-
-    #[test]
-    fn test_accents_and_empty() {
-        assert_eq!(double_metaphone("").primary, "");
-        assert_eq!(double_metaphone("12345").primary, "");
-        assert_eq!(double_metaphone("Catherine").primary, "K0RN");
-        assert_eq!(double_metaphone("Katherine").primary, "K0RN");
-        assert!(double_metaphone("Catherine").matches(&double_metaphone("Katherine")));
-    }
-}
+mod tests;

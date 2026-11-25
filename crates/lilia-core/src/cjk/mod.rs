@@ -1,6 +1,8 @@
 //! Native CJK (Chinese, Japanese, Korean) micro-segmentation and tokenization.
 
+#[cfg(feature = "cjk")]
 use std::collections::HashSet;
+#[cfg(feature = "cjk")]
 use std::sync::OnceLock;
 
 #[cfg(feature = "cjk")]
@@ -300,8 +302,8 @@ fn segment_korean_chunk(chunk: &str, tokens: &mut Vec<String>) {
     }
 }
 
-/// Prepares text for FTS5 indexing. If the text contains CJK, words and bi-grams
-/// are separated by spaces so SQLite FTS5 unicode61 tokenizer indexes them individually.
+/// Prepares text for full-text indexing. If the text contains CJK, words and bi-grams
+/// are separated by spaces so a whitespace tokenizer indexes them individually.
 #[must_use]
 pub fn prepare_cjk_for_indexing(content: &str) -> String {
     if !contains_cjk(content) {

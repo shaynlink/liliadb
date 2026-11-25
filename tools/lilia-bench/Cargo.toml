@@ -1,0 +1,53 @@
+[package]
+name = "lilia-bench"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.100.0"
+license = "Apache-2.0"
+publish = false
+description = "Comparative read/write benchmark suite: LiliaDB against embedded storage engines"
+
+# Standalone: competitor engines (RocksDB, DuckDB, LMDB, SQLite) must never enter the published
+# workspace build.
+[workspace]
+
+[[bin]]
+name = "lilia-bench"
+path = "src/main.rs"
+
+[features]
+# Each feature group is compiled into its own binary by `lilia-bench suite`.
+lilia = ["dep:lilia-core", "dep:lilia-engine", "dep:lilia-db", "dep:lilia-protocol"]
+sqlite = ["dep:rusqlite"]
+kvs = ["dep:redb", "dep:fjall", "dep:heed"]
+rocksdb = ["dep:rocksdb"]
+duckdb = ["dep:duckdb"]
+
+[dependencies]
+clap = { version = "4.6.9", features = ["derive"] }
+libc = "0.2.186"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+
+lilia-core = { path = "../../crates/lilia-core", optional = true }
+lilia-db = { path = "../../crates/lilia-db", optional = true }
+lilia-engine = { path = "../../crates/lilia-engine", optional = true }
+lilia-protocol = { path = "../../crates/lilia-protocol", optional = true }
+rusqlite = { version = "=0.40.2", features = ["bundled"], optional = true }
+redb = { version = "5.0.0", optional = true }
+fjall = { version = "3.1.13", optional = true }
+heed = { version = "0.23.1", optional = true }
+rocksdb = { version = "0.25.0", default-features = false, optional = true }
+duckdb = { version = "1.20000.2", features = ["bundled"], optional = true }
+
+[profile.release]
+debug = "line-tables-only"
+codegen-units = 1
+lto = "thin"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }

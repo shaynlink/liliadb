@@ -10,14 +10,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 lilia-core = { path = "../lilia-core" }
-lilia-storage-sqlite = { path = "../lilia-storage-sqlite" }
-lilia-graph = { path = "../lilia-graph" }
+lilia-db = { path = "../lilia-db" }
+lilia-protocol = { path = "../lilia-protocol" }
 napi.workspace = true
 napi-derive.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-rmp-serde.workspace = true
-tokio.workspace = true
 
 [build-dependencies]
 napi-build = "2.2.3"

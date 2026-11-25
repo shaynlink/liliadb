@@ -7,6 +7,187 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - 0.2.0-alpha.1
+
+### Added
+- **Comparative benchmark suite (`tools/lilia-bench`)**: one command (`pnpm bench:compare`) measures
+  LiliaDB against SQLite (with and without `fullfsync`), LMDB, redb, fjall, RocksDB (with and
+  without `HAVE_FULLFSYNC`) and DuckDB, on writes (1–64 concurrent writers, batches, value sizes,
+  updates, deletes), reads (point reads after reopen and warm, 1–N threads, multi-get, ranges,
+  scans), YCSB A–F, JSON documents, full-text search, vector search and analytics, plus the
+  JavaScript surfaces. Every engine runs in its most durable mode and every row states the sync
+  primitive it uses, checked against the measured commit latency. Wrong answers fail a run instead
+  of producing a number. Raw results are kept in `docs/benchmarks.jsonl`.
+- **v0.2 storage RFC** (`docs/v0.2-storage-paradigm.md`): audit of the write path and the
+  native log-structured engine plan.
+
+- **`lilia-io`**: platform layer of the v0.2 engine. A `Vfs` trait with the native file system
+  (`F_FULLFSYNC` / `F_BARRIERFSYNC` on Apple, `fdatasync` on Linux, `FlushFileBuffers` on Windows,
+  `F_PREALLOCATE` / `fallocate`) and an in-memory file system that models power loss (synced data
+  and directory entries survive, unsynced tails may be torn) with fault injection;
+  `HardwareProfile` (page size, cache line, performance and efficiency cores, memory) and
+  background QoS for maintenance threads.
+- **`lilia-engine`**: native log-structured storage engine (not yet wired behind the `LiliaDB`
+  models). Group commit (one journal write and one sync per group of concurrent commits),
+  lock-free MVCC memtable, atomic batches with version expectations, snapshots, range iterators,
+  checksummed sorted runs with Bloom filters and a sharded block cache, an atomic manifest, and
+  leveled compaction on background threads. Recovery replays journals up to the first damaged
+  record. Validated by an oracle test, a concurrent maintenance stress test, and 100,000
+  simulated power cuts with torn writes and injected I/O errors. Read path: CLOCK block cache
+  spread over 64 shards, runs that keep their own open table, binary-search index blocks, a
+  blocked Bloom filter per memtable, batched memtable iteration and zero-copy scan values
+  (point reads ×2.5 single-threaded, ×2.9 with 10 threads).
+- **`lilia-db`**: the data models over `lilia-engine`, without SQLite (bindings not yet switched).
+  Key-value records with expiry; JSON documents with secondary indexes over paths or expressions,
+  partial indexes, online index builds and equality `find` served by the indexes; atomic batches
+  over every model with per-record version conditions; paged scans; optimistic transactions over
+  a snapshot, validated at commit; row-level security and masking applied by one guard on every
+  read and write of a `Session`, with no thread-global context; an optional ledger kept as a
+  Merkle Mountain Range in the same engine batch as the data (O(log n) append and proof, record and
+  commit proofs, fast and strict verification). Validated by 22,000 simulated power cuts that
+  check records, ledger and indexes together.
+- **`lilia-engine`**: `WriteBatch::at_sequence` (commit only at a given sequence number),
+  `Db::last_sequence`, and the group commit queue exported as `GroupCommit` for layers that
+  serialize their own commits.
+- **`lilia-db` models (alpha.3b)**: every data model now runs on `lilia-engine`, each a model
+  handle of a session or transaction whose writes are batch writes like any other, read through
+  the caller's policies, with ledger records and proofs:
+  - graph nodes and edges (outbound and inbound adjacency), traversals;
+  - full-text search: postings, BM25, phrase, fuzzy and phonetic queries, suggestions;
+  - vectors with exact search and an optional HNSW index (`f32`, `i8`, bits);
+  - time series in compressed chunks of up to 1,024 points, with range statistics, lifecycle
+    policies (downsampling then expiry per tier, resumable) and late writes;
+  - geofences found by the points they contain (a multi-level grid, then an exact polygon test)
+    and GPS tracks with exact H3 proximity;
+  - CRDTs (PN-counters, add-wins OR-sets, LWW JSON documents) merged with remote replica states,
+    stored so that concurrent writers of one object rarely conflict;
+  - bitemporal entities: values over valid-time intervals recorded at transaction times, a
+    permanent audit trail, reads as known now or at any earlier time.
+- **`lilia-db` history**: `Options::history_retention` (a week by default) keeps old versions in the
+  engine, at no measurable throughput cost; the space they take grows with how often records are
+  overwritten within the window (2.4× the disk after 7 updates per key, in the RFC's measurement); `Session::at_version` / `at_time` read the database as it was, through every model;
+  `json_history`, `kv_history` and `json_diff` list and compare the versions of a record.
+  `Options::undo_depth` makes commits undoable (`Database::undo`, `redo`, `undo_history`).
+  Validated by 22,000 simulated power cuts that now write every model in each batch, then check
+  every model, the bitemporal audit trail, and an undo then redo of the last batch.
+- **`lilia-engine`**: history retention (`Options::retain_history`, `Db::set_history_horizon`),
+  snapshots at a past sequence (`Db::snapshot_at`) and the kept versions of a key (`Db::history`).
+
+### Changed
+- `docs/benchmarks.md` is generated from measurements; the README no longer carries hand-written
+  benchmark numbers.
+- JavaScript benchmark drivers moved out of the published `@liliadb/node` package into
+  `tools/benchmarks/sdk/`, one process per surface, with read workloads added.
+- **`lilia-cli`** runs on `lilia-db`: the commands the protocol has are operations of
+  `lilia_protocol::execute`, as for the daemon and the bindings, and print what their response
+  carries; bitemporal reads and the ledger use the database itself. The database is a directory;
+  `--durability`, `--profile`, `--ledger`, `--history-retention-ms` and `--undo-depth` open it
+  (and are passed on to `lilia daemon start`). New: `json find`, `json create-index`,
+  `json drop-index`, `json indexes`, `graph edge --weight`, `vector create-index --dim`.
+  Directions are `outgoing`, `incoming`, `both`; element types `float32`, `int8`, `bit`.
+  `doctor` reports the integrity check and the storage; `ledger prove-*` take no version (the
+  current one is proven) and `ledger verify-proof` checks against `--expected-root` or the
+  proof's own root.
+- **Conformance** (`tools/conformance`): the Rust surface is `lilia_protocol::execute`
+  (`crates/lilia-protocol/tests/conformance.rs`). The oracle names versions (`"$kv_a1"`)
+  instead of stating SQLite's per-record counters: a version is the engine's sequence number of a
+  write, and a delete has one. An empty batch commits nothing and answers `[]`. The precision
+  suite that rewrote SQLite rows to versions above 2^53 is gone; the `u64` round trips stay
+  tested by the protocol and client codec tests.
+- **`lilia-bench`**: `lilia` is `lilia-db` (`lilia`, `lilia-ledger`, `lilia-nohistory`); the
+  model workloads run the protocol's operations, and analytics is DataFusion over the JSON space.
+  SQLite remains a competitor engine.
+- **`lilia-zk`**: `DocumentWitness` holds a document's `balance`, `age` and salt; its
+  `commitment` and `prove` share them, so a proof answers for the commitment published before it
+  (commit and prove used to resolve a textual salt differently). `lilia zk prove` takes
+  `--condition "balance >= 1000 AND age >= 18"` and refuses other claims.
+- **The rules of the storage RFC (§5.2) run in CI**: `tools/lint.sh`, run on every platform of
+  the `rust` job and by the release, checks formatting; clippy with warnings as errors on every
+  target, where every `#[allow]` carries `reason = "..."` (`allow_attributes_without_reason`);
+  no `unwrap`, `expect` or `let _ =` of a must-use value outside tests; no source file over 600
+  lines; and `unsafe_code` lifted only in `lilia-io` and the native bindings (`lilia-ffi`,
+  `lilia-node-native`, `lilia-wasm`). The `wasm` job lints the browser-only code. The
+  regression-benchmark rule waits for the reference machine. Files over the limit were split
+  (the daemon's HTTP gateway, the CLI's arguments, the protocol's executor and tests, the
+  planner of `lilia-db`, the engine's open path, HNSW, Double Metaphone).
+- **`lilia-io`**: the `ipc` feature holds the daemon's operating-system access control, moved
+  out of `lilia-daemon` with its `unsafe` code: the macOS ACL check of the socket path, and the
+  Windows security descriptor, named pipes and token publication (with the opt-in cross-account
+  test, `tools/test-windows-accounts.ps1`). The token's directory is synced through
+  `NativeVfs::sync_dir`.
+- `HnswIndex::insert` returns the node's internal id; the list of nodes to persist it returned
+  for the SQLite engine is gone.
+- **Documentation of the switch**: `docs/architecture.md` describes v0.2 as built (the engine,
+  `lilia-io`, the models of `lilia-db`, the protocol and its codecs, the bindings, the daemon and
+  its IPC security) instead of the SQLite engine; the storage RFC records alpha.3c (§7.4) and the
+  fate of the modules §5.3 left open. `docs/http_api.md` documents `POST /v1/json/scan_by_index`,
+  the `408` and `501` statuses and `--development`, and its SQL example uses the DataFusion
+  dialect; the change stream it described is gone.
+- **`docs/benchmarks.md` measures `lilia-db`** (2026-11-24, `full` profile) instead of the
+  SQLite engine. Against v0.1: power-safe commits where v0.1 only reached the drive cache, bulk
+  loads 11.2× faster, a third of the disk (272.8 MiB for 1,000,000 keys) and a write
+  amplification of 2.84× instead of 268×, point reads 5.1× faster on one thread and 32× on ten.
+  Slower than v0.1: full-text queries (293 queries/s instead of 1,244 for one term), SQL
+  analytics (334 ms instead of 1 ms, without the columnar tables) and vector recall@10 (0.670
+  instead of 0.742).
+- **The JavaScript benchmark covers the local databases of Node, Bun and Deno**: libsql, sqlite3,
+  lmdb-js, LevelDB (classic-level), PGlite, DuckDB and SurrealDB join better-sqlite3,
+  `node:sqlite`, `bun:sqlite` and `@db/sqlite`; every SQLite driver also runs with `fullfsync`.
+  The report groups the surfaces by sync class and checks each declared sync against the
+  measured commit latency. LiliaDB's surfaces were declared `fsync`; they flush the drive cache
+  (`F_FULLFSYNC`).
+- **Releases are GitHub releases only**: a release tag creates the GitHub release (archives,
+  prebuilds, Homebrew formulas, checksums) and no longer publishes to npm or pushes to the
+  Homebrew tap; the manual `publish-npm` workflow is removed.
+
+### Fixed
+- **`lilia-engine`**: a run moved to the next level unchanged had its file deleted once the moved
+  copy was compacted away, while an older version still listed it; a long read through that
+  version (ledger verification) then failed with "file not found". The file now belongs to every
+  placement of the run.
+- **`lilia-zk`**: an `age` threshold above 2^32 was truncated, so `age >= 2^32 + 18` proved
+  `age >= 18`; it is now refused as an invalid statement.
+- **`lilia-core`**: a timestamp with more than 21 fractional digits overflowed while scaling them
+  to milliseconds; digits beyond the millisecond are now ignored. A whole archived float beyond
+  the range of `i64` read as `i64::MAX` or `i64::MIN`; `as_i64` now answers `None`.
+
+### Removed
+- `lilia_bench`, `bench_rusqlite` and `lilia_bench_analytics` binaries and the `bench-bin` feature of
+  `lilia-storage-sqlite`, with their `clap` and `rusqlite` dependencies.
+- `jit_bench` binary of `lilia-storage-sqlite`: a printing duplicate of the criterion benchmark
+  `benches/query_jit.rs` (interpreted, JIT single, JIT batch).
+- `docs/benchmarks_comparison.md` and `tools/benchmarks/run_comparative_suite.mjs`, whose analysis
+  text was written by hand and contradicted their own tables.
+- **The SQLite engine**: `lilia-storage-sqlite`, `lilia-sqlite-native` (the vendored
+  amalgamation), `lilia-shm`, `lilia-plugin-api` and the `plugins/` (`kv`, `json`, `sql`,
+  `codec`). Every binding runs on `lilia-db`.
+- From `lilia-core`, the modules only the SQLite engine used: aggregation pipelines, index
+  autotuning, content-addressed blobs, value codecs and envelope encryption, field-level
+  encryption (AES-GCM, AES-SIV, Paillier), compression dictionaries, dataflow views, energy and
+  flash-wear heuristics, invertible Bloom filters, the Markov prefetcher, Reed-Solomon parity,
+  rules, sharding, storage tiers, hybrid logical clocks, integrity contracts (`CHECK`,
+  references), the Cranelift JIT, and the old ledger accumulator; with them the
+  `jit` and `zk` features, eight dependencies of the crate and twenty-two of the workspace.
+  `MutationResult` keeps `version` and `deleted`; `BatchOperation::JsonPutHlc` and the
+  `CONSTRAINT_VIOLATION`, `TAMPER_DETECTED` and plugin error codes are gone (as is
+  `LiliaFfiError.ConstraintViolation`). The deletion took `lilia-core` from 125 clippy
+  warnings to 13.
+- `lilia-embed` no longer depends on `lilia-core`'s embedding configuration: `BuiltinModel` and
+  the `Embedder` trait are its own, and its example stores and searches the vectors with
+  `lilia-db`.
+- Unchecked rkyv access, the last `unsafe` outside `lilia-io` and the bindings:
+  `access_archived_unchecked` and `access_archived_doc_unchecked` (`lilia-core`) and
+  `read_archived_frame_unchecked` (`lilia-protocol`), with their benchmark cases; and
+  `lilia-core`'s Windows directory sync, replaced by `lilia-io`'s.
+- From `lilia-core`, code nothing called: `downsample_points` (duplicated by the time-series
+  lifecycle of `lilia-db`), `HnswIndex::load_node_edges` (the SQLite engine's index loader), and
+  the `getrandom` 0.4 dependency.
+- `lilia` commands retired with SQLite: `backup`, `blob`, `integrity` (references and checks),
+  `json create-collection` and `json set-check`, `plugin` and the global `--plugin` (the daemon no
+  longer loads plugins), and `zk setup --template` (one circuit).
+
+---
+
 ## [0.1.0-alpha.9] - 2026-11-20
 
 ### Added

@@ -74,7 +74,7 @@ fn borrowed_to_serde(val: simd_json::BorrowedValue<'_>) -> serde_json::Value {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(not(feature = "simd"))]
 fn parse_with_scalar(input: &[u8]) -> Result<BinaryDoc> {
     let val: serde_json::Value = serde_json::from_slice(input)
         .map_err(|e| LiliaError::new(ErrorCode::InvalidInput, e.to_string(), false))?;

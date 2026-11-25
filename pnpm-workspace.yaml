@@ -2,6 +2,7 @@ packages:
   - "packages/*"
   - "apps/lilia-vscode"
   - "examples/*"
+  - "tools/benchmarks"
 
 overrides:
   axios: ^1.21.0
@@ -11,15 +12,22 @@ overrides:
 
 allowBuilds:
   better-sqlite3: true
+  classic-level: true
   esbuild: true
+  lmdb: true
+  msgpackr-extract: false
   nx: true
   sharp: true
+  sqlite3: true
   workerd: true
 
 onlyBuiltDependencies:
   - "@swc/core"
   - "better-sqlite3"
+  - "classic-level"
   - "esbuild"
+  - "lmdb"
   - "nx"
   - "sharp"
+  - "sqlite3"
   - "workerd"

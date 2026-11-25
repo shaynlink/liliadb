@@ -1,41 +1,85 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:typed_data';
+
 import 'ffi/bindings.dart';
 import 'observer.dart';
-import 'secure_storage.dart';
+import 'wire.dart';
 
+export 'wire.dart' show LiliaException;
+
+/// How much of the device the engine sizes its buffers from.
 enum ResourceProfile {
-  /// 8MB SQLite cache, optimized WAL (Smartphones, Tablets, Android TV).
+  /// A quarter of the device's memory, one compaction thread (phones, tablets, Android TV).
   mobile,
 
-  /// 2MB SQLite cache, mmap disabled (watchOS, Wear OS, Apple TV).
+  /// A sixteenth of the device's memory, one compaction thread (watches, low-memory devices).
   constrained,
 
-  /// 64MB SQLite cache, 256MB mmap (Desktop, Server).
+  /// The whole machine (desktops, servers).
   server,
 }
 
 typedef LiliadbProfile = ResourceProfile;
 
+/// What survives a crash or a power loss.
+enum Durability {
+  /// Every acknowledged commit survives power loss.
+  durable,
+
+  /// The journal stays consistent across power loss; the latest commits may be lost.
+  balanced,
+
+  /// No sync on commit: commits survive a crash of the app, not power loss.
+  performance,
+}
+
+/// How a database opens.
 class LiliadbOptions {
+  /// Directory of the database, created if missing.
   final String path;
   final ResourceProfile profile;
+  final Durability durability;
+
+  /// Keep a tamper-evident ledger of every record write; a database that keeps one must
+  /// always be opened with it.
+  final bool ledger;
+
+  /// How long old versions stay readable, in milliseconds; a week when null, 0 keeps none.
+  final int? historyRetentionMs;
+
+  /// Commits that can be undone; none by default.
+  final int undoDepth;
+
+  /// Checkpoint when the app goes to the background ([LiliaScope]).
   final bool autoFlushOnBackground;
-  final bool useSecureStorage;
 
   const LiliadbOptions({
     required this.path,
     this.profile = ResourceProfile.mobile,
+    this.durability = Durability.durable,
+    this.ledger = false,
+    this.historyRetentionMs,
+    this.undoDepth = 0,
     this.autoFlushOnBackground = true,
-    this.useSecureStorage = false,
   });
+
+  Map<String, Object?> toJson() => {
+        'path': path,
+        'profile': profile.name,
+        'durability': durability.name,
+        'ledger': ledger,
+        if (historyRetentionMs != null) 'history_retention_ms': historyRetentionMs,
+        'undo_depth': undoDepth,
+      };
 }
 
 class KvEntry {
   final String namespace;
   final Uint8List key;
   final Uint8List value;
+
+  /// The engine sequence of the write: later writes of the database have greater ones.
   final int version;
   final int? expiresAtMs;
 
@@ -62,6 +106,15 @@ class JsonEntry<T> {
     required this.value,
     required this.version,
   });
+}
+
+/// A secondary index of a JSON space.
+class JsonIndexInfo {
+  final String space;
+  final String indexName;
+  final String jsonPath;
+
+  const JsonIndexInfo({required this.space, required this.indexName, required this.jsonPath});
 }
 
 class GraphNode<T> {
@@ -94,7 +147,11 @@ class FtsHit {
 
 class SqlQueryResult<T> {
   final List<String> columns;
+
+  /// One record per row, keyed by column.
   final List<T> rows;
+
+  /// Always 0: SQL is read-only.
   final int rowsAffected;
 
   const SqlQueryResult({
@@ -104,25 +161,46 @@ class SqlQueryResult<T> {
   });
 }
 
-class StorageMetrics {
-  final int mainBytes;
-  final int walBytes;
-  final int shmBytes;
-  final int totalBytes;
+/// The sorted runs of one level of the storage.
+class LevelStats {
+  final int runs;
+  final int bytes;
 
-  const StorageMetrics({
-    required this.mainBytes,
-    required this.walBytes,
-    required this.shmBytes,
-    required this.totalBytes,
-  });
+  const LevelStats({required this.runs, required this.bytes});
 }
 
-/// The core LiliaDB Database instance for Flutter.
+/// The shape of the storage.
+class StorageStats {
+  /// Level 0 first.
+  final List<LevelStats> levels;
+
+  /// Recent writes held in memory, not yet in a sorted run.
+  final int memtableBytes;
+  final int immutableMemtables;
+
+  /// The newest version written.
+  final int version;
+
+  /// The oldest version still readable.
+  final int oldestVersion;
+
+  const StorageStats({
+    required this.levels,
+    required this.memtableBytes,
+    required this.immutableMemtables,
+    required this.version,
+    required this.oldestVersion,
+  });
+
+  /// Bytes of the sorted runs on disk.
+  int get diskBytes => levels.fold(0, (total, level) => total + level.bytes);
+}
+
+/// A LiliaDB database.
 ///
-/// Exposes both:
-/// - [sync]: Sub-millisecond synchronous execution via direct Dart FFI (Zero FOUC)
-/// - Asynchronous APIs: Non-blocking executions for heavier tasks
+/// [sync] runs each call on the calling isolate and returns its result; the asynchronous
+/// namespaces ([kv], [json]...) run the same calls and complete with their results. Run heavy
+/// work (large scans, analytical SQL) from a background isolate.
 class LiliaDatabase {
   final String path;
   final ResourceProfile profile;
@@ -131,19 +209,12 @@ class LiliaDatabase {
 
   bool _isClosed = false;
 
-  // In-memory cache for synchronous peek and instant UI rendering
+  /// Values read or written through [_LiliaSyncKv], for instant `peek`s from the UI.
   final Map<String, String> _memoryKvCache = {};
-  final Map<String, Map<String, String>> _memoryJsonCache = {};
 
-  // Global Singleton Registry
   static final Map<String, LiliaDatabase> _singletonRegistry = {};
 
-  static LiliaDatabase? getDefault() {
-    if (_singletonRegistry.isNotEmpty) {
-      return _singletonRegistry.values.first;
-    }
-    return null;
-  }
+  static LiliaDatabase? getDefault() => _singletonRegistry.isEmpty ? null : _singletonRegistry.values.first;
 
   LiliaDatabase._({
     required this.path,
@@ -153,51 +224,34 @@ class LiliaDatabase {
     _singletonRegistry[path] = this;
   }
 
-  /// Opens a LiliaDB database file with the given hardware profile and optional encryption.
+  /// Opens (or creates) the database of directory [path]; an open database of the same path
+  /// is returned as it is.
   static Future<LiliaDatabase> open({
     required String path,
     ResourceProfile profile = ResourceProfile.mobile,
-    bool useSecureStorage = false,
-    Uint8List? encryptionKey,
-    String? passphrase,
-  }) async {
-    // Check singleton registry
-    if (_singletonRegistry.containsKey(path) && !_singletonRegistry[path]!._isClosed) {
-      return _singletonRegistry[path]!;
-    }
+    Durability durability = Durability.durable,
+    bool ledger = false,
+    int? historyRetentionMs,
+    int undoDepth = 0,
+  }) =>
+      openWith(LiliadbOptions(
+        path: path,
+        profile: profile,
+        durability: durability,
+        ledger: ledger,
+        historyRetentionMs: historyRetentionMs,
+        undoDepth: undoDepth,
+      ));
 
-    Uint8List? resolvedKey = encryptionKey;
-    if (useSecureStorage && resolvedKey == null && passphrase == null) {
-      final dbName = path.split(RegExp(r'[/\\]')).last;
-      resolvedKey = await LiliaSecureStorage.getOrCreateKey(dbName);
-    }
-
-    final bindings = LiliaNativeBindings.instance;
-    final profileCode = switch (profile) {
-      ResourceProfile.constrained => 1,
-      ResourceProfile.server => 2,
-      ResourceProfile.mobile => 0,
-    };
-
-    final handle = bindings.open(
-      path: path,
-      profileCode: profileCode,
-      keyBytes: resolvedKey,
-      passphrase: passphrase,
-    );
-
-    return LiliaDatabase._(
-      path: path,
-      profile: profile,
-      handle: handle,
-    );
+  /// Opens (or creates) the database [options] describe.
+  static Future<LiliaDatabase> openWith(LiliadbOptions options) async {
+    final open = _singletonRegistry[options.path];
+    if (open != null && !open._isClosed) return open;
+    final handle = LiliaNativeBindings.instance.open(options.toJson());
+    return LiliaDatabase._(path: options.path, profile: options.profile, handle: handle);
   }
 
   bool get isClosed => _isClosed;
-
-  // ==========================================
-  // REACTIVE OBSERVER SUBSCRIPTION
-  // ==========================================
 
   void Function() subscribe(String pattern, void Function() callback) {
     _checkClosed();
@@ -209,41 +263,47 @@ class LiliaDatabase {
     observer.emit(event);
   }
 
-  // ==========================================
-  // MOBILE LIFECYCLE HOOKS
-  // ==========================================
-
-  /// Checkpoints WAL and flushes memory before iOS/Android app suspension.
+  /// Writes recent commits to their sorted runs before the OS suspends the app.
   Future<void> prepareForBackground() async {
     if (_isClosed) return;
-    LiliaNativeBindings.instance.prepareForBackground(_handle);
+    sync.maintenance.checkpoint();
   }
 
+  /// Closes the database once its calls return, waiting at most [timeoutMs]. Later calls
+  /// throw; closing twice does nothing.
   Future<void> close({int timeoutMs = 5000}) async {
     if (_isClosed) return;
     _isClosed = true;
     _singletonRegistry.remove(path);
     observer.clear();
     _memoryKvCache.clear();
-    _memoryJsonCache.clear();
-    LiliaNativeBindings.instance.close(_handle, timeoutMs: timeoutMs);
+    LiliaNativeBindings.instance.close(_handle, timeoutMs);
   }
 
   void _checkClosed() {
     if (_isClosed) {
-      throw StateError('Database at $path is closed.');
+      throw LiliaException(code: 'CLOSED', message: 'the database at $path is closed', retryable: false);
     }
   }
 
-  // ==========================================
-  // SYNCHRONOUS C ABI / FFI API (0 ms, SUB-MILLISECOND)
-  // ==========================================
+  /// Runs [operation]; the value of its response of type [type].
+  T _run<T>(Map<String, Object?> operation, String type) {
+    _checkClosed();
+    return expectValue<T>(readResponse(LiliaNativeBindings.instance.execute(_handle, operation)), type);
+  }
+
+  /// Commits the batch write [write]; its version and whether it deleted a record.
+  ({int? version, bool deleted}) _write(Map<String, Object?> write) {
+    final results = _run<List<dynamic>>({
+      'type': 'batch',
+      'operations': [write],
+    }, 'mutations');
+    final result = results.first as Map<String, dynamic>;
+    final version = result['version'];
+    return (version: version == null ? null : readVersion(version), deleted: result['deleted'] as bool);
+  }
 
   late final sync = _LiliaSyncApi(this);
-
-  // ==========================================
-  // ASYNCHRONOUS API (WORKER / BACKGROUND POOL)
-  // ==========================================
 
   late final kv = _LiliaAsyncKv(this);
   late final json = _LiliaAsyncJson(this);
@@ -253,9 +313,30 @@ class LiliaDatabase {
   late final maintenance = _LiliaAsyncMaintenance(this);
 }
 
-// --------------------------------------------------
-// SYNCHRONOUS SUB-ENGINE
-// --------------------------------------------------
+Uint8List _bytes(Object key) => key is String ? utf8.encode(key) : key as Uint8List;
+
+String _keyName(Object key) => key is String ? key : base64Encode(key as Uint8List);
+
+KvEntry _kvEntry(Map<String, dynamic> entry) => KvEntry(
+      namespace: entry['namespace'] as String,
+      key: entry['key'] as Uint8List,
+      value: entry['value'] as Uint8List,
+      version: readVersion(entry['version']),
+      expiresAtMs: entry['expires_at_ms'] as int?,
+    );
+
+JsonEntry<T> _jsonEntry<T>(Map<String, dynamic> entry) => JsonEntry<T>(
+      space: entry['space'] as String,
+      id: entry['id'] as String,
+      value: entry['value'] as T,
+      version: readVersion(entry['version']),
+    );
+
+const _directions = {'out': 'outbound', 'in': 'inbound', 'both': 'both'};
+
+String _direction(String direction) =>
+    _directions[direction] ??
+    (throw LiliaException(code: 'INVALID_INPUT', message: 'unknown direction "$direction"', retryable: false));
 
 class _LiliaSyncApi {
   final LiliaDatabase _db;
@@ -273,69 +354,60 @@ class _LiliaSyncKv {
   final LiliaDatabase _db;
   _LiliaSyncKv(this._db);
 
+  /// The value of [key] as text: from the values this database last read or wrote, else
+  /// read now.
   String? peek(String namespace, String key) {
     _db._checkClosed();
-    final cacheKey = '$namespace:$key';
-    if (_db._memoryKvCache.containsKey(cacheKey)) {
-      return _db._memoryKvCache[cacheKey];
-    }
-    final raw = get(namespace, key);
-    return raw?.valueString;
+    return _db._memoryKvCache['$namespace:$key'] ?? get(namespace, key)?.valueString;
   }
 
-  KvEntry? get(String namespace, dynamic key) {
-    _db._checkClosed();
-    final keyBytes = key is String ? utf8.encode(key) : key as Uint8List;
-    final k = keyBytes is Uint8List ? keyBytes : Uint8List.fromList(keyBytes);
-
-    final bindings = LiliaNativeBindings.instance;
-    final val = bindings.kvGet(_db._handle, namespace, k);
-    if (val == null) return null;
-
-    final keyStr = key is String ? key : base64Encode(k);
-    _db._memoryKvCache['$namespace:$keyStr'] = utf8.decode(val);
-
-    return KvEntry(
-      namespace: namespace,
-      key: k,
-      value: val,
-      version: 1,
-    );
+  /// [key] is a [String] (UTF-8) or a [Uint8List].
+  KvEntry? get(String namespace, Object key) {
+    final value = _db._run<Map<String, dynamic>?>({
+      'type': 'kv_get',
+      'namespace': namespace,
+      'key': _bytes(key),
+    }, 'kv');
+    if (value == null) return null;
+    final entry = _kvEntry(value);
+    _db._memoryKvCache['$namespace:${_keyName(key)}'] = utf8.decode(entry.value, allowMalformed: true);
+    return entry;
   }
 
-  int set(String namespace, dynamic key, dynamic value, {int expiresAtMs = 0}) {
-    _db._checkClosed();
-    final keyBytes = key is String ? utf8.encode(key) : key as Uint8List;
-    final valBytes = value is String ? utf8.encode(value) : value as Uint8List;
-    final k = keyBytes is Uint8List ? keyBytes : Uint8List.fromList(keyBytes);
-    final v = valBytes is Uint8List ? valBytes : Uint8List.fromList(valBytes);
-
-    final keyStr = key is String ? key : base64Encode(k);
-    _db._memoryKvCache['$namespace:$keyStr'] = utf8.decode(v);
-
-    final version = LiliaNativeBindings.instance.kvSet(
-      _db._handle,
-      namespace,
-      k,
-      v,
-      expiresAtMs: expiresAtMs,
-    );
-
-    _db.notifyChange(DatabaseKvChangeEvent(namespace: namespace, key: keyStr, op: 'set'));
-    return version;
+  /// Stores [value] (a [String] or a [Uint8List]) under [key]; the version of the write.
+  int set(String namespace, Object key, Object value, {int? expiresAtMs}) {
+    final bytes = _bytes(value);
+    final written = _db._write({
+      'model': 'kv_set',
+      'namespace': namespace,
+      'key': _bytes(key),
+      'value': bytes,
+      if (expiresAtMs != null) 'expires_at_ms': expiresAtMs,
+    });
+    final name = _keyName(key);
+    _db._memoryKvCache['$namespace:$name'] = utf8.decode(bytes, allowMalformed: true);
+    _db.notifyChange(DatabaseKvChangeEvent(namespace: namespace, key: name, op: 'set'));
+    return written.version!;
   }
 
-  bool delete(String namespace, dynamic key) {
-    _db._checkClosed();
-    final keyBytes = key is String ? utf8.encode(key) : key as Uint8List;
-    final k = keyBytes is Uint8List ? keyBytes : Uint8List.fromList(keyBytes);
-    final keyStr = key is String ? key : base64Encode(k);
+  bool delete(String namespace, Object key) {
+    final written = _db._write({'model': 'kv_delete', 'namespace': namespace, 'key': _bytes(key)});
+    final name = _keyName(key);
+    _db._memoryKvCache.remove('$namespace:$name');
+    _db.notifyChange(DatabaseKvChangeEvent(namespace: namespace, key: name, op: 'delete'));
+    return written.deleted;
+  }
 
-    _db._memoryKvCache.remove('$namespace:$keyStr');
-    final deleted = LiliaNativeBindings.instance.kvDelete(_db._handle, namespace, k);
-
-    _db.notifyChange(DatabaseKvChangeEvent(namespace: namespace, key: keyStr, op: 'delete'));
-    return deleted;
+  /// The records of [namespace] in key order, after [after], at most [limit] (every one when
+  /// 0).
+  List<KvEntry> scan(String namespace, {Object? after, int limit = 100}) {
+    final page = _db._run<List<dynamic>>({
+      'type': 'kv_scan',
+      'namespace': namespace,
+      if (after != null) 'after': _bytes(after),
+      'limit': limit,
+    }, 'kv_page');
+    return page.map((entry) => _kvEntry(entry as Map<String, dynamic>)).toList();
   }
 }
 
@@ -344,64 +416,74 @@ class _LiliaSyncJson {
   _LiliaSyncJson(this._db);
 
   JsonEntry<T>? get<T>(String space, String id) {
-    _db._checkClosed();
-    final jsonStr = LiliaNativeBindings.instance.jsonGet(_db._handle, space, id);
-    if (jsonStr == null) return null;
-
-    _db._memoryJsonCache.putIfAbsent(space, () => {})[id] = jsonStr;
-    return JsonEntry<T>(
-      space: space,
-      id: id,
-      value: jsonDecode(jsonStr) as T,
-      version: 1,
-    );
+    final value = _db._run<Map<String, dynamic>?>({'type': 'json_get', 'space': space, 'id': id}, 'json');
+    return value == null ? null : _jsonEntry<T>(value);
   }
 
+  /// Stores the document [value] (a value `jsonEncode` accepts); the version of the write.
   int put<T>(String space, String id, T value) {
-    _db._checkClosed();
-    final jsonStr = jsonEncode(value);
-    _db._memoryJsonCache.putIfAbsent(space, () => {})[id] = jsonStr;
-
-    final version = LiliaNativeBindings.instance.jsonPut(_db._handle, space, id, jsonStr);
+    final written = _db._write({'model': 'json_put', 'space': space, 'id': id, 'value': value});
     _db.notifyChange(DatabaseJsonChangeEvent(space: space, id: id, op: 'put'));
-    return version;
+    return written.version!;
   }
 
   bool delete(String space, String id) {
-    _db._checkClosed();
-    _db._memoryJsonCache[space]?.remove(id);
-
-    final deleted = LiliaNativeBindings.instance.jsonDelete(_db._handle, space, id);
+    final written = _db._write({'model': 'json_delete', 'space': space, 'id': id});
     _db.notifyChange(DatabaseJsonChangeEvent(space: space, id: id, op: 'delete'));
-    return deleted;
+    return written.deleted;
   }
 
-  List<JsonEntry<T>> find<T>(
-    String space,
-    Map<String, dynamic> query, {
-    String? afterId,
-    int limit = 50,
-  }) {
-    _db._checkClosed();
-    final raw = LiliaNativeBindings.instance.jsonFind(
-      _db._handle,
-      space,
-      jsonEncode(query),
-      afterId: afterId,
-      limit: limit,
-    );
-
-    final list = jsonDecode(raw) as List<dynamic>;
-    return list.map((entry) {
-      final map = entry as Map<String, dynamic>;
-      return JsonEntry<T>(
-        space: map['space'] as String? ?? space,
-        id: map['id'] as String,
-        value: map['value'] as T,
-        version: map['version'] as int? ?? 1,
-      );
-    }).toList();
+  /// The documents of [space] in id order, after [afterId], at most [limit] (every one when 0).
+  List<JsonEntry<T>> scan<T>(String space, {String? afterId, int limit = 50}) {
+    final page = _db._run<List<dynamic>>({
+      'type': 'json_scan',
+      'space': space,
+      if (afterId != null) 'after': afterId,
+      'limit': limit,
+    }, 'json_page');
+    return page.map((entry) => _jsonEntry<T>(entry as Map<String, dynamic>)).toList();
   }
+
+  /// The documents matching [query]: field paths (or index names) to values, all of which
+  /// must match; an index on a term serves the query, else the space is scanned. After
+  /// [afterId], at most [limit] (every one when 0; every document for an empty query).
+  List<JsonEntry<T>> find<T>(String space, Map<String, dynamic> query, {String? afterId, int limit = 50}) {
+    final page = _db._run<List<dynamic>>({
+      'type': 'json_find',
+      'space': space,
+      'query': query,
+      if (afterId != null) 'after': afterId,
+      'limit': limit,
+    }, 'json_page');
+    return page.map((entry) => _jsonEntry<T>(entry as Map<String, dynamic>)).toList();
+  }
+
+  /// Creates index [name] of [space] over [path] (`$.field`, or an expression), backfilled
+  /// from the stored documents; with [filter], a partial index of the documents it selects.
+  void createIndex(String space, String name, String path, {String? filter}) {
+    _db._run<Object?>({
+      'type': 'json_create_index',
+      'space': space,
+      'name': name,
+      'path': path,
+      if (filter != null) 'filter': filter,
+    }, 'ack');
+  }
+
+  bool dropIndex(String space, String name) =>
+      _db._run<bool>({'type': 'json_drop_index', 'space': space, 'name': name}, 'bool');
+
+  List<JsonIndexInfo> listIndexes(String space) => _db
+      ._run<List<dynamic>>({'type': 'json_list_indexes', 'space': space}, 'json_indexes')
+      .map((index) {
+        final info = index as Map<String, dynamic>;
+        return JsonIndexInfo(
+          space: info['space'] as String,
+          indexName: info['index_name'] as String,
+          jsonPath: info['json_path'] as String,
+        );
+      })
+      .toList();
 }
 
 class _LiliaSyncGraph {
@@ -409,70 +491,59 @@ class _LiliaSyncGraph {
   _LiliaSyncGraph(this._db);
 
   void setNode<T>(String graph, String id, String kind, T metadata) {
-    _db._checkClosed();
-    LiliaNativeBindings.instance.graphSetNode(
-      _db._handle,
-      graph,
-      id,
-      kind,
-      jsonEncode(metadata),
-    );
+    _db._write({'model': 'graph_set_node', 'graph': graph, 'id': id, 'kind': kind, 'metadata': metadata ?? {}});
     _db.notifyChange(DatabaseGraphChangeEvent(graph: graph, op: 'node'));
   }
 
   GraphNode<T>? getNode<T>(String graph, String id) {
-    _db._checkClosed();
-    final raw = LiliaNativeBindings.instance.graphGetNode(_db._handle, graph, id);
-    if (raw == null) return null;
-
-    final map = jsonDecode(raw) as Map<String, dynamic>;
+    final node = _db._run<Map<String, dynamic>?>({'type': 'graph_get_node', 'graph': graph, 'id': id}, 'graph_node');
+    if (node == null) return null;
     return GraphNode<T>(
-      graph: graph,
-      id: id,
-      kind: map['kind'] as String? ?? '',
-      metadata: map['metadata'] as T,
+      graph: node['graph'] as String,
+      id: node['id'] as String,
+      kind: node['kind'] as String,
+      metadata: node['metadata'] as T,
     );
   }
 
   bool deleteNode(String graph, String id) {
-    _db._checkClosed();
-    final del = LiliaNativeBindings.instance.graphDeleteNode(_db._handle, graph, id);
+    final deleted = _db._run<bool>({'type': 'graph_delete_node', 'graph': graph, 'id': id}, 'bool');
     _db.notifyChange(DatabaseGraphChangeEvent(graph: graph, op: 'node'));
-    return del;
+    return deleted;
   }
 
-  void addEdge(String graph, String source, String target, String kind) {
-    _db._checkClosed();
-    LiliaNativeBindings.instance.graphAddEdge(_db._handle, graph, source, target, kind);
+  void addEdge(String graph, String source, String target, String kind, {double weight = 1}) {
+    _db._write({'model': 'graph_add_edge', 'graph': graph, 'source': source, 'target': target, 'kind': kind, 'weight': weight});
     _db.notifyChange(DatabaseGraphChangeEvent(graph: graph, op: 'edge'));
   }
 
-  void removeEdge(String graph, String source, String target, String kind) {
-    _db._checkClosed();
-    LiliaNativeBindings.instance.graphRemoveEdge(_db._handle, graph, source, target, kind);
-    _db.notifyChange(DatabaseGraphChangeEvent(graph: graph, op: 'edge'));
-  }
-
-  List<String> neighbors(
-    String graph,
-    String id, {
-    String direction = 'out',
-    String? kindFilter,
-  }) {
-    _db._checkClosed();
-    return LiliaNativeBindings.instance.graphNeighbors(
-      _db._handle,
-      graph,
-      id,
-      direction: direction,
-      kindFilter: kindFilter,
+  bool removeEdge(String graph, String source, String target, String kind) {
+    final removed = _db._run<bool>(
+      {'type': 'graph_remove_edge', 'graph': graph, 'source': source, 'target': target, 'kind': kind},
+      'bool',
     );
+    _db.notifyChange(DatabaseGraphChangeEvent(graph: graph, op: 'edge'));
+    return removed;
   }
 
-  bool reachability(String graph, String source, String target) {
-    _db._checkClosed();
-    return LiliaNativeBindings.instance.graphReachability(_db._handle, graph, source, target);
-  }
+  /// The neighbours of [id]; [direction] is `out`, `in` or `both`.
+  List<String> neighbors(String graph, String id, {String direction = 'out', String? kindFilter}) =>
+      _db._run<List<dynamic>>({
+        'type': 'graph_neighbors',
+        'graph': graph,
+        'node': id,
+        'direction': _direction(direction),
+        if (kindFilter != null) 'kind': kindFilter,
+      }, 'ids').cast<String>();
+
+  /// The nodes reachable from [startNodes] (included); [direction] is `out`, `in` or `both`.
+  List<String> reachability(String graph, List<String> startNodes, {String direction = 'out'}) =>
+      _db._run<List<dynamic>>({
+        'type': 'graph_reachability',
+        'graph': graph,
+        'start_nodes': startNodes,
+        'direction': _direction(direction),
+      }, 'ids').cast<String>();
 }
 
 class _LiliaSyncFts {
@@ -480,63 +551,43 @@ class _LiliaSyncFts {
   _LiliaSyncFts(this._db);
 
   void index(String collection, String docId, String text) {
-    _db._checkClosed();
-    LiliaNativeBindings.instance.ftsIndex(_db._handle, collection, docId, text);
+    _db._write({'model': 'fts_index', 'collection': collection, 'doc_id': docId, 'content': text});
     _db.notifyChange(DatabaseFtsChangeEvent(collection: collection));
   }
 
   bool delete(String collection, String docId) {
-    _db._checkClosed();
-    final res = LiliaNativeBindings.instance.ftsDelete(_db._handle, collection, docId);
+    final deleted = _db._run<bool>({'type': 'fts_delete', 'collection': collection, 'doc_id': docId}, 'bool');
     _db.notifyChange(DatabaseFtsChangeEvent(collection: collection));
-    return res;
+    return deleted;
   }
 
-  List<FtsHit> search(String collection, String query, {int limit = 20}) {
-    _db._checkClosed();
-    final raw = LiliaNativeBindings.instance.ftsSearch(_db._handle, collection, query, limit: limit);
-    final list = jsonDecode(raw) as List<dynamic>;
-
-    return list.map((hit) {
-      final map = hit as Map<String, dynamic>;
-      return FtsHit(
-        collection: map['collection'] as String? ?? collection,
-        docId: map['doc_id'] as String? ?? map['docId'] as String? ?? '',
-        snippet: map['snippet'] as String? ?? '',
-        rank: (map['rank'] as num?)?.toDouble() ?? 0.0,
-      );
-    }).toList();
-  }
+  List<FtsHit> search(String collection, String query, {int limit = 20}) => _db
+      ._run<List<dynamic>>({'type': 'fts_search', 'collection': collection, 'query': query, 'limit': limit}, 'fts_hits')
+      .map((hit) {
+        final map = hit as Map<String, dynamic>;
+        return FtsHit(
+          collection: map['collection'] as String,
+          docId: map['doc_id'] as String,
+          snippet: map['snippet'] as String,
+          rank: (map['rank'] as num).toDouble(),
+        );
+      })
+      .toList();
 }
 
 class _LiliaSyncSql {
   final LiliaDatabase _db;
   _LiliaSyncSql(this._db);
 
+  /// A read-only SQL query (DataFusion dialect); [params] bind to `$1`, `$2`...
   SqlQueryResult<T> query<T>(String sql, [List<dynamic>? params]) {
-    _db._checkClosed();
-    final raw = LiliaNativeBindings.instance.sqlQuery(_db._handle, sql, params);
-    final map = jsonDecode(raw) as Map<String, dynamic>;
-
-    final columns = (map['columns'] as List<dynamic>? ?? []).map((e) => e.toString()).toList();
-    final rowsRaw = map['rows'] as List<dynamic>? ?? [];
-    final rowsAffected = map['rows_affected'] as int? ?? map['rowsAffected'] as int? ?? 0;
-
-    return SqlQueryResult<T>(
-      columns: columns,
-      rows: rowsRaw.map((r) => r as T).toList(),
-      rowsAffected: rowsAffected,
-    );
-  }
-
-  SqlQueryResult<T> mutate<T>(String sql, [List<dynamic>? params, List<String>? invalidateTables]) {
-    final res = query<T>(sql, params);
-    if (invalidateTables != null) {
-      for (final table in invalidateTables) {
-        _db.notifyChange(DatabaseTableChangeEvent(table: table));
-      }
-    }
-    return res;
+    final result = _db._run<Map<String, dynamic>>({'type': 'sql_query', 'sql': sql, 'params': params ?? []}, 'sql');
+    final columns = (result['columns'] as List<dynamic>).cast<String>();
+    final rows = (result['rows'] as List<dynamic>).map((row) {
+      final values = row as List<dynamic>;
+      return {for (var i = 0; i < columns.length; i++) columns[i]: values[i]} as T;
+    }).toList();
+    return SqlQueryResult<T>(columns: columns, rows: rows, rowsAffected: result['rows_affected'] as int);
   }
 }
 
@@ -544,45 +595,40 @@ class _LiliaSyncMaintenance {
   final LiliaDatabase _db;
   _LiliaSyncMaintenance(this._db);
 
-  void checkpoint([String mode = 'truncate']) {
-    _db._checkClosed();
-    LiliaNativeBindings.instance.checkpoint(_db._handle, mode);
-  }
+  /// Writes recent commits to their sorted runs.
+  void checkpoint() => _db._run<Object?>({'type': 'checkpoint'}, 'ack');
 
-  void vacuum() {
-    _db._checkClosed();
-    LiliaNativeBindings.instance.vacuum(_db._handle);
-  }
+  /// Verifies the ledger, fast; true without a ledger.
+  bool quickCheck() => _db._run<bool>({'type': 'quick_check'}, 'bool');
 
-  StorageMetrics getFileSize() {
-    _db._checkClosed();
-    final map = LiliaNativeBindings.instance.getFileSize(_db._handle);
-    return StorageMetrics(
-      mainBytes: map['main'] ?? 0,
-      walBytes: map['wal'] ?? 0,
-      shmBytes: map['shm'] ?? 0,
-      totalBytes: map['total'] ?? 0,
+  /// Reads every stored entry, verifying block checksums, and verifies the ledger.
+  bool integrityCheck() => _db._run<bool>({'type': 'integrity_check'}, 'bool');
+
+  StorageStats storageStats() {
+    final stats = _db._run<Map<String, dynamic>>({'type': 'storage_stats'}, 'storage_stats');
+    return StorageStats(
+      levels: (stats['levels'] as List<dynamic>).map((level) {
+        final map = level as Map<String, dynamic>;
+        return LevelStats(runs: map['runs'] as int, bytes: map['bytes'] as int);
+      }).toList(),
+      memtableBytes: stats['memtable_bytes'] as int,
+      immutableMemtables: stats['immutable_memtables'] as int,
+      version: readVersion(stats['version']),
+      oldestVersion: readVersion(stats['oldest_version']),
     );
   }
-
-  void backup(String destinationPath) {
-    _db._checkClosed();
-    LiliaNativeBindings.instance.backup(_db._handle, destinationPath);
-  }
 }
-
-// --------------------------------------------------
-// ASYNCHRONOUS SUB-ENGINE
-// --------------------------------------------------
 
 class _LiliaAsyncKv {
   final LiliaDatabase _db;
   _LiliaAsyncKv(this._db);
 
-  Future<KvEntry?> get(String namespace, dynamic key) async => _db.sync.kv.get(namespace, key);
-  Future<int> set(String namespace, dynamic key, dynamic value, {int expiresAtMs = 0}) async =>
+  Future<KvEntry?> get(String namespace, Object key) async => _db.sync.kv.get(namespace, key);
+  Future<int> set(String namespace, Object key, Object value, {int? expiresAtMs}) async =>
       _db.sync.kv.set(namespace, key, value, expiresAtMs: expiresAtMs);
-  Future<bool> delete(String namespace, dynamic key) async => _db.sync.kv.delete(namespace, key);
+  Future<bool> delete(String namespace, Object key) async => _db.sync.kv.delete(namespace, key);
+  Future<List<KvEntry>> scan(String namespace, {Object? after, int limit = 100}) async =>
+      _db.sync.kv.scan(namespace, after: after, limit: limit);
 }
 
 class _LiliaAsyncJson {
@@ -592,13 +638,14 @@ class _LiliaAsyncJson {
   Future<JsonEntry<T>?> get<T>(String space, String id) async => _db.sync.json.get<T>(space, id);
   Future<int> put<T>(String space, String id, T value) async => _db.sync.json.put<T>(space, id, value);
   Future<bool> delete(String space, String id) async => _db.sync.json.delete(space, id);
-  Future<List<JsonEntry<T>>> find<T>(
-    String space,
-    Map<String, dynamic> query, {
-    String? afterId,
-    int limit = 50,
-  }) async =>
+  Future<List<JsonEntry<T>>> scan<T>(String space, {String? afterId, int limit = 50}) async =>
+      _db.sync.json.scan<T>(space, afterId: afterId, limit: limit);
+  Future<List<JsonEntry<T>>> find<T>(String space, Map<String, dynamic> query, {String? afterId, int limit = 50}) async =>
       _db.sync.json.find<T>(space, query, afterId: afterId, limit: limit);
+  Future<void> createIndex(String space, String name, String path, {String? filter}) async =>
+      _db.sync.json.createIndex(space, name, path, filter: filter);
+  Future<bool> dropIndex(String space, String name) async => _db.sync.json.dropIndex(space, name);
+  Future<List<JsonIndexInfo>> listIndexes(String space) async => _db.sync.json.listIndexes(space);
 }
 
 class _LiliaAsyncGraph {
@@ -609,27 +656,21 @@ class _LiliaAsyncGraph {
       _db.sync.graph.setNode<T>(graph, id, kind, metadata);
   Future<GraphNode<T>?> getNode<T>(String graph, String id) async => _db.sync.graph.getNode<T>(graph, id);
   Future<bool> deleteNode(String graph, String id) async => _db.sync.graph.deleteNode(graph, id);
-  Future<void> addEdge(String graph, String source, String target, String kind) async =>
-      _db.sync.graph.addEdge(graph, source, target, kind);
-  Future<void> removeEdge(String graph, String source, String target, String kind) async =>
+  Future<void> addEdge(String graph, String source, String target, String kind, {double weight = 1}) async =>
+      _db.sync.graph.addEdge(graph, source, target, kind, weight: weight);
+  Future<bool> removeEdge(String graph, String source, String target, String kind) async =>
       _db.sync.graph.removeEdge(graph, source, target, kind);
-  Future<List<String>> neighbors(
-    String graph,
-    String id, {
-    String direction = 'out',
-    String? kindFilter,
-  }) async =>
+  Future<List<String>> neighbors(String graph, String id, {String direction = 'out', String? kindFilter}) async =>
       _db.sync.graph.neighbors(graph, id, direction: direction, kindFilter: kindFilter);
-  Future<bool> reachability(String graph, String source, String target) async =>
-      _db.sync.graph.reachability(graph, source, target);
+  Future<List<String>> reachability(String graph, List<String> startNodes, {String direction = 'out'}) async =>
+      _db.sync.graph.reachability(graph, startNodes, direction: direction);
 }
 
 class _LiliaAsyncFts {
   final LiliaDatabase _db;
   _LiliaAsyncFts(this._db);
 
-  Future<void> index(String collection, String docId, String text) async =>
-      _db.sync.fts.index(collection, docId, text);
+  Future<void> index(String collection, String docId, String text) async => _db.sync.fts.index(collection, docId, text);
   Future<bool> delete(String collection, String docId) async => _db.sync.fts.delete(collection, docId);
   Future<List<FtsHit>> search(String collection, String query, {int limit = 20}) async =>
       _db.sync.fts.search(collection, query, limit: limit);
@@ -639,18 +680,15 @@ class _LiliaAsyncSql {
   final LiliaDatabase _db;
   _LiliaAsyncSql(this._db);
 
-  Future<SqlQueryResult<T>> query<T>(String sql, [List<dynamic>? params]) async =>
-      _db.sync.sql.query<T>(sql, params);
-  Future<SqlQueryResult<T>> mutate<T>(String sql, [List<dynamic>? params, List<String>? invalidateTables]) async =>
-      _db.sync.sql.mutate<T>(sql, params, invalidateTables);
+  Future<SqlQueryResult<T>> query<T>(String sql, [List<dynamic>? params]) async => _db.sync.sql.query<T>(sql, params);
 }
 
 class _LiliaAsyncMaintenance {
   final LiliaDatabase _db;
   _LiliaAsyncMaintenance(this._db);
 
-  Future<void> checkpoint([String mode = 'truncate']) async => _db.sync.maintenance.checkpoint(mode);
-  Future<void> vacuum() async => _db.sync.maintenance.vacuum();
-  Future<StorageMetrics> getFileSize() async => _db.sync.maintenance.getFileSize();
-  Future<void> backup(String destinationPath) async => _db.sync.maintenance.backup(destinationPath);
+  Future<void> checkpoint() async => _db.sync.maintenance.checkpoint();
+  Future<bool> quickCheck() async => _db.sync.maintenance.quickCheck();
+  Future<bool> integrityCheck() async => _db.sync.maintenance.integrityCheck();
+  Future<StorageStats> storageStats() async => _db.sync.maintenance.storageStats();
 }

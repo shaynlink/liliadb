@@ -11,9 +11,9 @@ String _formatBytes(int bytes) {
   return '${(bytes / pow(k, i)).toStringAsFixed(1)} ${sizes[i]}';
 }
 
-/// Visual storage breakdown bar and 1-tap maintenance component for LiliaDB.
+/// The shape of a LiliaDB database: bytes of its sorted runs on disk and of the recent
+/// writes still in memory, with a checkpoint button.
 class LiliaStorageBar extends StatefulWidget {
-  final bool showVacuumButton;
   final bool showCheckpointButton;
   final double barHeight;
   final VoidCallback? onMaintenanceComplete;
@@ -21,7 +21,6 @@ class LiliaStorageBar extends StatefulWidget {
 
   const LiliaStorageBar({
     super.key,
-    this.showVacuumButton = true,
     this.showCheckpointButton = true,
     this.barHeight = 10,
     this.onMaintenanceComplete,
@@ -33,7 +32,7 @@ class LiliaStorageBar extends StatefulWidget {
 }
 
 class _LiliaStorageBarState extends State<LiliaStorageBar> {
-  StorageMetrics? _metrics;
+  StorageStats? _stats;
   bool _isOperating = false;
   LiliaDatabase? _db;
 
@@ -49,29 +48,17 @@ class _LiliaStorageBarState extends State<LiliaStorageBar> {
 
   void _refresh() {
     if (_db == null) return;
-    final metrics = _db!.sync.maintenance.getFileSize();
+    final stats = _db!.sync.maintenance.storageStats();
     setState(() {
-      _metrics = metrics;
+      _stats = stats;
     });
-  }
-
-  Future<void> _handleVacuum() async {
-    if (_db == null || _isOperating) return;
-    setState(() => _isOperating = true);
-    try {
-      _db!.sync.maintenance.vacuum();
-      _refresh();
-      widget.onMaintenanceComplete?.call();
-    } finally {
-      if (mounted) setState(() => _isOperating = false);
-    }
   }
 
   Future<void> _handleCheckpoint() async {
     if (_db == null || _isOperating) return;
     setState(() => _isOperating = true);
     try {
-      _db!.sync.maintenance.checkpoint('truncate');
+      _db!.sync.maintenance.checkpoint();
       _refresh();
       widget.onMaintenanceComplete?.call();
     } finally {
@@ -81,16 +68,11 @@ class _LiliaStorageBarState extends State<LiliaStorageBar> {
 
   @override
   Widget build(BuildContext context) {
-    final metrics = _metrics ??
-        const StorageMetrics(mainBytes: 0, walBytes: 0, shmBytes: 0, totalBytes: 1);
-
-    final total = metrics.totalBytes > 0
-        ? metrics.totalBytes
-        : (metrics.mainBytes + metrics.walBytes + metrics.shmBytes).clamp(1, 1 << 62);
-
-    final mainPct = (metrics.mainBytes / total).clamp(0.01, 1.0);
-    final walPct = (metrics.walBytes / total).clamp(0.0, 1.0);
-    final shmPct = (metrics.shmBytes / total).clamp(0.0, 1.0);
+    final disk = _stats?.diskBytes ?? 0;
+    final memory = _stats?.memtableBytes ?? 0;
+    final total = max(disk + memory, 1);
+    final diskPct = (disk / total).clamp(0.01, 1.0);
+    final memoryPct = (memory / total).clamp(0.0, 1.0);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -111,7 +93,7 @@ class _LiliaStorageBarState extends State<LiliaStorageBar> {
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
               ),
               Text(
-                _formatBytes(metrics.totalBytes),
+                _formatBytes(disk + memory),
                 style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
               ),
             ],
@@ -126,18 +108,13 @@ class _LiliaStorageBarState extends State<LiliaStorageBar> {
               child: Row(
                 children: [
                   Expanded(
-                    flex: (mainPct * 100).toInt().clamp(1, 100),
+                    flex: (diskPct * 100).toInt().clamp(1, 100),
                     child: Container(color: const Color(0xFF3B82F6)),
                   ),
-                  if (metrics.walBytes > 0)
+                  if (memory > 0)
                     Expanded(
-                      flex: (walPct * 100).toInt().clamp(1, 100),
+                      flex: (memoryPct * 100).toInt().clamp(1, 100),
                       child: Container(color: const Color(0xFFF59E0B)),
-                    ),
-                  if (metrics.shmBytes > 0)
-                    Expanded(
-                      flex: (shmPct * 100).toInt().clamp(1, 100),
-                      child: Container(color: const Color(0xFF10B981)),
                     ),
                 ],
               ),
@@ -149,29 +126,20 @@ class _LiliaStorageBarState extends State<LiliaStorageBar> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _buildLegendItem(const Color(0xFF3B82F6), 'Data: ${_formatBytes(metrics.mainBytes)}'),
-              _buildLegendItem(const Color(0xFFF59E0B), 'WAL: ${_formatBytes(metrics.walBytes)}'),
-              _buildLegendItem(const Color(0xFF10B981), 'SHM: ${_formatBytes(metrics.shmBytes)}'),
+              _buildLegendItem(const Color(0xFF3B82F6), 'On disk: ${_formatBytes(disk)}'),
+              _buildLegendItem(const Color(0xFFF59E0B), 'In memory: ${_formatBytes(memory)}'),
             ],
           ),
           const SizedBox(height: 12),
 
           // Actions
-          if (widget.showVacuumButton || widget.showCheckpointButton)
+          if (widget.showCheckpointButton)
             Row(
               children: [
-                if (widget.showCheckpointButton) ...[
-                  OutlinedButton(
-                    onPressed: _isOperating ? null : _handleCheckpoint,
-                    child: const Text('Checkpoint WAL'),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                if (widget.showVacuumButton)
-                  FilledButton.tonal(
-                    onPressed: _isOperating ? null : _handleVacuum,
-                    child: const Text('Vacuum DB'),
-                  ),
+                OutlinedButton(
+                  onPressed: _isOperating ? null : _handleCheckpoint,
+                  child: const Text('Checkpoint'),
+                ),
                 if (_isOperating) ...[
                   const SizedBox(width: 12),
                   const SizedBox(

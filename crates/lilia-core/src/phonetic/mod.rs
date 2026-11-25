@@ -15,7 +15,7 @@ pub fn remove_accents(s: &str) -> String {
     for c in s.chars() {
         match c {
             'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' => {
-                out.push('a')
+                out.push('a');
             }
             'è' | 'é' | 'ê' | 'ë' | 'È' | 'É' | 'Ê' | 'Ë' => out.push('e'),
             'ì' | 'í' | 'î' | 'ï' | 'Ì' | 'Í' | 'Î' | 'Ï' => out.push('i'),

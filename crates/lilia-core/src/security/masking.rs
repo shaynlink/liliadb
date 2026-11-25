@@ -73,7 +73,7 @@ impl MaskingRule {
 /// Masks a string using credit card format `****-****-****-1234`.
 #[must_use]
 pub fn mask_credit_card(input: &str) -> String {
-    let digits: String = input.chars().filter(|c| c.is_ascii_digit()).collect();
+    let digits: String = input.chars().filter(char::is_ascii_digit).collect();
     if digits.len() >= 4 {
         let last4 = &digits[digits.len() - 4..];
         format!("****-****-****-{last4}")
@@ -151,11 +151,10 @@ pub fn mask_value(val: &Value, mask_fn: &MaskFunction) -> Value {
     match val {
         Value::String(s) => Value::String(mask_string(s, mask_fn)),
         Value::Number(n) => Value::String(mask_string(&n.to_string(), mask_fn)),
-        Value::Bool(_) | Value::Null => Value::String("[REDACTED]".to_string()),
         Value::Array(arr) => {
             Value::Array(arr.iter().map(|item| mask_value(item, mask_fn)).collect())
         }
-        Value::Object(_) => Value::String("[REDACTED]".to_string()),
+        Value::Bool(_) | Value::Null | Value::Object(_) => Value::String("[REDACTED]".to_string()),
     }
 }
 

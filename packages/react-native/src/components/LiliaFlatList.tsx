@@ -7,8 +7,8 @@ import type { LiliaFlatListProps } from '../types.js';
  * Idiomatic React Native FlatList directly connected to LiliaDB.
  *
  * Automatically:
- * - Executes the provided SQL query
- * - Subscribes to table change events and re-renders live without polling
+ * - Runs the provided SQL query
+ * - Runs it again after each write to its tables (any write when none are given), without polling
  * - Binds pull-to-refresh to query refetching
  * - Renders loading, error, and empty states
  */

@@ -1,1443 +1,203 @@
-#![allow(unsafe_code)]
-#![allow(clippy::missing_safety_doc)]
+//! The C ABI, for runtimes that call C directly (Flutter through `dart:ffi`, React Native
+//! through JSI): open a database, run operations, close it. An operation goes in as
+//! `MessagePack` or JSON ([`RequestEncoding`]); its result comes out as a JS frame
+//! ([`lilia_protocol::to_js_frame`]): one JSON text, then the raw bytes it refers to.
+//!
+//! Memory: a frame from [`lilia_c_execute`] is freed with [`lilia_c_free_bytes`], an error
+//! string with [`lilia_c_free_string`]; [`lilia_c_close`] closes a handle and frees it.
 
-use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int, c_uchar};
-use std::sync::Arc;
+#![allow(
+    unsafe_code,
+    reason = "a C ABI receives and returns raw pointers; each function documents what it expects"
+)]
 
-use crate::{FfiDirection, FfiResourceProfile, LiliaDatabase};
+use std::ffi::{c_char, c_int, CStr, CString};
+use std::time::Duration;
 
+use lilia_core::{ErrorCode, LiliaError};
+use lilia_protocol::{
+    execute_js, to_js_frame, OpenOptions, RequestEncoding, ResponseValue, SharedDatabase,
+};
+use serde::Deserialize;
+
+/// An open database, shared by the calls made through it.
 #[derive(Debug)]
 pub struct LiliaHandle {
-    pub db: Arc<LiliaDatabase>,
-    pub path: String,
+    database: SharedDatabase,
 }
 
-fn str_from_ptr<'a>(ptr: *const c_char) -> Option<&'a str> {
-    if ptr.is_null() {
-        None
-    } else {
-        unsafe { CStr::from_ptr(ptr).to_str().ok() }
+/// The JSON a database opens with: `path`, then any field of [`OpenOptions`].
+#[derive(Deserialize)]
+struct Open {
+    path: String,
+    #[serde(flatten)]
+    options: OpenOptions,
+}
+
+/// Hands `message` to the caller through `out_err`, when it is not null.
+unsafe fn report(out_err: *mut *mut c_char, message: &str) {
+    if !out_err.is_null() {
+        let message = CString::new(message.replace('\0', " ")).unwrap_or_default();
+        // SAFETY: the caller passes either null or a valid pointer to write to.
+        unsafe { *out_err = message.into_raw() };
     }
 }
 
-fn to_c_string(s: String) -> *mut c_char {
-    CString::new(s).unwrap_or_default().into_raw()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        drop(CString::from_raw(ptr));
+/// Hands `frame` to the caller: its length through `out_len`, its bytes as the result.
+unsafe fn hand_over(frame: Vec<u8>, out_len: *mut usize) -> *mut u8 {
+    let frame = frame.into_boxed_slice();
+    if !out_len.is_null() {
+        // SAFETY: the caller passes either null or a valid pointer to write to.
+        unsafe { *out_len = frame.len() };
     }
+    Box::into_raw(frame).cast::<u8>()
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_free_bytes(ptr: *mut c_uchar, len: usize) {
-    if !ptr.is_null() && len > 0 {
-        // Buffers are handed out as boxed slices (`lilia_c_kv_get`).
-        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_free_handle(handle: *mut LiliaHandle) {
-    if !handle.is_null() {
-        drop(Box::from_raw(handle));
-    }
-}
-
+/// Opens (or creates) the database `options_json` describes (`{"path": ..., "durability":
+/// ..., "profile": ..., "ledger": ..., "history_retention_ms": ..., "undo_depth": ...}`, all
+/// but `path` optional). Null on failure, with the error's JSON through `out_err`.
+///
+/// # Safety
+///
+/// `options_json` is a NUL-terminated UTF-8 string; `out_err` is null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn lilia_c_open(
-    path: *const c_char,
-    profile_code: c_int,
-    key_bytes: *const c_uchar,
-    key_len: usize,
-    passphrase: *const c_char,
+    options_json: *const c_char,
     out_err: *mut *mut c_char,
 ) -> *mut LiliaHandle {
-    let path_str = if let Some(p) = str_from_ptr(path) {
-        p.to_string()
-    } else {
-        if !out_err.is_null() {
-            *out_err = to_c_string("Path is required".into());
+    let opened = (|| {
+        if options_json.is_null() {
+            return Err(LiliaError::new(
+                ErrorCode::InvalidInput,
+                "no open options",
+                false,
+            ));
         }
-        return std::ptr::null_mut();
-    };
-
-    let profile = match profile_code {
-        1 => FfiResourceProfile::Constrained,
-        2 => FfiResourceProfile::Server,
-        _ => FfiResourceProfile::Mobile,
-    };
-
-    let result = if !passphrase.is_null() {
-        if let Some(pass) = str_from_ptr(passphrase) {
-            LiliaDatabase::open_with_passphrase(path_str.clone(), profile, pass.to_string())
-        } else {
-            LiliaDatabase::open(path_str.clone(), profile, None)
-        }
-    } else if !key_bytes.is_null() && key_len == 32 {
-        let slice = std::slice::from_raw_parts(key_bytes, 32);
-        LiliaDatabase::open(path_str.clone(), profile, Some(slice.to_vec()))
-    } else {
-        LiliaDatabase::open(path_str.clone(), profile, None)
-    };
-
-    match result {
-        Ok(db) => Box::into_raw(Box::new(LiliaHandle { db, path: path_str })),
-        Err(err) => {
-            if !out_err.is_null() {
-                *out_err = to_c_string(err.to_string());
-            }
+        // SAFETY: the caller passes a NUL-terminated string.
+        let json = unsafe { CStr::from_ptr(options_json) }.to_bytes();
+        let open: Open = serde_json::from_slice(json).map_err(|e| {
+            LiliaError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid open options: {e}"),
+                false,
+            )
+        })?;
+        lilia_protocol::open(open.path, &open.options)
+    })();
+    match opened {
+        Ok(database) => Box::into_raw(Box::new(LiliaHandle {
+            database: SharedDatabase::new(database),
+        })),
+        Err(error) => {
+            let json = serde_json::to_string(&error).unwrap_or_else(|_| error.to_string());
+            // SAFETY: as documented for `out_err`.
+            unsafe { report(out_err, &json) };
             std::ptr::null_mut()
         }
     }
 }
 
+/// Runs the operation `request` holds (`len` bytes; `encoding` 0 for `MessagePack`, 1 for
+/// JSON) and returns the JS frame of its result, `{ Ok: value }` or `{ Err: error }`, with its
+/// length through `out_len`. Null only when the frame cannot be written (past 4 GiB).
+///
+/// # Safety
+///
+/// `handle` comes from [`lilia_c_open`] and is not closed; `request` points to `len` readable
+/// bytes; `out_len` is writable.
 #[no_mangle]
-pub unsafe extern "C" fn lilia_c_close(handle: *mut LiliaHandle, timeout_ms: u64) -> c_int {
-    if handle.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    match h.db.close_sync(timeout_ms) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_prepare_for_background(handle: *mut LiliaHandle) -> c_int {
-    if handle.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    match h.db.prepare_for_background() {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_checkpoint(handle: *mut LiliaHandle) -> c_int {
-    if handle.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    match h.db.checkpoint_sync() {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_vacuum(handle: *mut LiliaHandle) -> c_int {
-    if handle.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    match h.db.sql_query_sync("VACUUM;".into(), None) {
-        Ok(_) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_get_file_size(
-    handle: *mut LiliaHandle,
-    out_main: *mut u64,
-    out_wal: *mut u64,
-    out_shm: *mut u64,
-) -> c_int {
-    if handle.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    let main_len = std::fs::metadata(&h.path).map_or(0, |m| m.len());
-    let wal_len = std::fs::metadata(format!("{}-wal", h.path)).map_or(0, |m| m.len());
-    let shm_len = std::fs::metadata(format!("{}-shm", h.path)).map_or(0, |m| m.len());
-
-    if !out_main.is_null() {
-        *out_main = main_len;
-    }
-    if !out_wal.is_null() {
-        *out_wal = wal_len;
-    }
-    if !out_shm.is_null() {
-        *out_shm = shm_len;
-    }
-    0
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_backup(handle: *mut LiliaHandle, dest: *const c_char) -> c_int {
-    if handle.is_null() {
-        return -1;
-    }
-    let Some(dest_str) = str_from_ptr(dest) else {
-        return -1;
+pub unsafe extern "C" fn lilia_c_execute(
+    handle: *const LiliaHandle,
+    request: *const u8,
+    len: usize,
+    encoding: c_int,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let refused = |message: &str| {
+        to_js_frame(&Err::<ResponseValue, _>(LiliaError::new(
+            ErrorCode::InvalidInput,
+            message,
+            false,
+        )))
     };
-    let h = &*handle;
-    match h.db.backup_sync(dest_str.to_string()) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-// ==========================================
-// KEY / VALUE ENGINE
-// ==========================================
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_kv_get(
-    handle: *mut LiliaHandle,
-    ns: *const c_char,
-    key: *const c_uchar,
-    key_len: usize,
-    out_val_len: *mut usize,
-    out_version: *mut u64,
-    out_expires: *mut i64,
-) -> *mut c_uchar {
-    if handle.is_null() || ns.is_null() || key.is_null() {
-        return std::ptr::null_mut();
-    }
-    let Some(ns_str) = str_from_ptr(ns).map(str::to_owned) else {
-        return std::ptr::null_mut();
-    };
-    let key_vec = std::slice::from_raw_parts(key, key_len).to_vec();
-    let h = &*handle;
-
-    match h.db.kv_get_sync(ns_str, key_vec) {
-        Ok(Some(entry)) => {
-            if !out_version.is_null() {
-                *out_version = entry.version;
-            }
-            if !out_expires.is_null() {
-                *out_expires = entry.expires_at_ms.unwrap_or(0);
-            }
-            if !out_val_len.is_null() {
-                *out_val_len = entry.value.len();
-            }
-            Box::into_raw(entry.value.into_boxed_slice()).cast::<c_uchar>()
-        }
-        _ => std::ptr::null_mut(),
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_kv_set(
-    handle: *mut LiliaHandle,
-    ns: *const c_char,
-    key: *const c_uchar,
-    key_len: usize,
-    val: *const c_uchar,
-    val_len: usize,
-    expires_at_ms: i64,
-    out_version: *mut u64,
-) -> c_int {
-    if handle.is_null() || ns.is_null() || key.is_null() || val.is_null() {
-        return -1;
-    }
-    let Some(ns_str) = str_from_ptr(ns).map(str::to_owned) else {
-        return -1;
-    };
-    let key_vec = std::slice::from_raw_parts(key, key_len).to_vec();
-    let val_vec = std::slice::from_raw_parts(val, val_len).to_vec();
-    let exp_opt = if expires_at_ms > 0 {
-        Some(expires_at_ms)
+    let frame = if handle.is_null() || request.is_null() {
+        refused("no database handle or no request")
     } else {
-        None
-    };
-    let h = &*handle;
-
-    match h.db.kv_set_sync(ns_str, key_vec, val_vec, exp_opt) {
-        Ok(v) => {
-            if !out_version.is_null() {
-                *out_version = v;
+        let encoding = match encoding {
+            0 => Some(RequestEncoding::MessagePack),
+            1 => Some(RequestEncoding::Json),
+            _ => None,
+        };
+        // SAFETY: the caller passes a live handle.
+        let handle = unsafe { &*handle };
+        match (encoding, handle.database.get()) {
+            (None, _) => refused("unknown request encoding"),
+            (Some(_), Err(error)) => to_js_frame(&Err::<ResponseValue, _>(error)),
+            (Some(encoding), Ok(database)) => {
+                // SAFETY: the caller passes `len` readable bytes.
+                let request = unsafe { std::slice::from_raw_parts(request, len) };
+                execute_js(&database, request, encoding)
             }
-            0
         }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_kv_delete(
-    handle: *mut LiliaHandle,
-    ns: *const c_char,
-    key: *const c_uchar,
-    key_len: usize,
-    out_deleted: *mut c_int,
-) -> c_int {
-    if handle.is_null() || ns.is_null() || key.is_null() {
-        return -1;
-    }
-    let Some(ns_str) = str_from_ptr(ns).map(str::to_owned) else {
-        return -1;
     };
-    let key_vec = std::slice::from_raw_parts(key, key_len).to_vec();
-    let h = &*handle;
-
-    match h.db.kv_delete_sync(ns_str, key_vec) {
-        Ok(deleted) => {
-            if !out_deleted.is_null() {
-                *out_deleted = i32::from(deleted);
-            }
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-// ==========================================
-// JSON DOCUMENT ENGINE
-// ==========================================
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_json_get(
-    handle: *mut LiliaHandle,
-    space: *const c_char,
-    id: *const c_char,
-    out_version: *mut u64,
-) -> *mut c_char {
-    if handle.is_null() || space.is_null() || id.is_null() {
-        return std::ptr::null_mut();
-    }
-    let Some(space_str) = str_from_ptr(space).map(str::to_owned) else {
-        return std::ptr::null_mut();
-    };
-    let Some(id_str) = str_from_ptr(id).map(str::to_owned) else {
-        return std::ptr::null_mut();
-    };
-    let h = &*handle;
-
-    match h.db.json_get_sync(space_str, id_str) {
-        Ok(Some(entry)) => {
-            if !out_version.is_null() {
-                *out_version = entry.version;
-            }
-            to_c_string(entry.value_json)
-        }
-        _ => std::ptr::null_mut(),
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_json_put(
-    handle: *mut LiliaHandle,
-    space: *const c_char,
-    id: *const c_char,
-    val_json: *const c_char,
-    out_version: *mut u64,
-) -> c_int {
-    if handle.is_null() || space.is_null() || id.is_null() || val_json.is_null() {
-        return -1;
-    }
-    let Some(space_str) = str_from_ptr(space).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(id_str) = str_from_ptr(id).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(json_str) = str_from_ptr(val_json).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.json_put_sync(space_str, id_str, json_str) {
-        Ok(v) => {
-            if !out_version.is_null() {
-                *out_version = v;
-            }
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_json_delete(
-    handle: *mut LiliaHandle,
-    space: *const c_char,
-    id: *const c_char,
-    out_deleted: *mut c_int,
-) -> c_int {
-    if handle.is_null() || space.is_null() || id.is_null() {
-        return -1;
-    }
-    let Some(space_str) = str_from_ptr(space).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(id_str) = str_from_ptr(id).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.json_delete_sync(space_str, id_str) {
-        Ok(deleted) => {
-            if !out_deleted.is_null() {
-                *out_deleted = i32::from(deleted);
-            }
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_json_find(
-    handle: *mut LiliaHandle,
-    space: *const c_char,
-    query_json: *const c_char,
-    after_id: *const c_char,
-    limit: u32,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || space.is_null() || query_json.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(space_str) = str_from_ptr(space).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(query_str) = str_from_ptr(query_json).map(str::to_owned) else {
-        return -1;
-    };
-    let after_opt = str_from_ptr(after_id).map(std::string::ToString::to_string);
-    let h = &*handle;
-
-    match h.db.json_find_sync(space_str, query_str, after_opt, limit) {
-        Ok(entries) => {
-            let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-// ==========================================
-// GRAPH ENGINE
-// ==========================================
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_graph_set_node(
-    handle: *mut LiliaHandle,
-    graph: *const c_char,
-    id: *const c_char,
-    kind: *const c_char,
-    metadata_json: *const c_char,
-) -> c_int {
-    if handle.is_null()
-        || graph.is_null()
-        || id.is_null()
-        || kind.is_null()
-        || metadata_json.is_null()
-    {
-        return -1;
-    }
-    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(id) = str_from_ptr(id).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(kind) = str_from_ptr(kind).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(metadata_json) = str_from_ptr(metadata_json).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.graph_set_node_sync(graph, id, kind, metadata_json) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_graph_get_node(
-    handle: *mut LiliaHandle,
-    graph: *const c_char,
-    id: *const c_char,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || graph.is_null() || id.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(id) = str_from_ptr(id).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.graph_get_node_sync(graph, id) {
-        Ok(Some(node)) => {
-            let json = serde_json::to_string(&node).unwrap_or_else(|_| "null".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Ok(None) => {
-            *out_json = to_c_string("null".into());
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_graph_delete_node(
-    handle: *mut LiliaHandle,
-    graph: *const c_char,
-    id: *const c_char,
-    out_deleted: *mut c_int,
-) -> c_int {
-    if handle.is_null() || graph.is_null() || id.is_null() {
-        return -1;
-    }
-    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(id) = str_from_ptr(id).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.graph_delete_node_sync(graph, id) {
-        Ok(deleted) => {
-            if !out_deleted.is_null() {
-                *out_deleted = i32::from(deleted);
-            }
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_graph_add_edge(
-    handle: *mut LiliaHandle,
-    graph: *const c_char,
-    source: *const c_char,
-    target: *const c_char,
-    kind: *const c_char,
-) -> c_int {
-    if handle.is_null() || graph.is_null() || source.is_null() || target.is_null() || kind.is_null()
-    {
-        return -1;
-    }
-    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
-        return -1;
-    };
-    let s = match str_from_ptr(source) {
-        Some(str_) => str_.to_string(),
-        None => return -1,
-    };
-    let t = match str_from_ptr(target) {
-        Some(str_) => str_.to_string(),
-        None => return -1,
-    };
-    let k = match str_from_ptr(kind) {
-        Some(str_) => str_.to_string(),
-        None => return -1,
-    };
-    let h = &*handle;
-
-    match h.db.graph_add_edge_sync(graph, s, t, k) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_graph_remove_edge(
-    handle: *mut LiliaHandle,
-    graph: *const c_char,
-    source: *const c_char,
-    target: *const c_char,
-    kind: *const c_char,
-    out_deleted: *mut c_int,
-) -> c_int {
-    if handle.is_null() || graph.is_null() || source.is_null() || target.is_null() || kind.is_null()
-    {
-        return -1;
-    }
-    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
-        return -1;
-    };
-    let s = match str_from_ptr(source) {
-        Some(str_) => str_.to_string(),
-        None => return -1,
-    };
-    let t = match str_from_ptr(target) {
-        Some(str_) => str_.to_string(),
-        None => return -1,
-    };
-    let k = match str_from_ptr(kind) {
-        Some(str_) => str_.to_string(),
-        None => return -1,
-    };
-    let h = &*handle;
-
-    match h.db.graph_remove_edge_sync(graph, s, t, k) {
-        Ok(deleted) => {
-            if !out_deleted.is_null() {
-                *out_deleted = i32::from(deleted);
-            }
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_graph_neighbors(
-    handle: *mut LiliaHandle,
-    graph: *const c_char,
-    node: *const c_char,
-    direction: c_int,
-    kind: *const c_char,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || graph.is_null() || node.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(node) = str_from_ptr(node).map(str::to_owned) else {
-        return -1;
-    };
-    let k_opt = str_from_ptr(kind).map(std::string::ToString::to_string);
-    let dir = match direction {
-        0 => FfiDirection::Incoming,
-        1 => FfiDirection::Outgoing,
-        _ => FfiDirection::Both,
-    };
-    let h = &*handle;
-
-    match h.db.graph_neighbors_sync(graph, node, dir, k_opt) {
-        Ok(neighbors) => {
-            let json = serde_json::to_string(&neighbors).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_graph_reachability(
-    handle: *mut LiliaHandle,
-    graph: *const c_char,
-    start_nodes_json: *const c_char,
-    direction: c_int,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || graph.is_null() || start_nodes_json.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(graph) = str_from_ptr(graph).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(json_str) = str_from_ptr(start_nodes_json) else {
-        return -1;
-    };
-    let start_nodes: Vec<String> = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return -1,
-    };
-    let dir = match direction {
-        0 => FfiDirection::Incoming,
-        1 => FfiDirection::Outgoing,
-        _ => FfiDirection::Both,
-    };
-    let h = &*handle;
-
-    match h.db.graph_reachability_sync(graph, start_nodes, dir) {
-        Ok(reachable) => {
-            let json = serde_json::to_string(&reachable).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-// ==========================================
-// FTS5 SEARCH ENGINE
-// ==========================================
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_fts_index(
-    handle: *mut LiliaHandle,
-    collection: *const c_char,
-    doc_id: *const c_char,
-    content: *const c_char,
-) -> c_int {
-    if handle.is_null() || collection.is_null() || doc_id.is_null() || content.is_null() {
-        return -1;
-    }
-    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(id) = str_from_ptr(doc_id).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(text) = str_from_ptr(content).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.fts_index_sync(col, id, text) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_fts_delete(
-    handle: *mut LiliaHandle,
-    collection: *const c_char,
-    doc_id: *const c_char,
-    out_deleted: *mut c_int,
-) -> c_int {
-    if handle.is_null() || collection.is_null() || doc_id.is_null() {
-        return -1;
-    }
-    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(id) = str_from_ptr(doc_id).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.fts_delete_sync(col, id) {
-        Ok(deleted) => {
-            if !out_deleted.is_null() {
-                *out_deleted = i32::from(deleted);
-            }
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_fts_search(
-    handle: *mut LiliaHandle,
-    collection: *const c_char,
-    query: *const c_char,
-    limit: u32,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || collection.is_null() || query.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(query) = str_from_ptr(query).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.fts_search_sync(col, query, limit) {
-        Ok(hits) => {
-            let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_fts_suggest(
-    handle: *mut LiliaHandle,
-    collection: *const c_char,
-    prefix: *const c_char,
-    max_distance: u8,
-    limit: u32,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || collection.is_null() || prefix.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(prefix) = str_from_ptr(prefix).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.fts_suggest_sync(col, prefix, max_distance, limit) {
-        Ok(suggestions) => {
-            let json = serde_json::to_string(&suggestions).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_fts_fuzzy_search(
-    handle: *mut LiliaHandle,
-    collection: *const c_char,
-    query: *const c_char,
-    max_distance: u8,
-    limit: u32,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || collection.is_null() || query.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(query) = str_from_ptr(query).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.fts_fuzzy_search_sync(col, query, max_distance, limit) {
-        Ok(hits) => {
-            let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_fts_phonetic_search(
-    handle: *mut LiliaHandle,
-    collection: *const c_char,
-    query: *const c_char,
-    limit: u32,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || collection.is_null() || query.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(col) = str_from_ptr(collection).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(query) = str_from_ptr(query).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-
-    match h.db.fts_phonetic_search_sync(col, query, limit) {
-        Ok(hits) => {
-            let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-// ==========================================
-// SQL ANALYTICS ENGINE
-// ==========================================
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_sql_query(
-    handle: *mut LiliaHandle,
-    sql: *const c_char,
-    params_json: *const c_char,
-    out_cols_json: *mut *mut c_char,
-    out_rows_json: *mut *mut c_char,
-    out_affected: *mut u64,
-) -> c_int {
-    if handle.is_null() || sql.is_null() || out_cols_json.is_null() || out_rows_json.is_null() {
-        return -1;
-    }
-    let Some(sql_str) = str_from_ptr(sql).map(str::to_owned) else {
-        return -1;
-    };
-    let params_opt = str_from_ptr(params_json).map(std::string::ToString::to_string);
-    let h = &*handle;
-
-    match h.db.sql_query_sync(sql_str, params_opt) {
-        Ok(res) => {
-            let cols = serde_json::to_string(&res.columns).unwrap_or_else(|_| "[]".into());
-            let rows = format!("[{}]", res.rows_json.join(","));
-            *out_cols_json = to_c_string(cols);
-            *out_rows_json = to_c_string(rows);
-            if !out_affected.is_null() {
-                *out_affected = res.rows_affected;
-            }
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-// ==========================================
-// TIME-SERIES & GEOFENCING C-ABI
-// ==========================================
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_append_json(
-    handle: *mut LiliaHandle,
-    series_id: *const c_char,
-    points_json: *const c_char,
-) -> c_int {
-    if handle.is_null() || series_id.is_null() || points_json.is_null() {
-        return -1;
-    }
-    let Some(sid) = str_from_ptr(series_id).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(json_str) = str_from_ptr(points_json) else {
-        return -1;
-    };
-    let points: Vec<crate::FfiTimeSeriesPoint> = match serde_json::from_str(json_str) {
-        Ok(p) => p,
-        Err(_) => return -1,
-    };
-
-    let h = &*handle;
-    match h.db.ts_append_points_sync(sid, points) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_query_range_json(
-    handle: *mut LiliaHandle,
-    series_id: *const c_char,
-    start_time: i64,
-    end_time: i64,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || series_id.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(sid) = str_from_ptr(series_id).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-    match h.db.ts_query_range_sync(sid, start_time, end_time) {
-        Ok(pts) => {
-            let json = serde_json::to_string(&pts).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_query_stats_json(
-    handle: *mut LiliaHandle,
-    series_id: *const c_char,
-    start_time: i64,
-    end_time: i64,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || series_id.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(sid) = str_from_ptr(series_id).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-    match h.db.ts_query_stats_sync(sid, start_time, end_time) {
-        Ok(stats_opt) => {
-            let json = serde_json::to_string(&stats_opt).unwrap_or_else(|_| "null".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_query_auto_json(
-    handle: *mut LiliaHandle,
-    series_id: *const c_char,
-    start_time: i64,
-    end_time: i64,
-    max_points: u32,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || series_id.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(sid) = str_from_ptr(series_id).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-    match h
-        .db
-        .ts_query_auto_sync(sid, start_time, end_time, max_points)
-    {
-        Ok(pts) => {
-            let json = serde_json::to_string(&pts).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_set_policy_json(
-    handle: *mut LiliaHandle,
-    policy_json: *const c_char,
-) -> c_int {
-    if handle.is_null() || policy_json.is_null() {
-        return -1;
-    }
-    let Some(json_str) = str_from_ptr(policy_json) else {
-        return -1;
-    };
-    let policy: crate::FfiTimeSeriesLifecyclePolicy = match serde_json::from_str(json_str) {
-        Ok(p) => p,
-        Err(_) => return -1,
-    };
-    let h = &*handle;
-    match h.db.ts_set_policy_sync(policy) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_get_policy_json(
-    handle: *mut LiliaHandle,
-    series_pattern: *const c_char,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || series_pattern.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let Some(pattern) = str_from_ptr(series_pattern).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-    match h.db.ts_get_policy_sync(pattern) {
-        Ok(policy_opt) => {
-            let json = serde_json::to_string(&policy_opt).unwrap_or_else(|_| "null".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_list_policies_json(
-    handle: *mut LiliaHandle,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    match h.db.ts_list_policies_sync() {
-        Ok(policies) => {
-            let json = serde_json::to_string(&policies).unwrap_or_else(|_| "[]".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_delete_policy(
-    handle: *mut LiliaHandle,
-    series_pattern: *const c_char,
-) -> c_int {
-    if handle.is_null() || series_pattern.is_null() {
-        return -1;
-    }
-    let Some(pattern) = str_from_ptr(series_pattern).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-    match h.db.ts_delete_policy_sync(pattern) {
-        Ok(true) => 1,
-        Ok(false) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_ts_apply_retention_json(
-    handle: *mut LiliaHandle,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    match h.db.ts_apply_retention_sync() {
-        Ok(stats) => {
-            let json = serde_json::to_string(&stats).unwrap_or_else(|_| "null".into());
-            *out_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_geo_add_fence(
-    handle: *mut LiliaHandle,
-    id: *const c_char,
-    name: *const c_char,
-    category: *const c_char,
-    polygon_json: *const c_char,
-    metadata: *const c_char,
-) -> c_int {
-    if handle.is_null()
-        || id.is_null()
-        || name.is_null()
-        || category.is_null()
-        || polygon_json.is_null()
-    {
-        return -1;
-    }
-    let Some(fid) = str_from_ptr(id).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(fname) = str_from_ptr(name).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(fcat) = str_from_ptr(category).map(str::to_owned) else {
-        return -1;
-    };
-    let Some(fpoly) = str_from_ptr(polygon_json).map(str::to_owned) else {
-        return -1;
-    };
-    let fmeta = str_from_ptr(metadata).map(std::string::ToString::to_string);
-
-    let h = &*handle;
-    match h.db.geo_add_fence_sync(fid, fname, fcat, fpoly, fmeta) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_geo_contains_point(
-    handle: *mut LiliaHandle,
-    polygon_json: *const c_char,
-    lon: f64,
-    lat: f64,
-    out_inside: *mut c_int,
-) -> c_int {
-    if handle.is_null() || polygon_json.is_null() || out_inside.is_null() {
-        return -1;
-    }
-    let Some(fpoly) = str_from_ptr(polygon_json).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-    match h.db.geo_contains_point_sync(fpoly, lon, lat) {
-        Ok(inside) => {
-            *out_inside = i32::from(inside);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_geo_find_fences_for_point(
-    handle: *mut LiliaHandle,
-    lon: f64,
-    lat: f64,
-    out_matches_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || out_matches_json.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    match h.db.geo_find_fences_for_point_sync(lon, lat) {
-        Ok(matches) => {
-            let json = serde_json::to_string(&matches).unwrap_or_else(|_| "[]".into());
-            *out_matches_json = to_c_string(json);
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_geo_track_distance(
-    handle: *mut LiliaHandle,
-    track_id: *const c_char,
-    out_distance: *mut f64,
-) -> c_int {
-    if handle.is_null() || track_id.is_null() || out_distance.is_null() {
-        return -1;
-    }
-    let Some(tid) = str_from_ptr(track_id).map(str::to_owned) else {
-        return -1;
-    };
-    let h = &*handle;
-    match h.db.geo_track_distance_sync(tid) {
-        Ok(dist) => {
-            *out_distance = dist;
-            0
-        }
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_geo_create_circle(
-    center_lon: f64,
-    center_lat: f64,
-    radius_meters: f64,
-    n_vertices: u32,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if out_json.is_null() {
-        return -1;
-    }
-    let circle =
-        crate::geo_create_circle_polygon(center_lon, center_lat, radius_meters, n_vertices);
-    *out_json = to_c_string(circle);
-    0
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_wasm_register(
-    handle: *mut LiliaHandle,
-    name: *const c_char,
-    bytecode_ptr: *const c_uchar,
-    bytecode_len: usize,
-    memory_limit_bytes: usize,
-    fuel_limit: u64,
-    persistent: c_int,
-) -> c_int {
-    if handle.is_null() || name.is_null() || bytecode_ptr.is_null() || bytecode_len == 0 {
-        return -1;
-    }
-    let Some(name_str) = str_from_ptr(name) else {
-        return -1;
-    };
-    let bytecode = std::slice::from_raw_parts(bytecode_ptr, bytecode_len);
-    let mut config = lilia_storage_sqlite::WasmUdfConfig::default();
-    if memory_limit_bytes > 0 {
-        config.memory_limit_bytes = memory_limit_bytes;
-    }
-    if fuel_limit > 0 {
-        config.fuel_limit = fuel_limit;
-    }
-    let h = &*handle;
-    match h
-        .db
-        .inner
-        .register_wasm_udf_with_config(name_str, bytecode, config, persistent != 0)
-    {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_wasm_unregister(
-    handle: *mut LiliaHandle,
-    name: *const c_char,
-) -> c_int {
-    if handle.is_null() || name.is_null() {
-        return -1;
-    }
-    let Some(name_str) = str_from_ptr(name) else {
-        return -1;
-    };
-    let h = &*handle;
-    match h.db.inner.unregister_wasm_udf(name_str) {
-        Ok(true) => 0,
-        Ok(false) => 1,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_wasm_list(
-    handle: *mut LiliaHandle,
-    out_json: *mut *mut c_char,
-) -> c_int {
-    if handle.is_null() || out_json.is_null() {
-        return -1;
-    }
-    let h = &*handle;
-    let list = h.db.inner.list_wasm_udfs();
-    let json_str = match serde_json::to_string(&list) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    *out_json = to_c_string(json_str);
-    0
-}
-
-// ── Shared Memory (SHM) C ABI ──────────────────────────────────────────────
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_shm_reader_open(path: *const c_char) -> *mut lilia_shm::ShmReader {
-    let Some(path_str) = str_from_ptr(path) else {
-        return std::ptr::null_mut();
-    };
-    match lilia_shm::ShmReader::open(lilia_shm::ShmBackend::FileBacked(std::path::PathBuf::from(
-        path_str,
-    ))) {
-        Ok(reader) => Box::into_raw(Box::new(reader)),
+    match frame {
+        // SAFETY: as documented for `out_len`.
+        Ok(frame) => unsafe { hand_over(frame, out_len) },
         Err(_) => std::ptr::null_mut(),
     }
 }
 
+/// Closes the database once the calls running on it return, waiting at most `timeout_ms`,
+/// and frees the handle. 0 on success; -1 with the error's JSON through `out_err`.
+///
+/// # Safety
+///
+/// `handle` comes from [`lilia_c_open`], is closed once, and is not used afterwards;
+/// `out_err` is null or writable.
 #[no_mangle]
-pub unsafe extern "C" fn lilia_c_shm_reader_close(reader: *mut lilia_shm::ShmReader) {
-    if !reader.is_null() {
-        drop(Box::from_raw(reader));
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_shm_reader_get(
-    reader: *mut lilia_shm::ShmReader,
-    space: *const c_char,
-    key_ptr: *const u8,
-    key_len: usize,
-    out_val_ptr: *mut *const u8,
-    out_val_len: *mut usize,
-    out_version: *mut u64,
+pub unsafe extern "C" fn lilia_c_close(
+    handle: *mut LiliaHandle,
+    timeout_ms: u64,
+    out_err: *mut *mut c_char,
 ) -> c_int {
-    if reader.is_null()
-        || space.is_null()
-        || key_ptr.is_null()
-        || out_val_ptr.is_null()
-        || out_val_len.is_null()
-    {
-        return -1;
+    if handle.is_null() {
+        return 0;
     }
-    let Some(space_str) = str_from_ptr(space) else {
-        return -1;
-    };
-    let key = std::slice::from_raw_parts(key_ptr, key_len);
-    let r = &*reader;
-    if let Some(entry) = r.get(space_str, key) {
-        *out_val_ptr = entry.value.as_ptr();
-        *out_val_len = entry.value.len();
-        if !out_version.is_null() {
-            *out_version = entry.version;
+    // SAFETY: the caller hands the handle back once.
+    let handle = unsafe { Box::from_raw(handle) };
+    match handle.database.close(Duration::from_millis(timeout_ms)) {
+        Ok(()) => 0,
+        Err(error) => {
+            let json = serde_json::to_string(&error).unwrap_or_else(|_| error.to_string());
+            // SAFETY: as documented for `out_err`.
+            unsafe { report(out_err, &json) };
+            -1
         }
-        0
-    } else {
-        1
     }
 }
 
+/// Frees a frame from [`lilia_c_execute`].
+///
+/// # Safety
+///
+/// `bytes` and `len` come from one [`lilia_c_execute`] call and are freed once.
 #[no_mangle]
-pub unsafe extern "C" fn lilia_c_shm_reader_json_get(
-    reader: *mut lilia_shm::ShmReader,
-    space: *const c_char,
-    id: *const c_char,
-    out_val_ptr: *mut *const u8,
-    out_val_len: *mut usize,
-    out_version: *mut u64,
-) -> c_int {
-    if reader.is_null()
-        || space.is_null()
-        || id.is_null()
-        || out_val_ptr.is_null()
-        || out_val_len.is_null()
-    {
-        return -1;
-    }
-    let Some(space_str) = str_from_ptr(space) else {
-        return -1;
-    };
-    let Some(id_str) = str_from_ptr(id) else {
-        return -1;
-    };
-    let r = &*reader;
-    if let Some(entry) = r.json_get(space_str, id_str) {
-        *out_val_ptr = entry.value_bytes.as_ptr();
-        *out_val_len = entry.value_bytes.len();
-        if !out_version.is_null() {
-            *out_version = entry.version;
-        }
-        0
-    } else {
-        1
+pub unsafe extern "C" fn lilia_c_free_bytes(bytes: *mut u8, len: usize) {
+    if !bytes.is_null() {
+        // SAFETY: the frame was handed out as a boxed slice of `len` bytes.
+        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(bytes, len)) });
     }
 }
 
+/// Frees an error string from [`lilia_c_open`] or [`lilia_c_close`].
+///
+/// # Safety
+///
+/// `message` comes from this library and is freed once.
 #[no_mangle]
-pub unsafe extern "C" fn lilia_c_shm_reader_json_extract_str(
-    reader: *mut lilia_shm::ShmReader,
-    space: *const c_char,
-    id: *const c_char,
-    path: *const c_char,
-    out_str_ptr: *mut *const u8,
-    out_str_len: *mut usize,
-) -> c_int {
-    if reader.is_null()
-        || space.is_null()
-        || id.is_null()
-        || path.is_null()
-        || out_str_ptr.is_null()
-        || out_str_len.is_null()
-    {
-        return -1;
-    }
-    let Some(space_str) = str_from_ptr(space) else {
-        return -1;
-    };
-    let Some(id_str) = str_from_ptr(id) else {
-        return -1;
-    };
-    let Some(path_str) = str_from_ptr(path) else {
-        return -1;
-    };
-    let r = &*reader;
-    if let Some(s) = r.json_extract_str_zero_copy(space_str, id_str, path_str) {
-        *out_str_ptr = s.as_ptr();
-        *out_str_len = s.len();
-        0
-    } else {
-        1
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lilia_c_shm_reader_read_page(
-    reader: *mut lilia_shm::ShmReader,
-    page_id: u32,
-    out_data_ptr: *mut *const u8,
-    out_data_len: *mut usize,
-    out_version: *mut u64,
-) -> c_int {
-    if reader.is_null() || out_data_ptr.is_null() || out_data_len.is_null() {
-        return -1;
-    }
-    let r = &*reader;
-    if let Some(page) = r.read_page(page_id) {
-        *out_data_ptr = page.data.as_ptr();
-        *out_data_len = page.data.len();
-        if !out_version.is_null() {
-            *out_version = page.version;
-        }
-        0
-    } else {
-        1
+pub unsafe extern "C" fn lilia_c_free_string(message: *mut c_char) {
+    if !message.is_null() {
+        // SAFETY: the string was handed out by `CString::into_raw`.
+        drop(unsafe { CString::from_raw(message) });
     }
 }

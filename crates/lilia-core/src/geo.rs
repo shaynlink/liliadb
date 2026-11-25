@@ -1,12 +1,19 @@
-#![allow(clippy::missing_errors_doc)]
-
 use serde::{Deserialize, Serialize};
 
 /// Earth radius in meters according to WGS84 mean radius.
 pub const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
 
 /// A GPS location fix recorded during an outdoor activity (running, walking, etc.).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct GpsPoint {
     pub timestamp: i64,
@@ -63,6 +70,11 @@ impl GpsPoint {
     }
 
     /// Computes and assigns the H3 index at the given resolution.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidInput`](crate::ErrorCode::InvalidInput) for coordinates outside the
+    /// globe or a resolution above 15.
     pub fn compute_h3(&mut self, resolution: u8) -> crate::Result<u64> {
         let cell = crate::h3::lat_lng_to_cell(self.latitude, self.longitude, resolution)?;
         self.h3_index = Some(cell);
@@ -70,13 +82,28 @@ impl GpsPoint {
     }
 
     /// Converts the GPS coordinates into an H3 cell at the requested resolution.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidInput`](crate::ErrorCode::InvalidInput) for coordinates outside the
+    /// globe or a resolution above 15.
     pub fn to_h3(&self, resolution: u8) -> crate::Result<u64> {
         crate::h3::lat_lng_to_cell(self.latitude, self.longitude, resolution)
     }
 }
 
 /// A matched geofence polygonal zone.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 pub struct GeofenceMatch {
     pub id: String,
@@ -132,7 +159,10 @@ pub fn circle_to_geopoly_json(
     let mut points = Vec::with_capacity(vertices + 1);
 
     for i in 0..vertices {
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "vertex indexes and counts of a circle polygon are small"
+        )]
         let angle = (i as f64) * (2.0 * std::f64::consts::PI / (vertices as f64));
         let lon = center_lon + d_lon_deg * angle.cos();
         let lat = center_lat + d_lat_deg * angle.sin();
@@ -150,16 +180,11 @@ pub fn circle_to_geopoly_json(
 /// Formats a list of `(longitude, latitude)` coordinate pairs into a geopoly-compatible JSON string.
 #[must_use]
 pub fn coords_to_geopoly_json(coords: &[(f64, f64)]) -> String {
-    use std::fmt::Write;
-    let mut json = String::from("[");
-    for (i, &(lon, lat)) in coords.iter().enumerate() {
-        if i > 0 {
-            json.push_str(", ");
-        }
-        let _ = write!(json, "[{lon:.7}, {lat:.7}]");
-    }
-    json.push(']');
-    json
+    let pairs: Vec<String> = coords
+        .iter()
+        .map(|(lon, lat)| format!("[{lon:.7}, {lat:.7}]"))
+        .collect();
+    format!("[{}]", pairs.join(", "))
 }
 
 #[cfg(test)]

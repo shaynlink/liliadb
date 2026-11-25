@@ -1,9 +1,3 @@
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::cast_possible_truncation,
-    clippy::similar_names
-)]
-
 use super::automaton::{LevenshteinAutomaton, LevenshteinState};
 use crate::FtsSuggestion;
 
@@ -201,7 +195,10 @@ fn common_prefix_len(a: &str, b: &str) -> usize {
 }
 
 fn insert_rec(node: &mut RadixNode, rem: &str, doc_count_delta: u32) -> bool {
-    let first = rem.chars().next().expect("rem must be non-empty");
+    // An empty term is never in the trie (the public calls refuse it before descending).
+    let Some(first) = rem.chars().next() else {
+        return false;
+    };
 
     // Binary search child by first character
     let idx = node
@@ -266,7 +263,10 @@ fn insert_rec(node: &mut RadixNode, rem: &str, doc_count_delta: u32) -> bool {
 }
 
 fn contains_rec(node: &RadixNode, rem: &str) -> bool {
-    let first = rem.chars().next().expect("rem must be non-empty");
+    // An empty term is never in the trie (the public calls refuse it before descending).
+    let Some(first) = rem.chars().next() else {
+        return false;
+    };
     let idx = node
         .children
         .binary_search_by(|c| c.first_char().cmp(&Some(first)));
@@ -288,7 +288,8 @@ fn contains_rec(node: &RadixNode, rem: &str) -> bool {
 }
 
 fn doc_count_rec(node: &RadixNode, rem: &str) -> Option<u32> {
-    let first = rem.chars().next().expect("rem must be non-empty");
+    // An empty term is never in the trie (the public calls refuse it before descending).
+    let first = rem.chars().next()?;
     let idx = node
         .children
         .binary_search_by(|c| c.first_char().cmp(&Some(first)));
@@ -314,7 +315,10 @@ fn doc_count_rec(node: &RadixNode, rem: &str) -> Option<u32> {
 }
 
 fn remove_rec(node: &mut RadixNode, rem: &str) -> bool {
-    let first = rem.chars().next().expect("rem must be non-empty");
+    // An empty term is never in the trie (the public calls refuse it before descending).
+    let Some(first) = rem.chars().next() else {
+        return false;
+    };
     let idx = node
         .children
         .binary_search_by(|c| c.first_char().cmp(&Some(first)));

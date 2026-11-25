@@ -4,10 +4,10 @@ import PackageDescription
 let package = Package(
     name: "Lilia",
     platforms: [
-        .iOS(.v15),
-        .macOS(.v12),
-        .watchOS(.v8),
-        .tvOS(.v15),
+        .iOS("15.0"),
+        .macOS("12.0"),
+        .watchOS("8.0"),
+        .tvOS("15.0"),
     ],
     products: [
         .library(

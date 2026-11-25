@@ -5,11 +5,12 @@ import { join, resolve } from 'node:path';
 import { command, bounded } from './process.mjs';
 import { cli, daemon, sdk } from './adapters.mjs';
 import { Database } from '../../packages/node/dist/index.js';
-import { precision } from './versions.mjs';
+import { Versions } from './oracle.mjs';
 
-const rust = command('cargo', ['test', '-p', 'lilia-storage-sqlite', '--test', 'conformance'], { stdio: 'inherit', timeout: 0 });
+const rust = command('cargo', ['test', '-p', 'lilia-protocol', '--test', 'conformance'], { stdio: 'inherit', timeout: 0 });
 assert.equal(rust.status, 0, 'Rust embedded conformance');
-const codec = command(process.execPath, ['--test', 'packages/node/dist/version.test.js'], { stdio: 'inherit' });
+const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+const codec = command(pnpm, ['--filter', '@liliadb/client', 'test'], { stdio: 'inherit', shell: process.platform === 'win32' });
 assert.equal(codec.status, 0, 'SDK version codec validation');
 const fixtures = JSON.parse(await readFile(new URL('./fixtures.json', import.meta.url), 'utf8'));
 assert(fixtures.length > 0);
@@ -18,9 +19,11 @@ const executable = name => resolve('target/debug', name + (process.platform === 
 const directory = await realpath(await mkdtemp(join(tmpdir(), 'lilia-conf-')));
 
 async function check(surface, execute) {
+  const versions = new Versions();
   for (const step of fixtures) {
+    const { expected, ...request } = step;
     let result;
-    try { result = { value: await bounded(execute(step), `${surface}: ${step.name}`) }; }
+    try { result = { value: await bounded(execute(versions.substitute(request)), `${surface}: ${step.name}`) }; }
     catch (error) { result = { error }; }
     const context = `${surface}: ${step.name}`;
     if (step.error) {
@@ -29,7 +32,7 @@ async function check(surface, execute) {
       assert.match(result.error.requestId ?? result.error.request_id ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i, context);
     } else {
       if (result.error) throw new Error(context, { cause: result.error });
-      assert.deepEqual(result.value, step.expected, context);
+      assert(versions.matches(result.value, expected), `${context}: ${JSON.stringify(result.value)} is not ${JSON.stringify(expected)}`);
     }
   }
   console.log(`${surface}: ${fixtures.length} shared fixtures passed`);
@@ -50,5 +53,4 @@ try {
   assert.equal(parseError.code, 'INVALID_INPUT');
   assert.equal(typeof parseError.request_id, 'string');
   console.log(`Conformance passed: 4 surfaces × ${fixtures.length} shared steps`);
-  await precision(directory, executable);
 } finally { await rm(directory, { recursive: true, force: true }); }

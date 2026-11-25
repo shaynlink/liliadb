@@ -1,41 +1,27 @@
-import React, { createContext, useContext } from 'react';
-import type { LiliaDatabase } from './database.js';
+import React, { createContext, useContext } from "react";
+import type { LiliaDatabase } from "./database.js";
 
 export const LiliaContext = createContext<LiliaDatabase | null>(null);
 
 /**
- * Access the active LiliaDatabase from the nearest `<LiliaProvider>`,
- * or fall back to an explicitly supplied database instance.
+ * The database `explicitDb`, else the one of the nearest `<LiliaProvider>`.
  *
- * @throws Error if called outside a `<LiliaProvider>` and no explicit db is provided.
+ * @throws Error outside a `<LiliaProvider>` that has opened its database, without `explicitDb`.
  */
 export function useDatabase(explicitDb?: LiliaDatabase | null): LiliaDatabase {
-  const contextDb = useContext(LiliaContext);
-  const db = explicitDb ?? contextDb;
-
+  const provided = useContext(LiliaContext);
+  const db = explicitDb ?? provided;
   if (!db) {
-    throw new Error(
-      `[LiliaDB] No LiliaDatabase instance found. ` +
-      `Wrap your root component tree in <LiliaProvider> or pass an explicit database instance.`
-    );
+    throw new Error("[LiliaDB] no database: render this inside a <LiliaProvider> or pass a database");
   }
-
   return db;
 }
 
-/**
- * Convenient shorthand for `useDatabase()`.
- */
+/** `useDatabase`. */
 export const useLilia = useDatabase;
 
-/**
- * Render prop component to consume the database instance without hooks.
- */
-export function LiliaConsumer({
-  children,
-}: {
-  children: (db: LiliaDatabase) => React.ReactNode;
-}): React.ReactElement {
+/** The database of the nearest `<LiliaProvider>`, for a render function. */
+export function LiliaConsumer({ children }: { children: (db: LiliaDatabase) => React.ReactNode }): React.ReactElement {
   const db = useDatabase();
   return <>{children(db)}</>;
 }

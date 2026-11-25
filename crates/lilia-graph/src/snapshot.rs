@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use lilia_core::{Direction, ErrorCode, LiliaError, Result};
 
 use crate::GraphStore;
+use lilia_db::Context;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewEdge {
@@ -22,9 +23,12 @@ pub struct GraphView {
 }
 
 impl GraphView {
-    pub fn from_store(store: &GraphStore<'_>, kind_filter: Option<&str>) -> Result<Self> {
-        let nodes = store.list_nodes(None, u32::MAX)?;
-        let edges = store.list_edges(None, None, kind_filter, u32::MAX)?;
+    pub fn from_store<C: Context>(
+        store: &GraphStore<'_, C>,
+        kind_filter: Option<&str>,
+    ) -> Result<Self> {
+        let nodes = store.list_nodes(None, None)?;
+        let edges = store.list_edges(None, None, kind_filter, None)?;
 
         let mut node_names = Vec::with_capacity(nodes.len());
         let mut node_indices = HashMap::with_capacity(nodes.len());

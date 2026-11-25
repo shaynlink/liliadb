@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
+use lilia_io::Vfs;
 use rand::RngCore;
 use tokio::net::UnixListener;
 
@@ -10,18 +11,18 @@ use tokio::net::UnixListener;
 mod tests;
 
 #[cfg(target_os = "macos")]
-mod macos_acl;
-
-#[cfg_attr(not(target_os = "macos"), allow(clippy::unnecessary_wraps))]
 fn check_acl(path: &Path) -> io::Result<()> {
-    #[cfg(target_os = "macos")]
-    return macos_acl::reject_grants(path);
-    // On Linux, the POSIX ACL mask is reflected in the checked group mode bits.
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        Ok(())
-    }
+    lilia_io::ipc::reject_acl_grants(path)
+}
+
+/// On Linux, the POSIX ACL mask is reflected in the checked group mode bits.
+#[cfg(not(target_os = "macos"))]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as the macOS check, which can fail"
+)]
+fn check_acl(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 pub(crate) fn same_user(uid: u32) -> bool {
@@ -86,8 +87,10 @@ fn private_path(path: &Path) -> io::Result<PathBuf> {
     Ok(absolute)
 }
 
-// Octal masks make the POSIX permission policy explicit.
-#[allow(clippy::verbose_bit_mask)]
+#[allow(
+    clippy::verbose_bit_mask,
+    reason = "octal masks make the POSIX permission policy explicit"
+)]
 fn validate_token(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata)
@@ -124,7 +127,8 @@ pub(crate) fn create_token(path: &Path) -> io::Result<String> {
     staging.as_file().sync_all()?;
     validate_token(&path)?;
     staging.persist(&path).map_err(|error| error.error)?;
-    lilia_core::sync_directory(parent)?;
+    // The token's rename is durable once its directory is.
+    lilia_io::NativeVfs.sync_dir(parent)?;
     Ok(token)
 }
 
@@ -171,7 +175,9 @@ impl Drop for ListenerGuard {
                 && metadata.dev() == self.identity.dev()
                 && metadata.ino() == self.identity.ino()
             {
-                let _ = fs::remove_file(&self.path);
+                if let Err(error) = fs::remove_file(&self.path) {
+                    tracing::warn!(%error, path = %self.path.display(), "cannot remove the IPC socket");
+                }
             }
         }
     }

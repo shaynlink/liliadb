@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use lilia_protocol::{read_frame, write_frame, Operation, Request, Response, ResponseValue};
+use lilia_protocol::{read_frame, write_frame, Codec, Operation, Request, Response, ResponseValue};
 
 struct ChildGuard(Child);
 
@@ -33,21 +33,19 @@ async fn request(directory: &Path, token: &str, operation: Operation) -> Respons
     let mut stream = tokio::net::UnixStream::connect(directory.join("daemon.sock"))
         .await
         .unwrap();
-    write_frame(
-        &mut stream,
-        &Request {
-            id: uuid::Uuid::new_v4().to_string(),
-            token: token.into(),
-            deadline_ms: Some(5_000),
-            operation,
-        },
-    )
-    .await
-    .unwrap();
-    let response: Response = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut stream))
-        .await
-        .unwrap()
-        .unwrap();
+    Codec::Rkyv.announce(&mut stream).await.unwrap();
+    let request = Request {
+        id: uuid::Uuid::new_v4().to_string(),
+        token: token.into(),
+        deadline_ms: Some(5_000),
+        operation,
+    };
+    write_frame(&mut stream, &request).await.unwrap();
+    let response: Response =
+        tokio::time::timeout(Duration::from_secs(5), read_frame::<Response>(&mut stream))
+            .await
+            .unwrap()
+            .unwrap();
     response.result.unwrap()
 }
 
@@ -83,7 +81,7 @@ async fn duplicate_start_preserves_live_credentials_and_clean_restart_rotates_th
         .unwrap();
         assert!(matches!(
             request(&directory, &token, Operation::IntegrityCheck).await,
-            ResponseValue::Integrity(true)
+            ResponseValue::Bool(true)
         ));
         let duplicate = command(&directory).output().unwrap();
         assert!(!duplicate.status.success());

@@ -1,9 +1,9 @@
 Pod::Spec.new do |s|
   s.name             = 'liliadb_flutter'
-  s.version          = '0.1.0-alpha.9'
+  s.version          = '0.2.0-alpha.1'
   s.summary          = 'LiliaDB embedded local-first multimodel database for Flutter'
   s.description      = <<-DESC
-LiliaDB provides durable Key/Value, JSON documents, Graph, FTS5, and SQL queries with transparent AES-256-GCM encryption.
+LiliaDB provides durable key-value records, JSON documents with secondary indexes, graphs, full-text search and read-only SQL, called from Dart through dart:ffi.
                        DESC
   s.homepage         = 'https://github.com/shaynlink/lilia'
   s.license          = { :file => '../LICENSE' }

@@ -1,343 +1,223 @@
-#![allow(unsafe_code)]
+//! The `UniFFI` API and the C ABI, as the native SDKs call them.
 
-use lilia_ffi::{FfiDirection, FfiResourceProfile, LiliaDatabase};
+#![allow(
+    unsafe_code,
+    reason = "the test calls the C ABI as the native SDKs do, through raw pointers"
+)]
+
+use std::ffi::{c_char, CStr, CString};
+
+use lilia_ffi::c_abi::{
+    lilia_c_close, lilia_c_execute, lilia_c_free_bytes, lilia_c_free_string, lilia_c_open,
+};
+use lilia_ffi::{
+    FfiDirection, FfiDurability, FfiOpenOptions, FfiResourceProfile, FfiTimeSeriesPoint,
+    LiliaDatabase, LiliaFfiError,
+};
+use serde_json::{json, Value};
+
+fn options() -> FfiOpenOptions {
+    FfiOpenOptions {
+        profile: FfiResourceProfile::Constrained,
+        durability: FfiDurability::Performance,
+        ledger: false,
+        history_retention_ms: None,
+        undo_depth: 0,
+    }
+}
 
 #[test]
-fn test_ffi_sync_api_lifecycle_and_multimodel() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let db_path = temp_dir
-        .path()
-        .join("test_sync.lilia")
-        .to_string_lossy()
-        .to_string();
+fn the_sync_api_covers_the_models_and_closes_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let db =
+        LiliaDatabase::open(dir.path().join("db").to_string_lossy().into(), options()).unwrap();
 
-    // 1. Open with Mobile profile and 32-byte encryption key
-    let key = vec![0x42u8; 32];
-    let db = LiliaDatabase::open(db_path, FfiResourceProfile::Mobile, Some(key)).unwrap();
-
-    // 2. Mobile lifecycle: prepare for background
-    assert!(db.prepare_for_background().is_ok());
-
-    // 3. KV Sync operations
-    let v1 = db
-        .kv_set_sync(
-            "users".into(),
-            b"alice".to_vec(),
-            b"Alice Data".to_vec(),
-            None,
-        )
+    let version = db
+        .kv_set_sync("users".into(), b"alice".to_vec(), b"Alice".to_vec(), None)
         .unwrap();
-    assert!(v1 > 0);
-
-    let get_res = db
+    let entry = db
         .kv_get_sync("users".into(), b"alice".to_vec())
         .unwrap()
         .unwrap();
-    assert_eq!(get_res.namespace, "users");
-    assert_eq!(get_res.key, b"alice");
-    assert_eq!(get_res.value, b"Alice Data");
+    assert_eq!(
+        (entry.value.as_slice(), entry.version),
+        (&b"Alice"[..], version)
+    );
+    assert_eq!(db.kv_scan_sync("users".into(), None, 0).unwrap().len(), 1);
+    assert!(db
+        .kv_delete_sync("users".into(), b"alice".to_vec())
+        .unwrap());
 
-    let scan_res = db.kv_scan_sync("users".into(), None, 10).unwrap();
-    assert_eq!(scan_res.len(), 1);
-
-    // 4. JSON Sync operations
-    let j_ver = db
-        .json_put_sync(
-            "docs".into(),
-            "doc1".into(),
-            r#"{"title":"Hello Mobile","priority":1}"#.into(),
-        )
-        .unwrap();
-    assert!(j_ver > 0);
-
-    let j_entry = db
-        .json_get_sync("docs".into(), "doc1".into())
+    db.json_put_sync(
+        "docs".into(),
+        "d1".into(),
+        r#"{"title":"Hello","rank":1}"#.into(),
+    )
+    .unwrap();
+    let document = db
+        .json_get_sync("docs".into(), "d1".into())
         .unwrap()
         .unwrap();
-    assert_eq!(j_entry.id, "doc1");
-    assert!(j_entry.value_json.contains("Hello Mobile"));
+    assert_eq!(
+        serde_json::from_str::<Value>(&document.value_json).unwrap(),
+        json!({"title": "Hello", "rank": 1})
+    );
 
-    // 5. Graph Sync operations
-    db.graph_set_node_sync(
-        "social".into(),
-        "u1".into(),
-        "user".into(),
-        r#"{"name":"User 1"}"#.into(),
-    )
-    .unwrap();
-    db.graph_set_node_sync(
-        "social".into(),
-        "u2".into(),
-        "user".into(),
-        r#"{"name":"User 2"}"#.into(),
-    )
-    .unwrap();
-    db.graph_add_edge_sync("social".into(), "u1".into(), "u2".into(), "follows".into())
+    db.json_create_index_sync("docs".into(), "by_rank".into(), "$.rank".into(), None)
         .unwrap();
-
-    let neighbors = db
-        .graph_neighbors_sync("social".into(), "u1".into(), FfiDirection::Outgoing, None)
+    let ranked = db
+        .json_find_sync("docs".into(), r#"{"by_rank": 1}"#.into(), None, 0)
         .unwrap();
-    assert_eq!(neighbors, vec!["u2"]);
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(
+        db.json_list_indexes_sync("docs".into()).unwrap()[0].index_name,
+        "by_rank"
+    );
+    assert!(db
+        .json_drop_index_sync("docs".into(), "by_rank".into())
+        .unwrap());
 
-    let reachable = db
-        .graph_reachability_sync("social".into(), vec!["u1".into()], FfiDirection::Outgoing)
+    db.graph_set_node_sync("g".into(), "a".into(), "user".into(), "{}".into())
         .unwrap();
-    assert!(reachable.contains(&"u1".into()));
-    assert!(reachable.contains(&"u2".into()));
+    db.graph_add_edge_sync("g".into(), "a".into(), "b".into(), "follows".into())
+        .unwrap();
+    assert_eq!(
+        db.graph_neighbors_sync("g".into(), "a".into(), FfiDirection::Outgoing, None)
+            .unwrap(),
+        ["b"]
+    );
 
-    // 6. FTS5 Sync operations
-    db.fts_index_sync(
-        "articles".into(),
-        "art1".into(),
-        "Rust SQLite on Apple Watch and Android TV".into(),
-    )
-    .unwrap();
+    db.fts_index_sync("notes".into(), "n1".into(), "local first storage".into())
+        .unwrap();
     let hits = db
-        .fts_search_sync("articles".into(), "Apple Watch".into(), 5)
+        .fts_search_sync("notes".into(), "storage".into(), 5)
         .unwrap();
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].doc_id, "art1");
+    assert_eq!(hits[0].doc_id, "n1");
 
-    // 7. SQL Sync operations
-    let sql_res = db
+    let rows = db
         .sql_query_sync(
-            "SELECT space, id FROM lilia_json WHERE space = 'docs'".into(),
-            None,
+            "SELECT id FROM lilia_json WHERE space = $1".into(),
+            Some(r#"["docs"]"#.into()),
         )
         .unwrap();
-    assert_eq!(sql_res.columns, vec!["space", "id"]);
-    assert_eq!(sql_res.rows_json.len(), 1);
+    assert_eq!(rows.rows_json, [r#"["d1"]"#]);
 
-    // 8. Maintenance
-    assert!(db.quick_check_sync().unwrap());
-    assert!(db.checkpoint_sync().is_ok());
-    assert!(db.close_sync(5000).is_ok());
+    let points = (0..5_i32)
+        .map(|i| FfiTimeSeriesPoint {
+            timestamp: i64::from(i) * 1_000,
+            value: f64::from(i),
+        })
+        .collect();
+    db.ts_append_points_sync("cpu".into(), points).unwrap();
+    let stats = db
+        .ts_query_stats_sync("cpu".into(), 0, 10_000)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stats.count, 5);
+
+    assert!(db.integrity_check_sync().unwrap());
+    db.close_sync(5_000).unwrap();
+    assert!(matches!(
+        db.kv_get_sync("users".into(), b"alice".to_vec()),
+        Err(LiliaFfiError::Closed(_))
+    ));
+    db.close_sync(5_000).unwrap();
 }
 
-#[tokio::test]
-#[allow(clippy::too_many_lines)] // one sequential procedure over shared state; splitting it would only thread that state through helpers
-async fn test_ffi_async_api_and_constrained_profile() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let db_path = temp_dir
-        .path()
-        .join("test_watch_async.lilia")
-        .to_string_lossy()
-        .to_string();
+#[tokio::test(flavor = "multi_thread")]
+async fn the_async_api_runs_off_the_caller() {
+    let dir = tempfile::tempdir().unwrap();
+    let db =
+        LiliaDatabase::open(dir.path().join("db").to_string_lossy().into(), options()).unwrap();
+    db.json_put("docs".into(), "d1".into(), r#"{"n":1}"#.into())
+        .await
+        .unwrap();
+    db.json_put("docs".into(), "d2".into(), r#"{"n":2}"#.into())
+        .await
+        .unwrap();
+    let document = db
+        .json_get("docs".into(), "d2".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(document.value_json, r#"{"n":2}"#);
+    assert!(db.json_delete("docs".into(), "d1".into()).await.unwrap());
+    db.close(5_000).await.unwrap();
+}
 
-    // Open with Constrained profile (for watchOS / Wear OS) with passphrase
-    let db = LiliaDatabase::open_with_passphrase(
-        db_path,
-        FfiResourceProfile::Constrained,
-        "watch-secure-passphrase".into(),
-    )
-    .unwrap();
+/// The JSON of a JS frame and its segments.
+fn frame(bytes: &[u8]) -> (Value, Vec<Vec<u8>>) {
+    let u32_at = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let json = u32_at(0);
+    let value = serde_json::from_slice(&bytes[4..4 + json]).unwrap();
+    let count = u32_at(4 + json);
+    let start = 8 + json + count * 8;
+    let segments = (0..count)
+        .map(|i| {
+            let (offset, len) = (u32_at(8 + json + i * 8), u32_at(12 + json + i * 8));
+            bytes[start + offset..start + offset + len].to_vec()
+        })
+        .collect();
+    (value, segments)
+}
 
-    // Async KV
-    let ver = db
-        .kv_set(
-            "health".into(),
-            b"heart_rate".to_vec(),
-            b"72bpm".to_vec(),
-            None,
+/// Runs `request` through the C ABI.
+fn execute(
+    handle: *const lilia_ffi::c_abi::LiliaHandle,
+    request: &[u8],
+    encoding: i32,
+) -> (Value, Vec<Vec<u8>>) {
+    let mut len = 0usize;
+    let bytes = unsafe {
+        lilia_c_execute(
+            handle,
+            request.as_ptr(),
+            request.len(),
+            encoding,
+            &raw mut len,
         )
-        .await
-        .unwrap();
-    assert!(ver > 0);
-
-    let entry = db
-        .kv_get("health".into(), b"heart_rate".to_vec())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(entry.value, b"72bpm");
-
-    // Async JSON
-    db.json_put(
-        "metrics".into(),
-        "today".into(),
-        r#"{"steps":10500,"calories":450}"#.into(),
-    )
-    .await
-    .unwrap();
-    let json_doc = db
-        .json_get("metrics".into(), "today".into())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(json_doc.value_json.contains("10500"));
-
-    // Async SQL
-    let res = db
-        .sql_query("SELECT id, value FROM lilia_json".into(), None)
-        .await
-        .unwrap();
-    assert_eq!(res.rows_json.len(), 1);
-
-    // Async Time-Series (Gorilla compressed health data)
-    let hr_points = vec![
-        lilia_ffi::FfiTimeSeriesPoint {
-            timestamp: 1_700_000_000_000,
-            value: 72.0,
-        },
-        lilia_ffi::FfiTimeSeriesPoint {
-            timestamp: 1_700_000_001_000,
-            value: 72.5,
-        },
-        lilia_ffi::FfiTimeSeriesPoint {
-            timestamp: 1_700_000_002_000,
-            value: 73.0,
-        },
-    ];
-    db.ts_append_points("watch_hr".into(), hr_points)
-        .await
-        .unwrap();
-
-    let queried_ts = db
-        .ts_query_range("watch_hr".into(), 1_700_000_000_000, 1_700_000_002_000)
-        .await
-        .unwrap();
-    assert_eq!(queried_ts.len(), 3);
-
-    let ts_stats = db
-        .ts_query_stats("watch_hr".into(), 1_700_000_000_000, 1_700_000_002_000)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(ts_stats.count, 3);
-    assert_eq!(ts_stats.min, 72.0);
-    assert_eq!(ts_stats.max, 73.0);
-
-    // Standalone compression functions
-    let comp_bytes = lilia_ffi::ts_compress_points(queried_ts).unwrap();
-    assert_ne!(comp_bytes, [] as [u8; 0]);
-    let decomp_pts = lilia_ffi::ts_decompress_points(comp_bytes).unwrap();
-    assert_eq!(decomp_pts.len(), 3);
-
-    // FFI Lifecycle Policy & Adaptive Query
-    let ffi_policy = lilia_ffi::FfiTimeSeriesLifecyclePolicy {
-        series_pattern: "watch_*".into(),
-        rules: vec![
-            lilia_ffi::FfiTimeSeriesRetentionRule {
-                resolution_ms: 1_000,
-                retention_ms: Some(24 * 3600 * 1000),
-                aggregation: lilia_ffi::FfiDownsampleAggregation::Avg,
-            },
-            lilia_ffi::FfiTimeSeriesRetentionRule {
-                resolution_ms: 60_000,
-                retention_ms: None,
-                aggregation: lilia_ffi::FfiDownsampleAggregation::Avg,
-            },
-        ],
     };
-    db.ts_set_policy(ffi_policy).await.unwrap();
-    let read_policy = db.ts_get_policy("watch_*".into()).await.unwrap().unwrap();
-    assert_eq!(read_policy.rules.len(), 2);
-
-    let auto_pts = db
-        .ts_query_auto("watch_hr".into(), 1_700_000_000_000, 1_700_000_002_000, 100)
-        .await
-        .unwrap();
-    assert_eq!(auto_pts.len(), 3);
-
-    let ret_stats = db.ts_apply_retention().await.unwrap();
-    assert_eq!(ret_stats.series_processed, 1);
-
-    // Async Geofencing & GPS Tracing
-    let park_poly = lilia_ffi::geo_create_circle_polygon(2.2945, 48.8584, 250.0, 16);
-    db.geo_add_fence(
-        "workout_zone".into(),
-        "Park Perimeter".into(),
-        "running".into(),
-        park_poly.clone(),
-        None,
-    )
-    .await
-    .unwrap();
-
-    let inside = db
-        .geo_contains_point(park_poly, 2.2945, 48.8584)
-        .await
-        .unwrap();
-    assert!(inside);
-
-    let matches = db.geo_find_fences_for_point(2.2945, 48.8584).await.unwrap();
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].id, "workout_zone");
-
-    let gps_track = vec![
-        lilia_ffi::FfiGpsPoint {
-            timestamp: 1_700_000_000_000,
-            latitude: 48.8580,
-            longitude: 2.2940,
-            altitude: Some(35.0),
-            speed: Some(3.0),
-            accuracy: Some(5.0),
-        },
-        lilia_ffi::FfiGpsPoint {
-            timestamp: 1_700_000_005_000,
-            latitude: 48.8584,
-            longitude: 2.2945,
-            altitude: Some(35.5),
-            speed: Some(3.1),
-            accuracy: Some(4.0),
-        },
-    ];
-    let hits = db
-        .geo_record_gps_points("run_1".into(), gps_track)
-        .await
-        .unwrap();
-    assert_eq!(hits.len(), 1);
-
-    let dist = db.geo_track_distance("run_1".into()).await.unwrap();
-    assert!(dist > 10.0 && dist < 100.0);
-
-    // Async Quick Check & Close
-    assert!(db.quick_check().await.unwrap());
-    assert!(db.close(5000).await.is_ok());
+    assert!(!bytes.is_null());
+    let result = frame(unsafe { std::slice::from_raw_parts(bytes, len) });
+    unsafe { lilia_c_free_bytes(bytes, len) };
+    result
 }
 
 #[test]
-fn test_ffi_c_abi_shm_reader() {
-    use lilia_ffi::*;
-    use std::ffi::CString;
+fn the_c_abi_takes_json_or_message_pack_and_answers_with_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = json!({"path": dir.path().join("db"), "durability": "performance"}).to_string();
+    let options = CString::new(options).unwrap();
+    let mut error: *mut c_char = std::ptr::null_mut();
+    let handle = unsafe { lilia_c_open(options.as_ptr(), &raw mut error) };
+    assert!(!handle.is_null() && error.is_null());
 
-    let temp_dir = tempfile::tempdir().unwrap();
-    let shm_path = temp_dir.path().join("c_abi_test.shm");
+    let put = json!({"type": "batch", "operations": [{"model": "kv_set", "namespace": "ns", "key": [1, 2], "value": [3, 4, 5]}]});
+    let (written, _) = execute(handle, put.to_string().as_bytes(), 1);
+    assert_eq!(written["Ok"]["type"], "mutations");
 
-    let engine =
-        lilia_shm::ShmEngine::create(lilia_shm::ShmOptions::file_backed(&shm_path)).unwrap();
-    engine
-        .put_kv("widget", b"status", b"ONLINE", 1, None)
-        .unwrap();
+    let get = lilia_protocol::to_msgpack(&lilia_protocol::Operation::KvGet {
+        namespace: "ns".into(),
+        key: vec![1, 2],
+    })
+    .unwrap();
+    let (read, segments) = execute(handle, &get, 0);
+    let value = usize::try_from(read["Ok"]["value"]["value"].as_u64().unwrap()).unwrap();
+    assert_eq!(segments[value], [3, 4, 5]);
 
-    let path_c = CString::new(shm_path.to_str().unwrap()).unwrap();
-    unsafe {
-        let reader = lilia_c_shm_reader_open(path_c.as_ptr());
-        assert!(!reader.is_null());
+    let (refused, _) = execute(handle, b"{not json", 1);
+    assert_eq!(refused["Err"]["code"], "INVALID_INPUT");
+    let (unknown, _) = execute(handle, b"{}", 7);
+    assert_eq!(unknown["Err"]["code"], "INVALID_INPUT");
 
-        let space_c = CString::new("widget").unwrap();
-        let key = b"status";
-        let mut val_ptr: *const u8 = std::ptr::null();
-        let mut val_len: usize = 0;
-        let mut version: u64 = 0;
+    assert_eq!(unsafe { lilia_c_close(handle, 5_000, &raw mut error) }, 0);
 
-        let res = lilia_c_shm_reader_get(
-            reader,
-            space_c.as_ptr(),
-            key.as_ptr(),
-            key.len(),
-            &mut val_ptr,
-            &mut val_len,
-            &mut version,
-        );
-        assert_eq!(res, 0);
-        assert!(!val_ptr.is_null());
-        assert_eq!(val_len, 6);
-        assert_eq!(version, 1);
-        let slice = std::slice::from_raw_parts(val_ptr, val_len);
-        assert_eq!(slice, b"ONLINE");
-
-        lilia_c_shm_reader_close(reader);
-    }
+    let bad = CString::new("{\"durability\": \"fast\"}").unwrap();
+    let failed = unsafe { lilia_c_open(bad.as_ptr(), &raw mut error) };
+    assert!(failed.is_null() && !error.is_null());
+    let message = unsafe { CStr::from_ptr(error) }
+        .to_string_lossy()
+        .into_owned();
+    assert!(message.contains("INVALID_INPUT"), "{message}");
+    unsafe { lilia_c_free_string(error) };
 }

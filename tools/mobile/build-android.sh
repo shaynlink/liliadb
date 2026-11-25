@@ -18,7 +18,12 @@ mkdir -p "${KOTLIN_DIR}/src/main/java"
 
 # 1. Build host uniffi-bindgen CLI if needed
 BINDGEN="${ROOT_DIR}/target/debug/uniffi-bindgen"
-HOST_DYLIB="${ROOT_DIR}/target/debug/liblilia_ffi.dylib"
+case "$(uname -s)" in
+    Darwin) HOST_LIBRARY="${ROOT_DIR}/target/debug/liblilia_ffi.dylib" ;;
+    Linux) HOST_LIBRARY="${ROOT_DIR}/target/debug/liblilia_ffi.so" ;;
+    MINGW*|MSYS*|CYGWIN*) HOST_LIBRARY="${ROOT_DIR}/target/debug/lilia_ffi.dll" ;;
+    *) echo "unsupported host OS for UniFFI bindings: $(uname -s)" >&2; exit 1 ;;
+esac
 
 if [ ! -f "${BINDGEN}" ]; then
     echo "==> [LiliaDB] Building uniffi-bindgen tool..."
@@ -26,13 +31,13 @@ if [ ! -f "${BINDGEN}" ]; then
 fi
 
 # 2. Build host dylib to extract UniFFI metadata & Kotlin bindings if needed
-if [ ! -f "${HOST_DYLIB}" ]; then
+if [ ! -f "${HOST_LIBRARY}" ]; then
     echo "==> [LiliaDB] Building host dylib for metadata..."
     cargo build -p lilia-ffi --lib
 fi
 
 echo "==> [LiliaDB] Generating Kotlin bindings..."
-${BINDGEN} generate "${HOST_DYLIB}" \
+${BINDGEN} generate "${HOST_LIBRARY}" \
     --library \
     --language kotlin \
     --out-dir "${KOTLIN_DIR}/src/main/java"

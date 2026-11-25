@@ -1,4 +1,4 @@
-//! Builder for constructing compact, sorted BinaryDoc buffers.
+//! Builder for constructing compact, sorted `BinaryDoc` buffers.
 
 use super::{
     le_u32, BinaryDoc, MAGIC, TAG_ARRAY, TAG_BOOL_FALSE, TAG_BOOL_TRUE, TAG_FLOAT64, TAG_INT64,

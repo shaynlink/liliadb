@@ -7,8 +7,14 @@ use super::{CvRdt, LwwClock};
 
 /// Represents an individual field within an LWW JSON document.
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
-    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
 )]
 #[rkyv(crate = rkyv)]
 pub struct LwwField {
@@ -27,8 +33,15 @@ pub struct LwwField {
 /// overwrites of unrelated changes), `LwwJsonDocument` tracks logical clocks per field/path.
 /// Concurrent offline edits to distinct fields merge seamlessly without data loss.
 #[derive(
-    Debug, Clone, PartialEq, Default, Serialize, Deserialize,
-    rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Default,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
 )]
 #[rkyv(crate = rkyv)]
 pub struct LwwJsonDocument {
@@ -187,8 +200,10 @@ fn insert_at_tokens(current: &mut Value, tokens: &[&str], value: Value) {
     if !current.is_object() {
         *current = Value::Object(Map::new());
     }
-
-    let map = current.as_object_mut().expect("must be object");
+    // An object now, as the branch above made it.
+    let Value::Object(map) = current else {
+        return;
+    };
 
     if is_last {
         map.insert(token.to_owned(), value);

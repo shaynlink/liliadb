@@ -399,6 +399,22 @@ fileprivate class UniffiHandleMap<T> {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -546,31 +562,93 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 
+/**
+ * An open database. Calls share it; `close` closes it once they return.
+ */
 public protocol LiliaDatabaseProtocol : AnyObject {
     
-    func backup(destinationPath: String) async throws 
-    
-    func backupSync(destinationPath: String) throws 
-    
+    /**
+     * Writes the memtable to a sorted run: a point to call before the app is suspended.
+     */
     func checkpoint() async throws 
     
+    /**
+     * Writes the memtable to a sorted run: a point to call before the app is suspended.
+     */
     func checkpointSync() throws 
     
+    /**
+     * As [`LiliaDatabase::close_sync`], on tokio's blocking pool.
+     */
     func close(timeoutMs: UInt64) async throws 
     
+    /**
+     * Closes the database once the calls running on it return, waiting at most `timeout_ms`.
+     * Later calls fail with `Closed`; closing twice does nothing.
+     */
     func closeSync(timeoutMs: UInt64) throws 
     
     func ftsDelete(collection: String, docId: String) async throws  -> Bool
     
     func ftsDeleteSync(collection: String, docId: String) throws  -> Bool
     
+    func ftsFuzzySearch(collection: String, query: String, maxDistance: UInt8, limit: UInt32) async throws  -> [FfiFtsFuzzyHit]
+    
+    func ftsFuzzySearchSync(collection: String, query: String, maxDistance: UInt8, limit: UInt32) throws  -> [FfiFtsFuzzyHit]
+    
     func ftsIndex(collection: String, docId: String, content: String) async throws 
     
     func ftsIndexSync(collection: String, docId: String, content: String) throws 
     
+    func ftsLoadDictionary(collection: String, words: [String]) async throws 
+    
+    func ftsLoadDictionarySync(collection: String, words: [String]) throws 
+    
+    func ftsPhoneticSearch(collection: String, query: String, limit: UInt32) async throws  -> [FfiFtsPhoneticHit]
+    
+    func ftsPhoneticSearchSync(collection: String, query: String, limit: UInt32) throws  -> [FfiFtsPhoneticHit]
+    
     func ftsSearch(collection: String, query: String, limit: UInt32) async throws  -> [FfiFtsHit]
     
     func ftsSearchSync(collection: String, query: String, limit: UInt32) throws  -> [FfiFtsHit]
+    
+    func ftsSuggest(collection: String, prefix: String, maxDistance: UInt8, limit: UInt32) async throws  -> [FfiFtsSuggestion]
+    
+    func ftsSuggestSync(collection: String, prefix: String, maxDistance: UInt8, limit: UInt32) throws  -> [FfiFtsSuggestion]
+    
+    func geoAddFence(id: String, name: String, category: String, polygonJson: String, metadata: String?) async throws 
+    
+    func geoAddFenceSync(id: String, name: String, category: String, polygonJson: String, metadata: String?) throws 
+    
+    func geoContainsPoint(polygonJson: String, lon: Double, lat: Double) async throws  -> Bool
+    
+    func geoContainsPointSync(polygonJson: String, lon: Double, lat: Double) throws  -> Bool
+    
+    func geoFindFencesForPoint(lon: Double, lat: Double) async throws  -> [FfiGeofenceMatch]
+    
+    func geoFindFencesForPointSync(lon: Double, lat: Double) throws  -> [FfiGeofenceMatch]
+    
+    func geoGetTrackPoints(trackId: String, startTime: Int64?, endTime: Int64?) async throws  -> [FfiGpsPoint]
+    
+    func geoGetTrackPointsSync(trackId: String, startTime: Int64?, endTime: Int64?) throws  -> [FfiGpsPoint]
+    
+    /**
+     * Records the points of track `track_id`; the fences they enter.
+     */
+    func geoRecordGpsPoints(trackId: String, points: [FfiGpsPoint]) async throws  -> [FfiGeofenceMatch]
+    
+    /**
+     * Records the points of track `track_id`; the fences they enter.
+     */
+    func geoRecordGpsPointsSync(trackId: String, points: [FfiGpsPoint]) throws  -> [FfiGeofenceMatch]
+    
+    func geoRemoveFence(id: String) async throws  -> Bool
+    
+    func geoRemoveFenceSync(id: String) throws  -> Bool
+    
+    func geoTrackDistance(trackId: String) async throws  -> Double
+    
+    func geoTrackDistanceSync(trackId: String) throws  -> Double
     
     func graphAddEdge(graph: String, source: String, target: String, kind: String) async throws 
     
@@ -600,20 +678,66 @@ public protocol LiliaDatabaseProtocol : AnyObject {
     
     func graphSetNodeSync(graph: String, id: String, kind: String, metadataJson: String) throws 
     
+    /**
+     * Reads every stored entry, verifying each block's checksum, and verifies the ledger.
+     */
+    func integrityCheck() async throws  -> Bool
+    
+    /**
+     * Reads every stored entry, verifying each block's checksum, and verifies the ledger.
+     */
+    func integrityCheckSync() throws  -> Bool
+    
+    /**
+     * Creates index `name` of `space` over `path` (`$.field`, or an expression), backfilled
+     * from the stored documents; with `filter`, a partial index of the documents it selects.
+     */
+    func jsonCreateIndex(space: String, name: String, path: String, filter: String?) async throws 
+    
+    /**
+     * Creates index `name` of `space` over `path` (`$.field`, or an expression), backfilled
+     * from the stored documents; with `filter`, a partial index of the documents it selects.
+     */
+    func jsonCreateIndexSync(space: String, name: String, path: String, filter: String?) throws 
+    
     func jsonDelete(space: String, id: String) async throws  -> Bool
     
     func jsonDeleteSync(space: String, id: String) throws  -> Bool
     
+    func jsonDropIndex(space: String, name: String) async throws  -> Bool
+    
+    func jsonDropIndexSync(space: String, name: String) throws  -> Bool
+    
+    /**
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
+     */
     func jsonFind(space: String, queryJson: String, afterId: String?, limit: UInt32) async throws  -> [FfiJsonEntry]
     
+    /**
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
+     */
     func jsonFindSync(space: String, queryJson: String, afterId: String?, limit: UInt32) throws  -> [FfiJsonEntry]
     
     func jsonGet(space: String, id: String) async throws  -> FfiJsonEntry?
     
     func jsonGetSync(space: String, id: String) throws  -> FfiJsonEntry?
     
+    func jsonListIndexes(space: String) async throws  -> [FfiJsonIndexInfo]
+    
+    func jsonListIndexesSync(space: String) throws  -> [FfiJsonIndexInfo]
+    
+    /**
+     * Stores the document `value_json`; the version of the write.
+     */
     func jsonPut(space: String, id: String, valueJson: String) async throws  -> UInt64
     
+    /**
+     * Stores the document `value_json`; the version of the write.
+     */
     func jsonPutSync(space: String, id: String, valueJson: String) throws  -> UInt64
     
     func kvDelete(namespace: String, key: Data) async throws  -> Bool
@@ -624,30 +748,99 @@ public protocol LiliaDatabaseProtocol : AnyObject {
     
     func kvGetSync(namespace: String, key: Data) throws  -> FfiKvEntry?
     
+    /**
+     * The records of `namespace` after `after`, at most `limit` (every one when 0).
+     */
     func kvScan(namespace: String, after: Data?, limit: UInt32) async throws  -> [FfiKvEntry]
     
+    /**
+     * The records of `namespace` after `after`, at most `limit` (every one when 0).
+     */
     func kvScanSync(namespace: String, after: Data?, limit: UInt32) throws  -> [FfiKvEntry]
     
+    /**
+     * Stores `value` under `key`; the version of the write.
+     */
     func kvSet(namespace: String, key: Data, value: Data, expiresAtMs: Int64?) async throws  -> UInt64
     
+    /**
+     * Stores `value` under `key`; the version of the write.
+     */
     func kvSetSync(namespace: String, key: Data, value: Data, expiresAtMs: Int64?) throws  -> UInt64
     
     /**
-     * Mobile lifecycle helper: flushes the WAL and commits any pending pages before
-     * the mobile OS suspends the app process.
+     * Verifies the ledger, fast; true without a ledger.
      */
-    func prepareForBackground() throws 
-    
     func quickCheck() async throws  -> Bool
     
+    /**
+     * Verifies the ledger, fast; true without a ledger.
+     */
     func quickCheckSync() throws  -> Bool
     
+    /**
+     * A read-only SQL query (`DataFusion` dialect) with `$1`, `$2`... bound to the elements of
+     * `params_json` (a JSON array); each row comes as a JSON array.
+     */
     func sqlQuery(sql: String, paramsJson: String?) async throws  -> FfiSqlQueryResult
     
+    /**
+     * A read-only SQL query (`DataFusion` dialect) with `$1`, `$2`... bound to the elements of
+     * `params_json` (a JSON array); each row comes as a JSON array.
+     */
     func sqlQuerySync(sql: String, paramsJson: String?) throws  -> FfiSqlQueryResult
+    
+    func tsAppendPoints(seriesId: String, points: [FfiTimeSeriesPoint]) async throws 
+    
+    func tsAppendPointsSync(seriesId: String, points: [FfiTimeSeriesPoint]) throws 
+    
+    /**
+     * Applies every series' lifecycle policy as of now.
+     */
+    func tsApplyRetention() async throws  -> FfiTimeSeriesRetentionStats
+    
+    /**
+     * Applies every series' lifecycle policy as of now.
+     */
+    func tsApplyRetentionSync() throws  -> FfiTimeSeriesRetentionStats
+    
+    func tsDeletePolicy(seriesPattern: String) async throws  -> Bool
+    
+    func tsDeletePolicySync(seriesPattern: String) throws  -> Bool
+    
+    func tsGetPolicy(seriesPattern: String) async throws  -> FfiTimeSeriesLifecyclePolicy?
+    
+    func tsGetPolicySync(seriesPattern: String) throws  -> FfiTimeSeriesLifecyclePolicy?
+    
+    func tsListPolicies() async throws  -> [FfiTimeSeriesLifecyclePolicy]
+    
+    func tsListPoliciesSync() throws  -> [FfiTimeSeriesLifecyclePolicy]
+    
+    func tsQueryAuto(seriesId: String, startTime: Int64, endTime: Int64, maxPoints: UInt32) async throws  -> [FfiTimeSeriesPoint]
+    
+    func tsQueryAutoSync(seriesId: String, startTime: Int64, endTime: Int64, maxPoints: UInt32) throws  -> [FfiTimeSeriesPoint]
+    
+    func tsQueryRange(seriesId: String, startTime: Int64, endTime: Int64) async throws  -> [FfiTimeSeriesPoint]
+    
+    func tsQueryRangeSync(seriesId: String, startTime: Int64, endTime: Int64) throws  -> [FfiTimeSeriesPoint]
+    
+    func tsQueryRangeWithResolution(seriesId: String, resolutionMs: Int64, startTime: Int64, endTime: Int64) async throws  -> [FfiTimeSeriesPoint]
+    
+    func tsQueryRangeWithResolutionSync(seriesId: String, resolutionMs: Int64, startTime: Int64, endTime: Int64) throws  -> [FfiTimeSeriesPoint]
+    
+    func tsQueryStats(seriesId: String, startTime: Int64, endTime: Int64) async throws  -> FfiTimeSeriesStats?
+    
+    func tsQueryStatsSync(seriesId: String, startTime: Int64, endTime: Int64) throws  -> FfiTimeSeriesStats?
+    
+    func tsSetPolicy(policy: FfiTimeSeriesLifecyclePolicy) async throws 
+    
+    func tsSetPolicySync(policy: FfiTimeSeriesLifecyclePolicy) throws 
     
 }
 
+/**
+ * An open database. Calls share it; `close` closes it once they return.
+ */
 open class LiliaDatabase:
     LiliaDatabaseProtocol {
     fileprivate let pointer: UnsafeMutableRawPointer!
@@ -697,60 +890,22 @@ open class LiliaDatabase:
 
     
     /**
-     * Open a database with a specific resource profile and optional encryption key.
-     *
-     * When `encryption_key` (32 bytes / 256 bits) is provided, transparent authenticated
-     * AES-256-GCM encryption is activated on the database file.
+     * Opens (or creates) the database of directory `path`.
      */
-public static func `open`(path: String, profile: FfiResourceProfile, encryptionKey: Data?)throws  -> LiliaDatabase {
+public static func `open`(path: String, options: FfiOpenOptions)throws  -> LiliaDatabase {
     return try  FfiConverterTypeLiliaDatabase.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_constructor_liliadatabase_open(
         FfiConverterString.lower(path),
-        FfiConverterTypeFfiResourceProfile.lower(profile),
-        FfiConverterOptionData.lower(encryptionKey),$0
-    )
-})
-}
-    
-    /**
-     * Open with a passphrase using PBKDF2-HMAC-SHA256 key derivation.
-     */
-public static func openWithPassphrase(path: String, profile: FfiResourceProfile, passphrase: String)throws  -> LiliaDatabase {
-    return try  FfiConverterTypeLiliaDatabase.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
-    uniffi_lilia_ffi_fn_constructor_liliadatabase_open_with_passphrase(
-        FfiConverterString.lower(path),
-        FfiConverterTypeFfiResourceProfile.lower(profile),
-        FfiConverterString.lower(passphrase),$0
+        FfiConverterTypeFfiOpenOptions.lower(options),$0
     )
 })
 }
     
 
     
-open func backup(destinationPath: String)async throws  {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_lilia_ffi_fn_method_liliadatabase_backup(
-                    self.uniffiClonePointer(),
-                    FfiConverterString.lower(destinationPath)
-                )
-            },
-            pollFunc: ffi_lilia_ffi_rust_future_poll_void,
-            completeFunc: ffi_lilia_ffi_rust_future_complete_void,
-            freeFunc: ffi_lilia_ffi_rust_future_free_void,
-            liftFunc: { $0 },
-            errorHandler: FfiConverterTypeLiliaFfiError.lift
-        )
-}
-    
-open func backupSync(destinationPath: String)throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
-    uniffi_lilia_ffi_fn_method_liliadatabase_backup_sync(self.uniffiClonePointer(),
-        FfiConverterString.lower(destinationPath),$0
-    )
-}
-}
-    
+    /**
+     * Writes the memtable to a sorted run: a point to call before the app is suspended.
+     */
 open func checkpoint()async throws  {
     return
         try  await uniffiRustCallAsync(
@@ -768,12 +923,18 @@ open func checkpoint()async throws  {
         )
 }
     
+    /**
+     * Writes the memtable to a sorted run: a point to call before the app is suspended.
+     */
 open func checkpointSync()throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_method_liliadatabase_checkpoint_sync(self.uniffiClonePointer(),$0
     )
 }
 }
     
+    /**
+     * As [`LiliaDatabase::close_sync`], on tokio's blocking pool.
+     */
 open func close(timeoutMs: UInt64)async throws  {
     return
         try  await uniffiRustCallAsync(
@@ -791,6 +952,10 @@ open func close(timeoutMs: UInt64)async throws  {
         )
 }
     
+    /**
+     * Closes the database once the calls running on it return, waiting at most `timeout_ms`.
+     * Later calls fail with `Closed`; closing twice does nothing.
+     */
 open func closeSync(timeoutMs: UInt64)throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_method_liliadatabase_close_sync(self.uniffiClonePointer(),
         FfiConverterUInt64.lower(timeoutMs),$0
@@ -824,6 +989,34 @@ open func ftsDeleteSync(collection: String, docId: String)throws  -> Bool {
 })
 }
     
+open func ftsFuzzySearch(collection: String, query: String, maxDistance: UInt8, limit: UInt32)async throws  -> [FfiFtsFuzzyHit] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_fts_fuzzy_search(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(collection),FfiConverterString.lower(query),FfiConverterUInt8.lower(maxDistance),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiFtsFuzzyHit.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func ftsFuzzySearchSync(collection: String, query: String, maxDistance: UInt8, limit: UInt32)throws  -> [FfiFtsFuzzyHit] {
+    return try  FfiConverterSequenceTypeFfiFtsFuzzyHit.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_fts_fuzzy_search_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(collection),
+        FfiConverterString.lower(query),
+        FfiConverterUInt8.lower(maxDistance),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
 open func ftsIndex(collection: String, docId: String, content: String)async throws  {
     return
         try  await uniffiRustCallAsync(
@@ -850,6 +1043,58 @@ open func ftsIndexSync(collection: String, docId: String, content: String)throws
 }
 }
     
+open func ftsLoadDictionary(collection: String, words: [String])async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_fts_load_dictionary(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(collection),FfiConverterSequenceString.lower(words)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_void,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_void,
+            freeFunc: ffi_lilia_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func ftsLoadDictionarySync(collection: String, words: [String])throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_fts_load_dictionary_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(collection),
+        FfiConverterSequenceString.lower(words),$0
+    )
+}
+}
+    
+open func ftsPhoneticSearch(collection: String, query: String, limit: UInt32)async throws  -> [FfiFtsPhoneticHit] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_fts_phonetic_search(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(collection),FfiConverterString.lower(query),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiFtsPhoneticHit.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func ftsPhoneticSearchSync(collection: String, query: String, limit: UInt32)throws  -> [FfiFtsPhoneticHit] {
+    return try  FfiConverterSequenceTypeFfiFtsPhoneticHit.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_fts_phonetic_search_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(collection),
+        FfiConverterString.lower(query),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
 open func ftsSearch(collection: String, query: String, limit: UInt32)async throws  -> [FfiFtsHit] {
     return
         try  await uniffiRustCallAsync(
@@ -873,6 +1118,224 @@ open func ftsSearchSync(collection: String, query: String, limit: UInt32)throws 
         FfiConverterString.lower(collection),
         FfiConverterString.lower(query),
         FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
+open func ftsSuggest(collection: String, prefix: String, maxDistance: UInt8, limit: UInt32)async throws  -> [FfiFtsSuggestion] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_fts_suggest(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(collection),FfiConverterString.lower(prefix),FfiConverterUInt8.lower(maxDistance),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiFtsSuggestion.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func ftsSuggestSync(collection: String, prefix: String, maxDistance: UInt8, limit: UInt32)throws  -> [FfiFtsSuggestion] {
+    return try  FfiConverterSequenceTypeFfiFtsSuggestion.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_fts_suggest_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(collection),
+        FfiConverterString.lower(prefix),
+        FfiConverterUInt8.lower(maxDistance),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
+open func geoAddFence(id: String, name: String, category: String, polygonJson: String, metadata: String?)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_geo_add_fence(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(id),FfiConverterString.lower(name),FfiConverterString.lower(category),FfiConverterString.lower(polygonJson),FfiConverterOptionString.lower(metadata)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_void,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_void,
+            freeFunc: ffi_lilia_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func geoAddFenceSync(id: String, name: String, category: String, polygonJson: String, metadata: String?)throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_geo_add_fence_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),
+        FfiConverterString.lower(name),
+        FfiConverterString.lower(category),
+        FfiConverterString.lower(polygonJson),
+        FfiConverterOptionString.lower(metadata),$0
+    )
+}
+}
+    
+open func geoContainsPoint(polygonJson: String, lon: Double, lat: Double)async throws  -> Bool {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_geo_contains_point(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(polygonJson),FfiConverterDouble.lower(lon),FfiConverterDouble.lower(lat)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_i8,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_i8,
+            freeFunc: ffi_lilia_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func geoContainsPointSync(polygonJson: String, lon: Double, lat: Double)throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_geo_contains_point_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(polygonJson),
+        FfiConverterDouble.lower(lon),
+        FfiConverterDouble.lower(lat),$0
+    )
+})
+}
+    
+open func geoFindFencesForPoint(lon: Double, lat: Double)async throws  -> [FfiGeofenceMatch] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_geo_find_fences_for_point(
+                    self.uniffiClonePointer(),
+                    FfiConverterDouble.lower(lon),FfiConverterDouble.lower(lat)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiGeofenceMatch.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func geoFindFencesForPointSync(lon: Double, lat: Double)throws  -> [FfiGeofenceMatch] {
+    return try  FfiConverterSequenceTypeFfiGeofenceMatch.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_geo_find_fences_for_point_sync(self.uniffiClonePointer(),
+        FfiConverterDouble.lower(lon),
+        FfiConverterDouble.lower(lat),$0
+    )
+})
+}
+    
+open func geoGetTrackPoints(trackId: String, startTime: Int64?, endTime: Int64?)async throws  -> [FfiGpsPoint] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_geo_get_track_points(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(trackId),FfiConverterOptionInt64.lower(startTime),FfiConverterOptionInt64.lower(endTime)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiGpsPoint.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func geoGetTrackPointsSync(trackId: String, startTime: Int64?, endTime: Int64?)throws  -> [FfiGpsPoint] {
+    return try  FfiConverterSequenceTypeFfiGpsPoint.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_geo_get_track_points_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(trackId),
+        FfiConverterOptionInt64.lower(startTime),
+        FfiConverterOptionInt64.lower(endTime),$0
+    )
+})
+}
+    
+    /**
+     * Records the points of track `track_id`; the fences they enter.
+     */
+open func geoRecordGpsPoints(trackId: String, points: [FfiGpsPoint])async throws  -> [FfiGeofenceMatch] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_geo_record_gps_points(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(trackId),FfiConverterSequenceTypeFfiGpsPoint.lower(points)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiGeofenceMatch.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+    /**
+     * Records the points of track `track_id`; the fences they enter.
+     */
+open func geoRecordGpsPointsSync(trackId: String, points: [FfiGpsPoint])throws  -> [FfiGeofenceMatch] {
+    return try  FfiConverterSequenceTypeFfiGeofenceMatch.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_geo_record_gps_points_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(trackId),
+        FfiConverterSequenceTypeFfiGpsPoint.lower(points),$0
+    )
+})
+}
+    
+open func geoRemoveFence(id: String)async throws  -> Bool {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_geo_remove_fence(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(id)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_i8,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_i8,
+            freeFunc: ffi_lilia_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func geoRemoveFenceSync(id: String)throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_geo_remove_fence_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+})
+}
+    
+open func geoTrackDistance(trackId: String)async throws  -> Double {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_geo_track_distance(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(trackId)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_f64,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_f64,
+            freeFunc: ffi_lilia_ffi_rust_future_free_f64,
+            liftFunc: FfiConverterDouble.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func geoTrackDistanceSync(trackId: String)throws  -> Double {
+    return try  FfiConverterDouble.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_geo_track_distance_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(trackId),$0
     )
 })
 }
@@ -1066,6 +1529,71 @@ open func graphSetNodeSync(graph: String, id: String, kind: String, metadataJson
 }
 }
     
+    /**
+     * Reads every stored entry, verifying each block's checksum, and verifies the ledger.
+     */
+open func integrityCheck()async throws  -> Bool {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_integrity_check(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_i8,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_i8,
+            freeFunc: ffi_lilia_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+    /**
+     * Reads every stored entry, verifying each block's checksum, and verifies the ledger.
+     */
+open func integrityCheckSync()throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_integrity_check_sync(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Creates index `name` of `space` over `path` (`$.field`, or an expression), backfilled
+     * from the stored documents; with `filter`, a partial index of the documents it selects.
+     */
+open func jsonCreateIndex(space: String, name: String, path: String, filter: String?)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_json_create_index(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(space),FfiConverterString.lower(name),FfiConverterString.lower(path),FfiConverterOptionString.lower(filter)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_void,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_void,
+            freeFunc: ffi_lilia_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+    /**
+     * Creates index `name` of `space` over `path` (`$.field`, or an expression), backfilled
+     * from the stored documents; with `filter`, a partial index of the documents it selects.
+     */
+open func jsonCreateIndexSync(space: String, name: String, path: String, filter: String?)throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_json_create_index_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(space),
+        FfiConverterString.lower(name),
+        FfiConverterString.lower(path),
+        FfiConverterOptionString.lower(filter),$0
+    )
+}
+}
+    
 open func jsonDelete(space: String, id: String)async throws  -> Bool {
     return
         try  await uniffiRustCallAsync(
@@ -1092,6 +1620,37 @@ open func jsonDeleteSync(space: String, id: String)throws  -> Bool {
 })
 }
     
+open func jsonDropIndex(space: String, name: String)async throws  -> Bool {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_json_drop_index(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(space),FfiConverterString.lower(name)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_i8,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_i8,
+            freeFunc: ffi_lilia_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func jsonDropIndexSync(space: String, name: String)throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_json_drop_index_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(space),
+        FfiConverterString.lower(name),$0
+    )
+})
+}
+    
+    /**
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
+     */
 open func jsonFind(space: String, queryJson: String, afterId: String?, limit: UInt32)async throws  -> [FfiJsonEntry] {
     return
         try  await uniffiRustCallAsync(
@@ -1109,6 +1668,11 @@ open func jsonFind(space: String, queryJson: String, afterId: String?, limit: UI
         )
 }
     
+    /**
+     * The documents matching `query_json`, an object of field paths (or index names) and
+     * values, all of which must match; an index on a term serves the query, else the space is
+     * scanned. After `after_id`, at most `limit` (every one when 0).
+     */
 open func jsonFindSync(space: String, queryJson: String, afterId: String?, limit: UInt32)throws  -> [FfiJsonEntry] {
     return try  FfiConverterSequenceTypeFfiJsonEntry.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_method_liliadatabase_json_find_sync(self.uniffiClonePointer(),
@@ -1146,6 +1710,34 @@ open func jsonGetSync(space: String, id: String)throws  -> FfiJsonEntry? {
 })
 }
     
+open func jsonListIndexes(space: String)async throws  -> [FfiJsonIndexInfo] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_json_list_indexes(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(space)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiJsonIndexInfo.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func jsonListIndexesSync(space: String)throws  -> [FfiJsonIndexInfo] {
+    return try  FfiConverterSequenceTypeFfiJsonIndexInfo.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_json_list_indexes_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(space),$0
+    )
+})
+}
+    
+    /**
+     * Stores the document `value_json`; the version of the write.
+     */
 open func jsonPut(space: String, id: String, valueJson: String)async throws  -> UInt64 {
     return
         try  await uniffiRustCallAsync(
@@ -1163,6 +1755,9 @@ open func jsonPut(space: String, id: String, valueJson: String)async throws  -> 
         )
 }
     
+    /**
+     * Stores the document `value_json`; the version of the write.
+     */
 open func jsonPutSync(space: String, id: String, valueJson: String)throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_method_liliadatabase_json_put_sync(self.uniffiClonePointer(),
@@ -1225,6 +1820,9 @@ open func kvGetSync(namespace: String, key: Data)throws  -> FfiKvEntry? {
 })
 }
     
+    /**
+     * The records of `namespace` after `after`, at most `limit` (every one when 0).
+     */
 open func kvScan(namespace: String, after: Data?, limit: UInt32)async throws  -> [FfiKvEntry] {
     return
         try  await uniffiRustCallAsync(
@@ -1242,6 +1840,9 @@ open func kvScan(namespace: String, after: Data?, limit: UInt32)async throws  ->
         )
 }
     
+    /**
+     * The records of `namespace` after `after`, at most `limit` (every one when 0).
+     */
 open func kvScanSync(namespace: String, after: Data?, limit: UInt32)throws  -> [FfiKvEntry] {
     return try  FfiConverterSequenceTypeFfiKvEntry.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_method_liliadatabase_kv_scan_sync(self.uniffiClonePointer(),
@@ -1252,6 +1853,9 @@ open func kvScanSync(namespace: String, after: Data?, limit: UInt32)throws  -> [
 })
 }
     
+    /**
+     * Stores `value` under `key`; the version of the write.
+     */
 open func kvSet(namespace: String, key: Data, value: Data, expiresAtMs: Int64?)async throws  -> UInt64 {
     return
         try  await uniffiRustCallAsync(
@@ -1269,6 +1873,9 @@ open func kvSet(namespace: String, key: Data, value: Data, expiresAtMs: Int64?)a
         )
 }
     
+    /**
+     * Stores `value` under `key`; the version of the write.
+     */
 open func kvSetSync(namespace: String, key: Data, value: Data, expiresAtMs: Int64?)throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_method_liliadatabase_kv_set_sync(self.uniffiClonePointer(),
@@ -1281,15 +1888,8 @@ open func kvSetSync(namespace: String, key: Data, value: Data, expiresAtMs: Int6
 }
     
     /**
-     * Mobile lifecycle helper: flushes the WAL and commits any pending pages before
-     * the mobile OS suspends the app process.
+     * Verifies the ledger, fast; true without a ledger.
      */
-open func prepareForBackground()throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
-    uniffi_lilia_ffi_fn_method_liliadatabase_prepare_for_background(self.uniffiClonePointer(),$0
-    )
-}
-}
-    
 open func quickCheck()async throws  -> Bool {
     return
         try  await uniffiRustCallAsync(
@@ -1307,6 +1907,9 @@ open func quickCheck()async throws  -> Bool {
         )
 }
     
+    /**
+     * Verifies the ledger, fast; true without a ledger.
+     */
 open func quickCheckSync()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_method_liliadatabase_quick_check_sync(self.uniffiClonePointer(),$0
@@ -1314,6 +1917,10 @@ open func quickCheckSync()throws  -> Bool {
 })
 }
     
+    /**
+     * A read-only SQL query (`DataFusion` dialect) with `$1`, `$2`... bound to the elements of
+     * `params_json` (a JSON array); each row comes as a JSON array.
+     */
 open func sqlQuery(sql: String, paramsJson: String?)async throws  -> FfiSqlQueryResult {
     return
         try  await uniffiRustCallAsync(
@@ -1331,6 +1938,10 @@ open func sqlQuery(sql: String, paramsJson: String?)async throws  -> FfiSqlQuery
         )
 }
     
+    /**
+     * A read-only SQL query (`DataFusion` dialect) with `$1`, `$2`... bound to the elements of
+     * `params_json` (a JSON array); each row comes as a JSON array.
+     */
 open func sqlQuerySync(sql: String, paramsJson: String?)throws  -> FfiSqlQueryResult {
     return try  FfiConverterTypeFfiSqlQueryResult.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
     uniffi_lilia_ffi_fn_method_liliadatabase_sql_query_sync(self.uniffiClonePointer(),
@@ -1338,6 +1949,269 @@ open func sqlQuerySync(sql: String, paramsJson: String?)throws  -> FfiSqlQueryRe
         FfiConverterOptionString.lower(paramsJson),$0
     )
 })
+}
+    
+open func tsAppendPoints(seriesId: String, points: [FfiTimeSeriesPoint])async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_append_points(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(seriesId),FfiConverterSequenceTypeFfiTimeSeriesPoint.lower(points)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_void,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_void,
+            freeFunc: ffi_lilia_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsAppendPointsSync(seriesId: String, points: [FfiTimeSeriesPoint])throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_append_points_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(seriesId),
+        FfiConverterSequenceTypeFfiTimeSeriesPoint.lower(points),$0
+    )
+}
+}
+    
+    /**
+     * Applies every series' lifecycle policy as of now.
+     */
+open func tsApplyRetention()async throws  -> FfiTimeSeriesRetentionStats {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_apply_retention(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiTimeSeriesRetentionStats.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+    /**
+     * Applies every series' lifecycle policy as of now.
+     */
+open func tsApplyRetentionSync()throws  -> FfiTimeSeriesRetentionStats {
+    return try  FfiConverterTypeFfiTimeSeriesRetentionStats.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_apply_retention_sync(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func tsDeletePolicy(seriesPattern: String)async throws  -> Bool {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_delete_policy(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(seriesPattern)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_i8,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_i8,
+            freeFunc: ffi_lilia_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsDeletePolicySync(seriesPattern: String)throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_delete_policy_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(seriesPattern),$0
+    )
+})
+}
+    
+open func tsGetPolicy(seriesPattern: String)async throws  -> FfiTimeSeriesLifecyclePolicy? {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_get_policy(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(seriesPattern)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeFfiTimeSeriesLifecyclePolicy.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsGetPolicySync(seriesPattern: String)throws  -> FfiTimeSeriesLifecyclePolicy? {
+    return try  FfiConverterOptionTypeFfiTimeSeriesLifecyclePolicy.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_get_policy_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(seriesPattern),$0
+    )
+})
+}
+    
+open func tsListPolicies()async throws  -> [FfiTimeSeriesLifecyclePolicy] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_list_policies(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiTimeSeriesLifecyclePolicy.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsListPoliciesSync()throws  -> [FfiTimeSeriesLifecyclePolicy] {
+    return try  FfiConverterSequenceTypeFfiTimeSeriesLifecyclePolicy.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_list_policies_sync(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func tsQueryAuto(seriesId: String, startTime: Int64, endTime: Int64, maxPoints: UInt32)async throws  -> [FfiTimeSeriesPoint] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_auto(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(seriesId),FfiConverterInt64.lower(startTime),FfiConverterInt64.lower(endTime),FfiConverterUInt32.lower(maxPoints)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiTimeSeriesPoint.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsQueryAutoSync(seriesId: String, startTime: Int64, endTime: Int64, maxPoints: UInt32)throws  -> [FfiTimeSeriesPoint] {
+    return try  FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_auto_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(seriesId),
+        FfiConverterInt64.lower(startTime),
+        FfiConverterInt64.lower(endTime),
+        FfiConverterUInt32.lower(maxPoints),$0
+    )
+})
+}
+    
+open func tsQueryRange(seriesId: String, startTime: Int64, endTime: Int64)async throws  -> [FfiTimeSeriesPoint] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(seriesId),FfiConverterInt64.lower(startTime),FfiConverterInt64.lower(endTime)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiTimeSeriesPoint.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsQueryRangeSync(seriesId: String, startTime: Int64, endTime: Int64)throws  -> [FfiTimeSeriesPoint] {
+    return try  FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(seriesId),
+        FfiConverterInt64.lower(startTime),
+        FfiConverterInt64.lower(endTime),$0
+    )
+})
+}
+    
+open func tsQueryRangeWithResolution(seriesId: String, resolutionMs: Int64, startTime: Int64, endTime: Int64)async throws  -> [FfiTimeSeriesPoint] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_with_resolution(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(seriesId),FfiConverterInt64.lower(resolutionMs),FfiConverterInt64.lower(startTime),FfiConverterInt64.lower(endTime)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiTimeSeriesPoint.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsQueryRangeWithResolutionSync(seriesId: String, resolutionMs: Int64, startTime: Int64, endTime: Int64)throws  -> [FfiTimeSeriesPoint] {
+    return try  FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_range_with_resolution_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(seriesId),
+        FfiConverterInt64.lower(resolutionMs),
+        FfiConverterInt64.lower(startTime),
+        FfiConverterInt64.lower(endTime),$0
+    )
+})
+}
+    
+open func tsQueryStats(seriesId: String, startTime: Int64, endTime: Int64)async throws  -> FfiTimeSeriesStats? {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_stats(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(seriesId),FfiConverterInt64.lower(startTime),FfiConverterInt64.lower(endTime)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lilia_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeFfiTimeSeriesStats.lift,
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsQueryStatsSync(seriesId: String, startTime: Int64, endTime: Int64)throws  -> FfiTimeSeriesStats? {
+    return try  FfiConverterOptionTypeFfiTimeSeriesStats.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_query_stats_sync(self.uniffiClonePointer(),
+        FfiConverterString.lower(seriesId),
+        FfiConverterInt64.lower(startTime),
+        FfiConverterInt64.lower(endTime),$0
+    )
+})
+}
+    
+open func tsSetPolicy(policy: FfiTimeSeriesLifecyclePolicy)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lilia_ffi_fn_method_liliadatabase_ts_set_policy(
+                    self.uniffiClonePointer(),
+                    FfiConverterTypeFfiTimeSeriesLifecyclePolicy.lower(policy)
+                )
+            },
+            pollFunc: ffi_lilia_ffi_rust_future_poll_void,
+            completeFunc: ffi_lilia_ffi_rust_future_complete_void,
+            freeFunc: ffi_lilia_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeLiliaFfiError.lift
+        )
+}
+    
+open func tsSetPolicySync(policy: FfiTimeSeriesLifecyclePolicy)throws  {try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_method_liliadatabase_ts_set_policy_sync(self.uniffiClonePointer(),
+        FfiConverterTypeFfiTimeSeriesLifecyclePolicy.lower(policy),$0
+    )
+}
 }
     
 
@@ -1392,6 +2266,104 @@ public func FfiConverterTypeLiliaDatabase_lift(_ pointer: UnsafeMutableRawPointe
 #endif
 public func FfiConverterTypeLiliaDatabase_lower(_ value: LiliaDatabase) -> UnsafeMutableRawPointer {
     return FfiConverterTypeLiliaDatabase.lower(value)
+}
+
+
+public struct FfiFtsFuzzyHit {
+    public var collection: String
+    public var docId: String
+    public var snippet: String
+    public var rank: Double
+    public var editDistance: UInt8
+    public var matchedTerms: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(collection: String, docId: String, snippet: String, rank: Double, editDistance: UInt8, matchedTerms: [String]) {
+        self.collection = collection
+        self.docId = docId
+        self.snippet = snippet
+        self.rank = rank
+        self.editDistance = editDistance
+        self.matchedTerms = matchedTerms
+    }
+}
+
+
+
+extension FfiFtsFuzzyHit: Equatable, Hashable {
+    public static func ==(lhs: FfiFtsFuzzyHit, rhs: FfiFtsFuzzyHit) -> Bool {
+        if lhs.collection != rhs.collection {
+            return false
+        }
+        if lhs.docId != rhs.docId {
+            return false
+        }
+        if lhs.snippet != rhs.snippet {
+            return false
+        }
+        if lhs.rank != rhs.rank {
+            return false
+        }
+        if lhs.editDistance != rhs.editDistance {
+            return false
+        }
+        if lhs.matchedTerms != rhs.matchedTerms {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(collection)
+        hasher.combine(docId)
+        hasher.combine(snippet)
+        hasher.combine(rank)
+        hasher.combine(editDistance)
+        hasher.combine(matchedTerms)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiFtsFuzzyHit: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFtsFuzzyHit {
+        return
+            try FfiFtsFuzzyHit(
+                collection: FfiConverterString.read(from: &buf), 
+                docId: FfiConverterString.read(from: &buf), 
+                snippet: FfiConverterString.read(from: &buf), 
+                rank: FfiConverterDouble.read(from: &buf), 
+                editDistance: FfiConverterUInt8.read(from: &buf), 
+                matchedTerms: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiFtsFuzzyHit, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.collection, into: &buf)
+        FfiConverterString.write(value.docId, into: &buf)
+        FfiConverterString.write(value.snippet, into: &buf)
+        FfiConverterDouble.write(value.rank, into: &buf)
+        FfiConverterUInt8.write(value.editDistance, into: &buf)
+        FfiConverterSequenceString.write(value.matchedTerms, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFtsFuzzyHit_lift(_ buf: RustBuffer) throws -> FfiFtsFuzzyHit {
+    return try FfiConverterTypeFfiFtsFuzzyHit.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFtsFuzzyHit_lower(_ value: FfiFtsFuzzyHit) -> RustBuffer {
+    return FfiConverterTypeFfiFtsFuzzyHit.lower(value)
 }
 
 
@@ -1474,6 +2446,366 @@ public func FfiConverterTypeFfiFtsHit_lift(_ buf: RustBuffer) throws -> FfiFtsHi
 #endif
 public func FfiConverterTypeFfiFtsHit_lower(_ value: FfiFtsHit) -> RustBuffer {
     return FfiConverterTypeFfiFtsHit.lower(value)
+}
+
+
+public struct FfiFtsPhoneticHit {
+    public var collection: String
+    public var docId: String
+    public var snippet: String
+    public var rank: Double
+    public var matchedTerms: [String]
+    public var phoneticCodes: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(collection: String, docId: String, snippet: String, rank: Double, matchedTerms: [String], phoneticCodes: [String]) {
+        self.collection = collection
+        self.docId = docId
+        self.snippet = snippet
+        self.rank = rank
+        self.matchedTerms = matchedTerms
+        self.phoneticCodes = phoneticCodes
+    }
+}
+
+
+
+extension FfiFtsPhoneticHit: Equatable, Hashable {
+    public static func ==(lhs: FfiFtsPhoneticHit, rhs: FfiFtsPhoneticHit) -> Bool {
+        if lhs.collection != rhs.collection {
+            return false
+        }
+        if lhs.docId != rhs.docId {
+            return false
+        }
+        if lhs.snippet != rhs.snippet {
+            return false
+        }
+        if lhs.rank != rhs.rank {
+            return false
+        }
+        if lhs.matchedTerms != rhs.matchedTerms {
+            return false
+        }
+        if lhs.phoneticCodes != rhs.phoneticCodes {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(collection)
+        hasher.combine(docId)
+        hasher.combine(snippet)
+        hasher.combine(rank)
+        hasher.combine(matchedTerms)
+        hasher.combine(phoneticCodes)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiFtsPhoneticHit: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFtsPhoneticHit {
+        return
+            try FfiFtsPhoneticHit(
+                collection: FfiConverterString.read(from: &buf), 
+                docId: FfiConverterString.read(from: &buf), 
+                snippet: FfiConverterString.read(from: &buf), 
+                rank: FfiConverterDouble.read(from: &buf), 
+                matchedTerms: FfiConverterSequenceString.read(from: &buf), 
+                phoneticCodes: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiFtsPhoneticHit, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.collection, into: &buf)
+        FfiConverterString.write(value.docId, into: &buf)
+        FfiConverterString.write(value.snippet, into: &buf)
+        FfiConverterDouble.write(value.rank, into: &buf)
+        FfiConverterSequenceString.write(value.matchedTerms, into: &buf)
+        FfiConverterSequenceString.write(value.phoneticCodes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFtsPhoneticHit_lift(_ buf: RustBuffer) throws -> FfiFtsPhoneticHit {
+    return try FfiConverterTypeFfiFtsPhoneticHit.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFtsPhoneticHit_lower(_ value: FfiFtsPhoneticHit) -> RustBuffer {
+    return FfiConverterTypeFfiFtsPhoneticHit.lower(value)
+}
+
+
+public struct FfiFtsSuggestion {
+    public var term: String
+    public var distance: UInt8
+    public var docCount: UInt32
+    public var exactPrefix: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(term: String, distance: UInt8, docCount: UInt32, exactPrefix: Bool) {
+        self.term = term
+        self.distance = distance
+        self.docCount = docCount
+        self.exactPrefix = exactPrefix
+    }
+}
+
+
+
+extension FfiFtsSuggestion: Equatable, Hashable {
+    public static func ==(lhs: FfiFtsSuggestion, rhs: FfiFtsSuggestion) -> Bool {
+        if lhs.term != rhs.term {
+            return false
+        }
+        if lhs.distance != rhs.distance {
+            return false
+        }
+        if lhs.docCount != rhs.docCount {
+            return false
+        }
+        if lhs.exactPrefix != rhs.exactPrefix {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(term)
+        hasher.combine(distance)
+        hasher.combine(docCount)
+        hasher.combine(exactPrefix)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiFtsSuggestion: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFtsSuggestion {
+        return
+            try FfiFtsSuggestion(
+                term: FfiConverterString.read(from: &buf), 
+                distance: FfiConverterUInt8.read(from: &buf), 
+                docCount: FfiConverterUInt32.read(from: &buf), 
+                exactPrefix: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiFtsSuggestion, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.term, into: &buf)
+        FfiConverterUInt8.write(value.distance, into: &buf)
+        FfiConverterUInt32.write(value.docCount, into: &buf)
+        FfiConverterBool.write(value.exactPrefix, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFtsSuggestion_lift(_ buf: RustBuffer) throws -> FfiFtsSuggestion {
+    return try FfiConverterTypeFfiFtsSuggestion.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFtsSuggestion_lower(_ value: FfiFtsSuggestion) -> RustBuffer {
+    return FfiConverterTypeFfiFtsSuggestion.lower(value)
+}
+
+
+public struct FfiGeofenceMatch {
+    public var id: String
+    public var name: String
+    public var category: String
+    public var metadata: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, category: String, metadata: String?) {
+        self.id = id
+        self.name = name
+        self.category = category
+        self.metadata = metadata
+    }
+}
+
+
+
+extension FfiGeofenceMatch: Equatable, Hashable {
+    public static func ==(lhs: FfiGeofenceMatch, rhs: FfiGeofenceMatch) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.category != rhs.category {
+            return false
+        }
+        if lhs.metadata != rhs.metadata {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(category)
+        hasher.combine(metadata)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiGeofenceMatch: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiGeofenceMatch {
+        return
+            try FfiGeofenceMatch(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                category: FfiConverterString.read(from: &buf), 
+                metadata: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiGeofenceMatch, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.category, into: &buf)
+        FfiConverterOptionString.write(value.metadata, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGeofenceMatch_lift(_ buf: RustBuffer) throws -> FfiGeofenceMatch {
+    return try FfiConverterTypeFfiGeofenceMatch.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGeofenceMatch_lower(_ value: FfiGeofenceMatch) -> RustBuffer {
+    return FfiConverterTypeFfiGeofenceMatch.lower(value)
+}
+
+
+public struct FfiGpsPoint {
+    public var timestamp: Int64
+    public var latitude: Double
+    public var longitude: Double
+    public var altitude: Double?
+    public var speed: Double?
+    public var accuracy: Double?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(timestamp: Int64, latitude: Double, longitude: Double, altitude: Double?, speed: Double?, accuracy: Double?) {
+        self.timestamp = timestamp
+        self.latitude = latitude
+        self.longitude = longitude
+        self.altitude = altitude
+        self.speed = speed
+        self.accuracy = accuracy
+    }
+}
+
+
+
+extension FfiGpsPoint: Equatable, Hashable {
+    public static func ==(lhs: FfiGpsPoint, rhs: FfiGpsPoint) -> Bool {
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        if lhs.latitude != rhs.latitude {
+            return false
+        }
+        if lhs.longitude != rhs.longitude {
+            return false
+        }
+        if lhs.altitude != rhs.altitude {
+            return false
+        }
+        if lhs.speed != rhs.speed {
+            return false
+        }
+        if lhs.accuracy != rhs.accuracy {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(timestamp)
+        hasher.combine(latitude)
+        hasher.combine(longitude)
+        hasher.combine(altitude)
+        hasher.combine(speed)
+        hasher.combine(accuracy)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiGpsPoint: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiGpsPoint {
+        return
+            try FfiGpsPoint(
+                timestamp: FfiConverterInt64.read(from: &buf), 
+                latitude: FfiConverterDouble.read(from: &buf), 
+                longitude: FfiConverterDouble.read(from: &buf), 
+                altitude: FfiConverterOptionDouble.read(from: &buf), 
+                speed: FfiConverterOptionDouble.read(from: &buf), 
+                accuracy: FfiConverterOptionDouble.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiGpsPoint, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.timestamp, into: &buf)
+        FfiConverterDouble.write(value.latitude, into: &buf)
+        FfiConverterDouble.write(value.longitude, into: &buf)
+        FfiConverterOptionDouble.write(value.altitude, into: &buf)
+        FfiConverterOptionDouble.write(value.speed, into: &buf)
+        FfiConverterOptionDouble.write(value.accuracy, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGpsPoint_lift(_ buf: RustBuffer) throws -> FfiGpsPoint {
+    return try FfiConverterTypeFfiGpsPoint.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGpsPoint_lower(_ value: FfiGpsPoint) -> RustBuffer {
+    return FfiConverterTypeFfiGpsPoint.lower(value)
 }
 
 
@@ -1723,6 +3055,83 @@ public func FfiConverterTypeFfiJsonEntry_lower(_ value: FfiJsonEntry) -> RustBuf
 }
 
 
+/**
+ * A secondary index of a JSON space.
+ */
+public struct FfiJsonIndexInfo {
+    public var space: String
+    public var indexName: String
+    public var jsonPath: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(space: String, indexName: String, jsonPath: String) {
+        self.space = space
+        self.indexName = indexName
+        self.jsonPath = jsonPath
+    }
+}
+
+
+
+extension FfiJsonIndexInfo: Equatable, Hashable {
+    public static func ==(lhs: FfiJsonIndexInfo, rhs: FfiJsonIndexInfo) -> Bool {
+        if lhs.space != rhs.space {
+            return false
+        }
+        if lhs.indexName != rhs.indexName {
+            return false
+        }
+        if lhs.jsonPath != rhs.jsonPath {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(space)
+        hasher.combine(indexName)
+        hasher.combine(jsonPath)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiJsonIndexInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiJsonIndexInfo {
+        return
+            try FfiJsonIndexInfo(
+                space: FfiConverterString.read(from: &buf), 
+                indexName: FfiConverterString.read(from: &buf), 
+                jsonPath: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiJsonIndexInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.space, into: &buf)
+        FfiConverterString.write(value.indexName, into: &buf)
+        FfiConverterString.write(value.jsonPath, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiJsonIndexInfo_lift(_ buf: RustBuffer) throws -> FfiJsonIndexInfo {
+    return try FfiConverterTypeFfiJsonIndexInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiJsonIndexInfo_lower(_ value: FfiJsonIndexInfo) -> RustBuffer {
+    return FfiConverterTypeFfiJsonIndexInfo.lower(value)
+}
+
+
 public struct FfiKvEntry {
     public var namespace: String
     public var key: Data
@@ -1813,6 +3222,119 @@ public func FfiConverterTypeFfiKvEntry_lower(_ value: FfiKvEntry) -> RustBuffer 
 }
 
 
+/**
+ * How a database opens.
+ */
+public struct FfiOpenOptions {
+    public var profile: FfiResourceProfile
+    public var durability: FfiDurability
+    /**
+     * Keep a tamper-evident ledger of every record write; a database that keeps one must
+     * always be opened with it.
+     */
+    public var ledger: Bool
+    /**
+     * How long old versions stay readable, in milliseconds; a week when absent, 0 keeps none.
+     */
+    public var historyRetentionMs: UInt64?
+    /**
+     * Commits that can be undone; none by default.
+     */
+    public var undoDepth: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(profile: FfiResourceProfile, durability: FfiDurability, 
+        /**
+         * Keep a tamper-evident ledger of every record write; a database that keeps one must
+         * always be opened with it.
+         */ledger: Bool = false, 
+        /**
+         * How long old versions stay readable, in milliseconds; a week when absent, 0 keeps none.
+         */historyRetentionMs: UInt64? = nil, 
+        /**
+         * Commits that can be undone; none by default.
+         */undoDepth: UInt32 = UInt32(0)) {
+        self.profile = profile
+        self.durability = durability
+        self.ledger = ledger
+        self.historyRetentionMs = historyRetentionMs
+        self.undoDepth = undoDepth
+    }
+}
+
+
+
+extension FfiOpenOptions: Equatable, Hashable {
+    public static func ==(lhs: FfiOpenOptions, rhs: FfiOpenOptions) -> Bool {
+        if lhs.profile != rhs.profile {
+            return false
+        }
+        if lhs.durability != rhs.durability {
+            return false
+        }
+        if lhs.ledger != rhs.ledger {
+            return false
+        }
+        if lhs.historyRetentionMs != rhs.historyRetentionMs {
+            return false
+        }
+        if lhs.undoDepth != rhs.undoDepth {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(profile)
+        hasher.combine(durability)
+        hasher.combine(ledger)
+        hasher.combine(historyRetentionMs)
+        hasher.combine(undoDepth)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiOpenOptions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiOpenOptions {
+        return
+            try FfiOpenOptions(
+                profile: FfiConverterTypeFfiResourceProfile.read(from: &buf), 
+                durability: FfiConverterTypeFfiDurability.read(from: &buf), 
+                ledger: FfiConverterBool.read(from: &buf), 
+                historyRetentionMs: FfiConverterOptionUInt64.read(from: &buf), 
+                undoDepth: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiOpenOptions, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiResourceProfile.write(value.profile, into: &buf)
+        FfiConverterTypeFfiDurability.write(value.durability, into: &buf)
+        FfiConverterBool.write(value.ledger, into: &buf)
+        FfiConverterOptionUInt64.write(value.historyRetentionMs, into: &buf)
+        FfiConverterUInt32.write(value.undoDepth, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOpenOptions_lift(_ buf: RustBuffer) throws -> FfiOpenOptions {
+    return try FfiConverterTypeFfiOpenOptions.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiOpenOptions_lower(_ value: FfiOpenOptions) -> RustBuffer {
+    return FfiConverterTypeFfiOpenOptions.lower(value)
+}
+
+
 public struct FfiSqlQueryResult {
     public var columns: [String]
     public var rowsJson: [String]
@@ -1886,6 +3408,384 @@ public func FfiConverterTypeFfiSqlQueryResult_lower(_ value: FfiSqlQueryResult) 
     return FfiConverterTypeFfiSqlQueryResult.lower(value)
 }
 
+
+public struct FfiTimeSeriesLifecyclePolicy {
+    public var seriesPattern: String
+    public var rules: [FfiTimeSeriesRetentionRule]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(seriesPattern: String, rules: [FfiTimeSeriesRetentionRule]) {
+        self.seriesPattern = seriesPattern
+        self.rules = rules
+    }
+}
+
+
+
+extension FfiTimeSeriesLifecyclePolicy: Equatable, Hashable {
+    public static func ==(lhs: FfiTimeSeriesLifecyclePolicy, rhs: FfiTimeSeriesLifecyclePolicy) -> Bool {
+        if lhs.seriesPattern != rhs.seriesPattern {
+            return false
+        }
+        if lhs.rules != rhs.rules {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(seriesPattern)
+        hasher.combine(rules)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTimeSeriesLifecyclePolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTimeSeriesLifecyclePolicy {
+        return
+            try FfiTimeSeriesLifecyclePolicy(
+                seriesPattern: FfiConverterString.read(from: &buf), 
+                rules: FfiConverterSequenceTypeFfiTimeSeriesRetentionRule.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTimeSeriesLifecyclePolicy, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.seriesPattern, into: &buf)
+        FfiConverterSequenceTypeFfiTimeSeriesRetentionRule.write(value.rules, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesLifecyclePolicy_lift(_ buf: RustBuffer) throws -> FfiTimeSeriesLifecyclePolicy {
+    return try FfiConverterTypeFfiTimeSeriesLifecyclePolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesLifecyclePolicy_lower(_ value: FfiTimeSeriesLifecyclePolicy) -> RustBuffer {
+    return FfiConverterTypeFfiTimeSeriesLifecyclePolicy.lower(value)
+}
+
+
+public struct FfiTimeSeriesPoint {
+    public var timestamp: Int64
+    public var value: Double
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(timestamp: Int64, value: Double) {
+        self.timestamp = timestamp
+        self.value = value
+    }
+}
+
+
+
+extension FfiTimeSeriesPoint: Equatable, Hashable {
+    public static func ==(lhs: FfiTimeSeriesPoint, rhs: FfiTimeSeriesPoint) -> Bool {
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(timestamp)
+        hasher.combine(value)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTimeSeriesPoint: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTimeSeriesPoint {
+        return
+            try FfiTimeSeriesPoint(
+                timestamp: FfiConverterInt64.read(from: &buf), 
+                value: FfiConverterDouble.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTimeSeriesPoint, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.timestamp, into: &buf)
+        FfiConverterDouble.write(value.value, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesPoint_lift(_ buf: RustBuffer) throws -> FfiTimeSeriesPoint {
+    return try FfiConverterTypeFfiTimeSeriesPoint.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesPoint_lower(_ value: FfiTimeSeriesPoint) -> RustBuffer {
+    return FfiConverterTypeFfiTimeSeriesPoint.lower(value)
+}
+
+
+public struct FfiTimeSeriesRetentionRule {
+    public var resolutionMs: Int64
+    public var retentionMs: Int64?
+    public var aggregation: FfiDownsampleAggregation
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(resolutionMs: Int64, retentionMs: Int64?, aggregation: FfiDownsampleAggregation) {
+        self.resolutionMs = resolutionMs
+        self.retentionMs = retentionMs
+        self.aggregation = aggregation
+    }
+}
+
+
+
+extension FfiTimeSeriesRetentionRule: Equatable, Hashable {
+    public static func ==(lhs: FfiTimeSeriesRetentionRule, rhs: FfiTimeSeriesRetentionRule) -> Bool {
+        if lhs.resolutionMs != rhs.resolutionMs {
+            return false
+        }
+        if lhs.retentionMs != rhs.retentionMs {
+            return false
+        }
+        if lhs.aggregation != rhs.aggregation {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(resolutionMs)
+        hasher.combine(retentionMs)
+        hasher.combine(aggregation)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTimeSeriesRetentionRule: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTimeSeriesRetentionRule {
+        return
+            try FfiTimeSeriesRetentionRule(
+                resolutionMs: FfiConverterInt64.read(from: &buf), 
+                retentionMs: FfiConverterOptionInt64.read(from: &buf), 
+                aggregation: FfiConverterTypeFfiDownsampleAggregation.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTimeSeriesRetentionRule, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.resolutionMs, into: &buf)
+        FfiConverterOptionInt64.write(value.retentionMs, into: &buf)
+        FfiConverterTypeFfiDownsampleAggregation.write(value.aggregation, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesRetentionRule_lift(_ buf: RustBuffer) throws -> FfiTimeSeriesRetentionRule {
+    return try FfiConverterTypeFfiTimeSeriesRetentionRule.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesRetentionRule_lower(_ value: FfiTimeSeriesRetentionRule) -> RustBuffer {
+    return FfiConverterTypeFfiTimeSeriesRetentionRule.lower(value)
+}
+
+
+public struct FfiTimeSeriesRetentionStats {
+    public var seriesProcessed: UInt64
+    public var downsampledPointsCreated: UInt64
+    public var chunksPruned: UInt64
+    public var bytesReclaimedApprox: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(seriesProcessed: UInt64, downsampledPointsCreated: UInt64, chunksPruned: UInt64, bytesReclaimedApprox: UInt64) {
+        self.seriesProcessed = seriesProcessed
+        self.downsampledPointsCreated = downsampledPointsCreated
+        self.chunksPruned = chunksPruned
+        self.bytesReclaimedApprox = bytesReclaimedApprox
+    }
+}
+
+
+
+extension FfiTimeSeriesRetentionStats: Equatable, Hashable {
+    public static func ==(lhs: FfiTimeSeriesRetentionStats, rhs: FfiTimeSeriesRetentionStats) -> Bool {
+        if lhs.seriesProcessed != rhs.seriesProcessed {
+            return false
+        }
+        if lhs.downsampledPointsCreated != rhs.downsampledPointsCreated {
+            return false
+        }
+        if lhs.chunksPruned != rhs.chunksPruned {
+            return false
+        }
+        if lhs.bytesReclaimedApprox != rhs.bytesReclaimedApprox {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(seriesProcessed)
+        hasher.combine(downsampledPointsCreated)
+        hasher.combine(chunksPruned)
+        hasher.combine(bytesReclaimedApprox)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTimeSeriesRetentionStats: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTimeSeriesRetentionStats {
+        return
+            try FfiTimeSeriesRetentionStats(
+                seriesProcessed: FfiConverterUInt64.read(from: &buf), 
+                downsampledPointsCreated: FfiConverterUInt64.read(from: &buf), 
+                chunksPruned: FfiConverterUInt64.read(from: &buf), 
+                bytesReclaimedApprox: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTimeSeriesRetentionStats, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.seriesProcessed, into: &buf)
+        FfiConverterUInt64.write(value.downsampledPointsCreated, into: &buf)
+        FfiConverterUInt64.write(value.chunksPruned, into: &buf)
+        FfiConverterUInt64.write(value.bytesReclaimedApprox, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesRetentionStats_lift(_ buf: RustBuffer) throws -> FfiTimeSeriesRetentionStats {
+    return try FfiConverterTypeFfiTimeSeriesRetentionStats.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesRetentionStats_lower(_ value: FfiTimeSeriesRetentionStats) -> RustBuffer {
+    return FfiConverterTypeFfiTimeSeriesRetentionStats.lower(value)
+}
+
+
+public struct FfiTimeSeriesStats {
+    public var min: Double
+    public var max: Double
+    public var avg: Double
+    public var sum: Double
+    public var count: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(min: Double, max: Double, avg: Double, sum: Double, count: UInt64) {
+        self.min = min
+        self.max = max
+        self.avg = avg
+        self.sum = sum
+        self.count = count
+    }
+}
+
+
+
+extension FfiTimeSeriesStats: Equatable, Hashable {
+    public static func ==(lhs: FfiTimeSeriesStats, rhs: FfiTimeSeriesStats) -> Bool {
+        if lhs.min != rhs.min {
+            return false
+        }
+        if lhs.max != rhs.max {
+            return false
+        }
+        if lhs.avg != rhs.avg {
+            return false
+        }
+        if lhs.sum != rhs.sum {
+            return false
+        }
+        if lhs.count != rhs.count {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(min)
+        hasher.combine(max)
+        hasher.combine(avg)
+        hasher.combine(sum)
+        hasher.combine(count)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTimeSeriesStats: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTimeSeriesStats {
+        return
+            try FfiTimeSeriesStats(
+                min: FfiConverterDouble.read(from: &buf), 
+                max: FfiConverterDouble.read(from: &buf), 
+                avg: FfiConverterDouble.read(from: &buf), 
+                sum: FfiConverterDouble.read(from: &buf), 
+                count: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTimeSeriesStats, into buf: inout [UInt8]) {
+        FfiConverterDouble.write(value.min, into: &buf)
+        FfiConverterDouble.write(value.max, into: &buf)
+        FfiConverterDouble.write(value.avg, into: &buf)
+        FfiConverterDouble.write(value.sum, into: &buf)
+        FfiConverterUInt64.write(value.count, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesStats_lift(_ buf: RustBuffer) throws -> FfiTimeSeriesStats {
+    return try FfiConverterTypeFfiTimeSeriesStats.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTimeSeriesStats_lower(_ value: FfiTimeSeriesStats) -> RustBuffer {
+    return FfiConverterTypeFfiTimeSeriesStats.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -1954,6 +3854,188 @@ public func FfiConverterTypeFfiDirection_lower(_ value: FfiDirection) -> RustBuf
 
 
 extension FfiDirection: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiDownsampleAggregation {
+    
+    case avg
+    case min
+    case max
+    case sum
+    case first
+    case last
+    case count
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDownsampleAggregation: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDownsampleAggregation
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDownsampleAggregation {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .avg
+        
+        case 2: return .min
+        
+        case 3: return .max
+        
+        case 4: return .sum
+        
+        case 5: return .first
+        
+        case 6: return .last
+        
+        case 7: return .count
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDownsampleAggregation, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .avg:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .min:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .max:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .sum:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .first:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .last:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .count:
+            writeInt(&buf, Int32(7))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDownsampleAggregation_lift(_ buf: RustBuffer) throws -> FfiDownsampleAggregation {
+    return try FfiConverterTypeFfiDownsampleAggregation.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDownsampleAggregation_lower(_ value: FfiDownsampleAggregation) -> RustBuffer {
+    return FfiConverterTypeFfiDownsampleAggregation.lower(value)
+}
+
+
+
+extension FfiDownsampleAggregation: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * What survives a crash or a power loss.
+ */
+
+public enum FfiDurability {
+    
+    /**
+     * Every acknowledged commit survives power loss.
+     */
+    case durable
+    /**
+     * The journal stays consistent across power loss; the latest commits may be lost.
+     */
+    case balanced
+    /**
+     * No sync on commit: commits survive a process crash, not power loss.
+     */
+    case performance
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDurability: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDurability
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDurability {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .durable
+        
+        case 2: return .balanced
+        
+        case 3: return .performance
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDurability, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .durable:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .balanced:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .performance:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDurability_lift(_ buf: RustBuffer) throws -> FfiDurability {
+    return try FfiConverterTypeFfiDurability.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDurability_lower(_ value: FfiDurability) -> RustBuffer {
+    return FfiConverterTypeFfiDurability.lower(value)
+}
+
+
+
+extension FfiDurability: Equatable, Hashable {}
 
 
 
@@ -2041,7 +4123,11 @@ public enum LiliaFfiError {
     )
     case Conflict(String
     )
-    case Crypto(String
+    case Closed(String
+    )
+    case Timeout(String
+    )
+    case Unsupported(String
     )
     case Generic(String
     )
@@ -2073,10 +4159,16 @@ public struct FfiConverterTypeLiliaFfiError: FfiConverterRustBuffer {
         case 4: return .Conflict(
             try FfiConverterString.read(from: &buf)
             )
-        case 5: return .Crypto(
+        case 5: return .Closed(
             try FfiConverterString.read(from: &buf)
             )
-        case 6: return .Generic(
+        case 6: return .Timeout(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 7: return .Unsupported(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 8: return .Generic(
             try FfiConverterString.read(from: &buf)
             )
 
@@ -2111,13 +4203,23 @@ public struct FfiConverterTypeLiliaFfiError: FfiConverterRustBuffer {
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Crypto(v1):
+        case let .Closed(v1):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Generic(v1):
+        case let .Timeout(v1):
             writeInt(&buf, Int32(6))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Unsupported(v1):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(v1):
+            writeInt(&buf, Int32(8))
             FfiConverterString.write(v1, into: &buf)
             
         }
@@ -2130,6 +4232,30 @@ extension LiliaFfiError: Equatable, Hashable {}
 extension LiliaFfiError: Foundation.LocalizedError {
     public var errorDescription: String? {
         String(reflecting: self)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
     }
 }
 
@@ -2152,6 +4278,30 @@ fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
+    typealias SwiftType = Double?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterDouble.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterDouble.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -2280,6 +4430,54 @@ fileprivate struct FfiConverterOptionTypeFfiKvEntry: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFfiTimeSeriesLifecyclePolicy: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTimeSeriesLifecyclePolicy?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiTimeSeriesLifecyclePolicy.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiTimeSeriesLifecyclePolicy.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiTimeSeriesStats: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTimeSeriesStats?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiTimeSeriesStats.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiTimeSeriesStats.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -2297,6 +4495,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiFtsFuzzyHit: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiFtsFuzzyHit]
+
+    public static func write(_ value: [FfiFtsFuzzyHit], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiFtsFuzzyHit.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiFtsFuzzyHit] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiFtsFuzzyHit]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiFtsFuzzyHit.read(from: &buf))
         }
         return seq
     }
@@ -2330,6 +4553,106 @@ fileprivate struct FfiConverterSequenceTypeFfiFtsHit: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiFtsPhoneticHit: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiFtsPhoneticHit]
+
+    public static func write(_ value: [FfiFtsPhoneticHit], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiFtsPhoneticHit.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiFtsPhoneticHit] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiFtsPhoneticHit]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiFtsPhoneticHit.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiFtsSuggestion: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiFtsSuggestion]
+
+    public static func write(_ value: [FfiFtsSuggestion], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiFtsSuggestion.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiFtsSuggestion] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiFtsSuggestion]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiFtsSuggestion.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiGeofenceMatch: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiGeofenceMatch]
+
+    public static func write(_ value: [FfiGeofenceMatch], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiGeofenceMatch.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiGeofenceMatch] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiGeofenceMatch]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiGeofenceMatch.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiGpsPoint: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiGpsPoint]
+
+    public static func write(_ value: [FfiGpsPoint], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiGpsPoint.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiGpsPoint] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiGpsPoint]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiGpsPoint.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiJsonEntry: FfiConverterRustBuffer {
     typealias SwiftType = [FfiJsonEntry]
 
@@ -2355,6 +4678,31 @@ fileprivate struct FfiConverterSequenceTypeFfiJsonEntry: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiJsonIndexInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiJsonIndexInfo]
+
+    public static func write(_ value: [FfiJsonIndexInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiJsonIndexInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiJsonIndexInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiJsonIndexInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiJsonIndexInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiKvEntry: FfiConverterRustBuffer {
     typealias SwiftType = [FfiKvEntry]
 
@@ -2372,6 +4720,81 @@ fileprivate struct FfiConverterSequenceTypeFfiKvEntry: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeFfiKvEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiTimeSeriesLifecyclePolicy: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiTimeSeriesLifecyclePolicy]
+
+    public static func write(_ value: [FfiTimeSeriesLifecyclePolicy], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiTimeSeriesLifecyclePolicy.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTimeSeriesLifecyclePolicy] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiTimeSeriesLifecyclePolicy]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiTimeSeriesLifecyclePolicy.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiTimeSeriesPoint: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiTimeSeriesPoint]
+
+    public static func write(_ value: [FfiTimeSeriesPoint], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiTimeSeriesPoint.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTimeSeriesPoint] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiTimeSeriesPoint]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiTimeSeriesPoint.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiTimeSeriesRetentionRule: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiTimeSeriesRetentionRule]
+
+    public static func write(_ value: [FfiTimeSeriesRetentionRule], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiTimeSeriesRetentionRule.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTimeSeriesRetentionRule] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiTimeSeriesRetentionRule]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiTimeSeriesRetentionRule.read(from: &buf))
         }
         return seq
     }
@@ -2422,6 +4845,40 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
         print("uniffiFutureContinuationCallback invalid handle")
     }
 }
+public func geoCreateCirclePolygon(centerLon: Double, centerLat: Double, radiusMeters: Double, nVertices: UInt32) -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_lilia_ffi_fn_func_geo_create_circle_polygon(
+        FfiConverterDouble.lower(centerLon),
+        FfiConverterDouble.lower(centerLat),
+        FfiConverterDouble.lower(radiusMeters),
+        FfiConverterUInt32.lower(nVertices),$0
+    )
+})
+}
+public func geoHaversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double) -> Double {
+    return try!  FfiConverterDouble.lift(try! rustCall() {
+    uniffi_lilia_ffi_fn_func_geo_haversine_distance(
+        FfiConverterDouble.lower(lat1),
+        FfiConverterDouble.lower(lon1),
+        FfiConverterDouble.lower(lat2),
+        FfiConverterDouble.lower(lon2),$0
+    )
+})
+}
+public func tsCompressPoints(points: [FfiTimeSeriesPoint])throws  -> Data {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_func_ts_compress_points(
+        FfiConverterSequenceTypeFfiTimeSeriesPoint.lower(points),$0
+    )
+})
+}
+public func tsDecompressPoints(bytes: Data)throws  -> [FfiTimeSeriesPoint] {
+    return try  FfiConverterSequenceTypeFfiTimeSeriesPoint.lift(try rustCallWithError(FfiConverterTypeLiliaFfiError.lift) {
+    uniffi_lilia_ffi_fn_func_ts_decompress_points(
+        FfiConverterData.lower(bytes),$0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -2438,22 +4895,28 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_backup() != 10561) {
+    if (uniffi_lilia_ffi_checksum_func_geo_create_circle_polygon() != 19111) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_backup_sync() != 48495) {
+    if (uniffi_lilia_ffi_checksum_func_geo_haversine_distance() != 47927) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint() != 635) {
+    if (uniffi_lilia_ffi_checksum_func_ts_compress_points() != 57342) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint_sync() != 30215) {
+    if (uniffi_lilia_ffi_checksum_func_ts_decompress_points() != 34801) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_close() != 56998) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint() != 33202) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_close_sync() != 1049) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_checkpoint_sync() != 26779) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_close() != 23876) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_close_sync() != 44144) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_delete() != 29000) {
@@ -2462,16 +4925,82 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_delete_sync() != 56452) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_fuzzy_search() != 55140) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_fuzzy_search_sync() != 58120) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_index() != 45368) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_index_sync() != 13651) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_load_dictionary() != 56636) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_load_dictionary_sync() != 38104) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_phonetic_search() != 23191) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_phonetic_search_sync() != 42729) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_search() != 42413) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_search_sync() != 32803) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_suggest() != 40469) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_fts_suggest_sync() != 17615) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_add_fence() != 13763) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_add_fence_sync() != 25497) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_contains_point() != 45491) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_contains_point_sync() != 59291) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_find_fences_for_point() != 46178) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_find_fences_for_point_sync() != 28968) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_get_track_points() != 49422) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_get_track_points_sync() != 28244) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_record_gps_points() != 40880) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_record_gps_points_sync() != 38773) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_remove_fence() != 24719) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_remove_fence_sync() != 7035) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_track_distance() != 33913) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_geo_track_distance_sync() != 61115) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_graph_add_edge() != 17706) {
@@ -2516,16 +5045,34 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_graph_set_node_sync() != 19832) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_integrity_check() != 34669) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_integrity_check_sync() != 54338) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_create_index() != 47489) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_create_index_sync() != 59759) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_delete() != 63539) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_delete_sync() != 38134) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_find() != 55075) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_drop_index() != 48333) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_find_sync() != 53049) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_drop_index_sync() != 39824) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_find() != 47533) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_find_sync() != 65322) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_get() != 18997) {
@@ -2534,10 +5081,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_get_sync() != 1016) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_put() != 21514) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_list_indexes() != 45289) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_put_sync() != 62076) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_list_indexes_sync() != 48676) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_put() != 49079) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_json_put_sync() != 30019) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_delete() != 4740) {
@@ -2552,37 +5105,91 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_get_sync() != 58625) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_scan() != 40833) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_scan() != 47799) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_scan_sync() != 39902) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_scan_sync() != 55183) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set() != 25029) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set() != 14577) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set_sync() != 35073) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_kv_set_sync() != 15131) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_prepare_for_background() != 45780) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check() != 65241) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check() != 30028) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check_sync() != 19067) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_quick_check_sync() != 21148) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query() != 50415) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query() != 38785) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query_sync() != 41971) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_method_liliadatabase_sql_query_sync() != 42369) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_append_points() != 36768) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_constructor_liliadatabase_open() != 47429) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_append_points_sync() != 3633) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lilia_ffi_checksum_constructor_liliadatabase_open_with_passphrase() != 46477) {
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_apply_retention() != 27954) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_apply_retention_sync() != 56064) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_delete_policy() != 43750) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_delete_policy_sync() != 38757) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_get_policy() != 4775) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_get_policy_sync() != 39898) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_list_policies() != 18205) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_list_policies_sync() != 56154) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_auto() != 61512) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_auto_sync() != 49152) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range() != 17042) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_sync() != 38594) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_with_resolution() != 9464) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_range_with_resolution_sync() != 11236) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_stats() != 49033) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_query_stats_sync() != 26547) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_set_policy() != 38391) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_method_liliadatabase_ts_set_policy_sync() != 13700) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lilia_ffi_checksum_constructor_liliadatabase_open() != 55088) {
         return InitializationResult.apiChecksumMismatch
     }
 

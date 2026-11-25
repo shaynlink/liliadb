@@ -135,7 +135,7 @@ pub fn u64_to_fr(val: u64) -> Fr {
     Fr::from(val)
 }
 
-/// Converts an arbitrary string identifier (e.g. "usr_42") into a BN254 scalar field element
+/// Converts an arbitrary string identifier (e.g. "`usr_42`") into a BN254 scalar field element
 /// using domain-separated BLAKE3 hashing.
 #[must_use]
 pub fn str_to_fr(s: &str) -> Fr {
@@ -185,7 +185,7 @@ mod tests {
         let id = str_to_fr("usr_101");
         let v1 = u64_to_fr(2450);
         let v2 = u64_to_fr(29);
-        let salt = u64_to_fr(999_999);
+        let salt = id + v1 + v2;
 
         // Native calculation
         let native_hash = poseidon_hash_4(id, v1, v2, salt);

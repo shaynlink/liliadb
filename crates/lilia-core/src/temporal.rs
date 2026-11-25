@@ -1,10 +1,3 @@
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
-)]
-
 use crate::error::{ErrorCode, LiliaError, Result};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +5,10 @@ pub const BITEMPORAL_INFINITY: i64 = i64::MAX;
 pub const BITEMPORAL_NEG_INFINITY: i64 = i64::MIN;
 
 /// Howard Hinnant's algorithm: Gregorian calendar calculation (days since 1970-01-01).
+#[allow(
+    clippy::cast_sign_loss,
+    reason = "the year of era is in 0..400 by construction"
+)]
 const fn days_from_civil(mut y: i32, m: u32, d: u32) -> i64 {
     if m <= 2 {
         y -= 1;
@@ -24,6 +21,11 @@ const fn days_from_civil(mut y: i32, m: u32, d: u32) -> i64 {
 }
 
 /// Howard Hinnant's algorithm: Gregorian civil date from days since 1970-01-01.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the day of era is in 0..146097 by construction, and the year of an i64 millisecond instant is within ±300 million"
+)]
 const fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -46,6 +48,11 @@ const fn civil_from_days(z: i64) -> (i32, u32, u32) {
 /// - `YYYY-MM-DDTHH:MM:SS+HH:MM` or `-HH:MM`
 /// - Keywords: "infinity", "+infinity", "max", "-infinity", "min", "now"
 /// - Numeric string representing epoch milliseconds (e.g. "1795132800000")
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidInput`] for a string in none of these forms, or a date component out of
+/// range.
 pub fn parse_iso_to_ms(s: &str) -> Result<i64> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
@@ -55,68 +62,74 @@ pub fn parse_iso_to_ms(s: &str) -> Result<i64> {
             false,
         ));
     }
-
-    match trimmed.to_ascii_lowercase().as_str() {
-        "infinity" | "+infinity" | "max" | "forever" => return Ok(BITEMPORAL_INFINITY),
-        "-infinity" | "min" => return Ok(BITEMPORAL_NEG_INFINITY),
-        "now" | "current" => {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_millis() as i64);
-                return Ok(now);
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                return Ok(js_sys::Date::now() as i64);
-            }
-        }
-        _ => {}
+    if let Some(ms) = keyword_ms(&trimmed.to_ascii_lowercase()) {
+        return Ok(ms);
     }
-
-    // Direct numeric timestamp
     if let Ok(num) = trimmed.parse::<i64>() {
         return Ok(num);
     }
-
-    // Format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS...
     let (date_part, time_part) = match trimmed.split_once('T').or_else(|| trimmed.split_once(' ')) {
         Some((d, t)) => (d, Some(t)),
         None => (trimmed, None),
     };
+    let midnight = date_ms(date_part, trimmed)?;
+    match time_part {
+        Some(time) => Ok(midnight + daytime_ms(time)?),
+        None => Ok(midnight),
+    }
+}
 
-    let date_segs: Vec<&str> = date_part.split('-').collect();
-    if date_segs.len() != 3 {
+/// The instant a keyword (`infinity`, `min`, `now`, ...) names, if `lowered` is one.
+fn keyword_ms(lowered: &str) -> Option<i64> {
+    match lowered {
+        "infinity" | "+infinity" | "max" | "forever" => Some(BITEMPORAL_INFINITY),
+        "-infinity" | "min" => Some(BITEMPORAL_NEG_INFINITY),
+        "now" | "current" => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX)),
+                )
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "the clock is a whole number of milliseconds, far below 2^53"
+                )]
+                Some(js_sys::Date::now() as i64)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `text` parsed as a number, or an error naming it as `what`.
+fn number<T: std::str::FromStr>(text: &str, what: &str) -> Result<T> {
+    text.parse().map_err(|_| {
+        LiliaError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid {what}: {text}"),
+            false,
+        )
+    })
+}
+
+/// Milliseconds at midnight UTC of `YYYY-MM-DD`; `whole` is the full input, for errors.
+fn date_ms(date_part: &str, whole: &str) -> Result<i64> {
+    let segments: Vec<&str> = date_part.split('-').collect();
+    let [year, month, day] = segments.as_slice() else {
         return Err(LiliaError::new(
             ErrorCode::InvalidInput,
-            format!("invalid date format (expected YYYY-MM-DD): {trimmed}"),
+            format!("invalid date format (expected YYYY-MM-DD): {whole}"),
             false,
         ));
-    }
-
-    let year: i32 = date_segs[0].parse().map_err(|_| {
-        LiliaError::new(
-            ErrorCode::InvalidInput,
-            format!("invalid year: {}", date_segs[0]),
-            false,
-        )
-    })?;
-    let month: u32 = date_segs[1].parse().map_err(|_| {
-        LiliaError::new(
-            ErrorCode::InvalidInput,
-            format!("invalid month: {}", date_segs[1]),
-            false,
-        )
-    })?;
-    let day: u32 = date_segs[2].parse().map_err(|_| {
-        LiliaError::new(
-            ErrorCode::InvalidInput,
-            format!("invalid day: {}", date_segs[2]),
-            false,
-        )
-    })?;
-
+    };
+    let year: i32 = number(year, "year")?;
+    let month: u32 = number(month, "month")?;
+    let day: u32 = number(day, "day")?;
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return Err(LiliaError::new(
             ErrorCode::InvalidInput,
@@ -124,74 +137,49 @@ pub fn parse_iso_to_ms(s: &str) -> Result<i64> {
             false,
         ));
     }
+    Ok(days_from_civil(year, month, day) * 86_400_000)
+}
 
-    let days = days_from_civil(year, month, day);
-    let mut ms: i64 = days * 86_400_000;
-
-    if let Some(mut time_str) = time_part {
-        let mut tz_offset_ms: i64 = 0;
-        if time_str.ends_with('Z') || time_str.ends_with('z') {
-            time_str = &time_str[..time_str.len() - 1];
-        } else if let Some(plus_idx) = time_str.rfind('+') {
-            let offset_part = &time_str[plus_idx + 1..];
-            tz_offset_ms = parse_tz_offset(offset_part)?;
-            time_str = &time_str[..plus_idx];
-        } else if let Some(minus_idx) = time_str.rfind('-') {
-            let offset_part = &time_str[minus_idx + 1..];
-            tz_offset_ms = -parse_tz_offset(offset_part)?;
-            time_str = &time_str[..minus_idx];
-        }
-
-        let time_segs: Vec<&str> = time_str.split(':').collect();
-        if time_segs.len() < 2 {
+/// Milliseconds since midnight UTC of `HH:MM[:SS[.fff]][Z|±HH[:MM]]`.
+fn daytime_ms(time: &str) -> Result<i64> {
+    let (time, offset_ms) = if let Some(local) = time.strip_suffix(['Z', 'z']) {
+        (local, 0)
+    } else if let Some((local, offset)) = time.rsplit_once('+') {
+        (local, parse_tz_offset(offset)?)
+    } else if let Some((local, offset)) = time.rsplit_once('-') {
+        (local, -parse_tz_offset(offset)?)
+    } else {
+        (time, 0)
+    };
+    let segments: Vec<&str> = time.split(':').collect();
+    let (hour, minute, second) = match segments.as_slice() {
+        [hour, minute] => (*hour, *minute, None),
+        [hour, minute, second, ..] => (*hour, *minute, Some(*second)),
+        _ => {
             return Err(LiliaError::new(
                 ErrorCode::InvalidInput,
-                format!("invalid time format: {time_str}"),
+                format!("invalid time format: {time}"),
                 false,
-            ));
+            ))
         }
+    };
+    let hour: i64 = number(hour, "hour")?;
+    let minute: i64 = number(minute, "minute")?;
+    let (sec, millis) = second.map_or((0, 0), seconds);
+    Ok(hour * 3_600_000 + minute * 60_000 + sec * 1_000 + millis - offset_ms)
+}
 
-        let hour: i64 = time_segs[0].parse().map_err(|_| {
-            LiliaError::new(
-                ErrorCode::InvalidInput,
-                format!("invalid hour: {}", time_segs[0]),
-                false,
-            )
-        })?;
-        let min: i64 = time_segs[1].parse().map_err(|_| {
-            LiliaError::new(
-                ErrorCode::InvalidInput,
-                format!("invalid minute: {}", time_segs[1]),
-                false,
-            )
-        })?;
-
-        let mut sec: i64 = 0;
-        let mut millis: i64 = 0;
-
-        if time_segs.len() >= 3 {
-            let sec_str = time_segs[2];
-            if let Some((s_part, ms_part)) = sec_str.split_once('.') {
-                sec = s_part.parse().unwrap_or(0);
-                let mut ms_num: i64 = ms_part.parse().unwrap_or(0);
-                if ms_part.len() == 1 {
-                    ms_num *= 100;
-                } else if ms_part.len() == 2 {
-                    ms_num *= 10;
-                } else if ms_part.len() > 3 {
-                    ms_num /= 10_i64.pow((ms_part.len() - 3) as u32);
-                }
-                millis = ms_num;
-            } else {
-                sec = sec_str.parse().unwrap_or(0);
-            }
-        }
-
-        let daytime_ms = hour * 3_600_000 + min * 60_000 + sec * 1_000 + millis;
-        ms += daytime_ms - tz_offset_ms;
-    }
-
-    Ok(ms)
+/// Seconds and milliseconds of `SS[.fff...]`; digits beyond milliseconds are dropped.
+fn seconds(text: &str) -> (i64, i64) {
+    let Some((whole, fraction)) = text.split_once('.') else {
+        return (text.parse().unwrap_or(0), 0);
+    };
+    let millis: String = fraction
+        .chars()
+        .chain(std::iter::repeat('0'))
+        .take(3)
+        .collect();
+    (whole.parse().unwrap_or(0), millis.parse().unwrap_or(0))
 }
 
 fn parse_tz_offset(s: &str) -> Result<i64> {
@@ -264,6 +252,11 @@ impl BitemporalPoint {
         Self(ms)
     }
 
+    /// The instant `val` names, in any form of [`parse_iso_to_ms`].
+    ///
+    /// # Errors
+    ///
+    /// As [`parse_iso_to_ms`].
     pub fn at(val: impl AsRef<str>) -> Result<Self> {
         let ms = parse_iso_to_ms(val.as_ref())?;
         Ok(Self(ms))
@@ -305,6 +298,11 @@ pub struct BitemporalInterval {
 }
 
 impl BitemporalInterval {
+    /// The half-open interval `[from, to)`, in epoch milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidInput`] when `from` is after `to`.
     pub fn new(from: i64, to: i64) -> Result<Self> {
         if from > to {
             return Err(LiliaError::new(
@@ -317,6 +315,10 @@ impl BitemporalInterval {
     }
 
     /// Standard half-open interval `[from, to)` parsed from strings.
+    ///
+    /// # Errors
+    ///
+    /// As [`parse_iso_to_ms`] and [`BitemporalInterval::new`].
     pub fn between(from: impl AsRef<str>, to: impl AsRef<str>) -> Result<Self> {
         let from_ms = parse_iso_to_ms(from.as_ref())?;
         let to_ms = parse_iso_to_ms(to.as_ref())?;
@@ -326,6 +328,10 @@ impl BitemporalInterval {
     /// Ergonomic constructor for calendar date ranges where `to_day` is inclusive of that entire day.
     /// E.g. `inclusive_days("2027-01-01", "2027-12-31")` extends from 2027-01-01T00:00:00Z
     /// to 2028-01-01T00:00:00Z (half-open).
+    ///
+    /// # Errors
+    ///
+    /// As [`parse_iso_to_ms`] and [`BitemporalInterval::new`].
     pub fn inclusive_days(from_day: impl AsRef<str>, to_day: impl AsRef<str>) -> Result<Self> {
         let from_ms = parse_iso_to_ms(from_day.as_ref())?;
         let to_str = to_day.as_ref().trim();
@@ -424,6 +430,17 @@ mod tests {
         let ms_inf = parse_iso_to_ms("infinity").unwrap();
         assert_eq!(ms_inf, BITEMPORAL_INFINITY);
         assert_eq!(format_ms_to_iso(ms_inf), "infinity");
+
+        let offset = parse_iso_to_ms("2027-02-01T16:30:15.5+02:00").unwrap();
+        assert_eq!(offset, ms_dt);
+        let fractions = parse_iso_to_ms("2027-02-01T14:30:15.500999Z").unwrap();
+        assert_eq!(fractions, ms_dt);
+        let nanoseconds = parse_iso_to_ms("2027-02-01T14:30:15.5009998887776665554443Z").unwrap();
+        assert_eq!(nanoseconds, ms_dt);
+        let empty_fraction = parse_iso_to_ms("2027-02-01T14:30:15.").unwrap();
+        assert_eq!(empty_fraction, ms_dt - 500);
+        assert!(parse_iso_to_ms("2027-02-01T14").is_err());
+        assert!(parse_iso_to_ms("2027-13-01").is_err());
     }
 
     #[test]

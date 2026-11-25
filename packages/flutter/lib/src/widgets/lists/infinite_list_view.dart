@@ -12,6 +12,8 @@ typedef LiliaJsonItemBuilder<T> = Widget Function(
 class LiliaInfiniteListView<T> extends StatefulWidget {
   final String space;
   final int pageSize;
+  /// Field paths (or index names) and values the documents must match; every document of
+  /// [space] when empty.
   final Map<String, dynamic> filter;
   final LiliaJsonItemBuilder<T> itemBuilder;
   final Widget? loadingWidget;

@@ -10,14 +10,17 @@ fn binary_versions_remain_native_u64_and_json_versions_are_decimal() {
             if_version: Some(value),
         };
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&operation).unwrap();
-        let archived = rkyv::access::<lilia_core::ArchivedBatchOperation, rkyv::rancor::Error>(&bytes).unwrap();
+        let archived =
+            rkyv::access::<lilia_core::ArchivedBatchOperation, rkyv::rancor::Error>(&bytes)
+                .unwrap();
         match archived {
             lilia_core::ArchivedBatchOperation::JsonDelete { if_version, .. } => {
                 assert_eq!(if_version.as_ref().map(|v| v.to_native()), Some(value));
             }
             _ => panic!("unexpected variant"),
         }
-        let decoded: BatchOperation = rkyv::from_bytes::<BatchOperation, rkyv::rancor::Error>(&bytes).unwrap();
+        let decoded: BatchOperation =
+            rkyv::from_bytes::<BatchOperation, rkyv::rancor::Error>(&bytes).unwrap();
         assert_eq!(
             serde_json::to_value(decoded).unwrap()["if_version"],
             value.to_string()
@@ -30,21 +33,22 @@ fn binary_versions_remain_native_u64_and_json_versions_are_decimal() {
                 operations: vec![operation],
             },
         };
-        let req_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&request).unwrap();
+        let request_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&request).unwrap();
         let _: lilia_protocol::Request =
-            rkyv::from_bytes::<lilia_protocol::Request, rkyv::rancor::Error>(&req_bytes).unwrap();
+            rkyv::from_bytes::<lilia_protocol::Request, rkyv::rancor::Error>(&request_bytes)
+                .unwrap();
         let result = MutationResult {
             version: Some(value),
             deleted: false,
-            hlc: None,
-            conflict_detected: None,
-            tier: lilia_core::StorageTier::Disk,
-            buffered: false,
         };
-        let res_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&result).unwrap();
+        let result_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&result).unwrap();
         let archived_res =
-            rkyv::access::<lilia_core::ArchivedMutationResult, rkyv::rancor::Error>(&res_bytes).unwrap();
-        assert_eq!(archived_res.version.as_ref().map(|v| v.to_native()), Some(value));
+            rkyv::access::<lilia_core::ArchivedMutationResult, rkyv::rancor::Error>(&result_bytes)
+                .unwrap();
+        assert_eq!(
+            archived_res.version.as_ref().map(|v| v.to_native()),
+            Some(value)
+        );
         assert_eq!(
             serde_json::to_value(&result).unwrap(),
             json!({"version": value.to_string(), "deleted": false})

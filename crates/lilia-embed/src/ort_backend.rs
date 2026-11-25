@@ -4,7 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-use lilia_core::{BuiltinModel, Embedder, ErrorCode, LiliaError};
+use lilia_core::{ErrorCode, LiliaError};
+
+use crate::{BuiltinModel, Embedder};
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor as OrtTensor;

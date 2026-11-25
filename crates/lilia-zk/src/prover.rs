@@ -11,7 +11,7 @@ use crate::keys::default_solde_age_keys;
 use crate::poseidon::{fr_to_hex, poseidon_hash_4, str_to_fr, u64_to_fr};
 use crate::predicate::{ZkProofBundle, ZkStatement};
 
-/// Zero-Knowledge Micro-Prover for LiliaDB.
+/// Zero-Knowledge Micro-Prover for `LiliaDB`.
 ///
 /// Runs on embedded devices, mobile phones, or desktop servers to generate
 /// succinct mathematical proofs (128 bytes) certifying conditions on private data.
@@ -62,8 +62,10 @@ impl ZkProver {
             min_age,
         );
 
-        let default_keys = default_solde_age_keys();
-        let pk = pk_override.unwrap_or(&default_keys.0);
+        let pk = match pk_override {
+            Some(pk) => pk,
+            None => &default_solde_age_keys()?.0,
+        };
 
         let mut rng = StdRng::from_seed([77u8; 32]);
         let proof = Groth16::<Bn254>::prove(pk, circuit, &mut rng)
@@ -116,12 +118,15 @@ impl ZkProver {
                     min_balance = Some(*threshold);
                 }
                 crate::predicate::ZkClaim::Gte { field, threshold } if field == "age" => {
-                    min_age = Some(*threshold as u32);
+                    min_age = Some(u32::try_from(*threshold).map_err(|_| {
+                        ZkError::InvalidStatement(format!(
+                            "age threshold {threshold} exceeds the circuit's 32 bits"
+                        ))
+                    })?);
                 }
                 _ => {
                     return Err(ZkError::InvalidStatement(format!(
-                        "Unsupported claim in solde_age circuit: {:?}",
-                        claim
+                        "Unsupported claim in solde_age circuit: {claim:?}"
                     )));
                 }
             }

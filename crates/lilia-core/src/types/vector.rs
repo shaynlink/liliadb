@@ -2,7 +2,18 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
@@ -40,7 +51,18 @@ impl TryFrom<i64> for VectorElementType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "snake_case")]
 pub enum VectorMetric {
@@ -80,8 +102,12 @@ impl std::str::FromStr for VectorMetric {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+/// The parameters of an HNSW index; fields left out take their [`Default`] values.
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
+#[serde(default)]
 pub struct HnswConfig {
     pub m: usize,
     pub ef_construction: usize,
@@ -104,7 +130,9 @@ impl Default for HnswConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct VectorIndexInfo {
     pub collection: String,
@@ -118,7 +146,9 @@ pub struct VectorIndexInfo {
     pub dim: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct VectorHit {
     pub collection: String,
@@ -126,7 +156,9 @@ pub struct VectorHit {
     pub distance: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 #[rkyv(crate = rkyv, derive(Debug))]
 pub struct HybridHit {
     pub id: String,

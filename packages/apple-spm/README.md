@@ -16,22 +16,21 @@ The package ships:
 
 ## 1. Key Features
 
-- **Multimodel, transactional**: Key/Value, JSON documents, Graph, Full-Text
-  Search (FTS5), and declarative SQL share a single SQLite ACID database file.
+- **Multimodel, transactional**: Key/Value, JSON documents with secondary indexes,
+  Graph, Full-Text Search, time series, geofences and read-only SQL (DataFusion)
+  share one LiliaDB database (the `lilia-db` engine, a directory on disk).
 - **Async & blocking APIs**: every operation is exposed both as a Swift `async`
   function and as a `*Sync` blocking variant.
-- **Resource profiles**: tuned SQLite cache / WAL / mmap settings for phones and
-  tablets (`MOBILE`), wearables and TV hardware (`CONSTRAINED`), or
-  server-class hardware (`SERVER`).
-- **Encryption at rest**: transparent authenticated AES-256-GCM via a raw 256-bit
-  key or a passphrase (PBKDF2-HMAC-SHA256 key derivation).
-- **Exact 64-bit versioning**: entries carry `UInt64` versions without IEEE-754
-  precision loss.
-- **Mobile lifecycle aware**: `prepareForBackground()` flushes the WAL before the
-  OS suspends the process; `close(timeoutMs:)` drains in-flight work gracefully.
+- **Resource profiles**: engine buffers sized for phones and tablets (`mobile`),
+  wearables and TV hardware (`constrained`), or the whole machine (`server`).
+- **Exact 64-bit versioning**: entries carry `UInt64` versions (engine sequences)
+  without IEEE-754 precision loss.
+- **Mobile lifecycle aware**: `checkpoint()` writes recent commits to their sorted
+  runs before the OS suspends the process; `close(timeoutMs:)` waits for in-flight
+  calls.
 - **Broad platform support**: iOS 15+, macOS 12+, watchOS 8+, tvOS 15+.
-- **Time-series & geofencing**: Gorilla-compressed sensor telemetry, retention
-  policies, GPS tracks, and Geopoly geofences through the same FFI surface.
+- **Time-series & geofencing**: sensor telemetry with lifecycle policies, GPS
+  tracks, and polygon geofences through the same FFI surface.
 
 ---
 
@@ -209,13 +208,12 @@ import Lilia
 func bootstrap() throws {
     let path = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("app.lilia")
+        .appendingPathComponent("app-data") // a directory, created if missing
         .path
 
     let db = try LiliaDatabase.open(
         path: path,
-        profile: .mobile,
-        encryptionKey: nil // or a 32-byte Data for AES-256-GCM
+        options: FfiOpenOptions(profile: .mobile, durability: .balanced)
     )
     defer { try? db.closeSync(timeoutMs: 5_000) }
 
@@ -245,9 +243,9 @@ func bootstrap() throws {
         content: "LiliaDB delivers local-first multimodel storage."
     )
 
-    // 5. Declarative SQL
+    // 5. Read-only SQL over the models
     let result = try db.sqlQuerySync(
-        sql: "SELECT id FROM lilia_json WHERE space = 'users'",
+        sql: "SELECT id, value->>'name' AS name FROM users",
         paramsJson: nil
     )
     print(result.columns, result.rowsJson)
@@ -258,7 +256,7 @@ func bootstrap() throws {
 
 ```swift
 func bootstrapAsync() async throws {
-    let db = try LiliaDatabase.open(path: path, profile: .mobile, encryptionKey: nil)
+    let db = try LiliaDatabase.open(path: path, options: FfiOpenOptions(profile: .mobile, durability: .balanced))
 
     let version = try await db.kvSet(
         namespace: "sessions",
@@ -279,36 +277,36 @@ func bootstrapAsync() async throws {
 ## 6. Opening a Database
 
 ```swift
-// Raw 256-bit key (exactly 32 bytes, otherwise a Crypto error is thrown)
-let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
-let db = try LiliaDatabase.open(path: path, profile: .mobile, encryptionKey: key)
-
-// Passphrase with PBKDF2-HMAC-SHA256 key derivation
-let db2 = try LiliaDatabase.openWithPassphrase(
+let db = try LiliaDatabase.open(
     path: path,
-    profile: .mobile,
-    passphrase: "correct horse battery staple"
+    options: FfiOpenOptions(
+        profile: .mobile,
+        durability: .balanced,   // .durable, .balanced or .performance
+        ledger: false,           // a tamper-evident ledger of every write
+        historyRetentionMs: nil, // old versions stay readable a week by default
+        undoDepth: 0             // commits that can be undone
+    )
 )
-
-// Unencrypted
-let db3 = try LiliaDatabase.open(path: path, profile: .constrained, encryptionKey: nil)
 ```
 
-- `path` is the database file path. Prefer `Application Support` (or
-  `noBackupFilesDir` equivalents) for data that should not be purged, and exclude
-  large databases from iCloud backups when appropriate.
-- When a key or passphrase is supplied, transparent authenticated AES-256-GCM
-  encryption protects values, vectors, and WAL frames on disk.
+- `path` is the database directory, created if missing. Prefer `Application
+  Support` for data that should not be purged, and exclude large databases from
+  iCloud backups when appropriate.
+- Durability: `.durable` makes every acknowledged commit survive power loss,
+  `.balanced` keeps the journal consistent but may lose the latest commits,
+  `.performance` does not sync on commit (commits survive a crash of the app).
+- Encryption at rest arrives with the engine's native encryption; the SQLite-era
+  codec (`encryptionKey`, `openWithPassphrase`) is gone.
 - Opening the same path from multiple processes is not supported; a single
-  `LiliaDatabase` instance should own the file.
+  `LiliaDatabase` instance should own the directory.
 
 ### Resource profiles
 
-| Profile                  | Tuned for                         | Durability | Busy timeout | Writer queue | Read pool | WAL checkpoint | mmap     | Page cache |
-| ------------------------ | --------------------------------- | ---------- | ------------ | ------------ | --------- | -------------- | -------- | ---------- |
-| `FfiResourceProfile.server`      | Macs and server-class hardware | `durable`  | 5 000 ms     | 64           | 4         | 16 MB / 5 s    | 256 MB   | 64 MB      |
-| `FfiResourceProfile.mobile`      | iPhone, iPad, Apple TV         | `balanced` | 5 000 ms     | 32           | 2         | 4 MB / 3 s     | 32 MB    | 8 MB       |
-| `FfiResourceProfile.constrained` | Apple Watch, low-memory devices| `balanced` | 3 000 ms     | 16           | 1         | 1 MB / 1.5 s   | disabled | 2 MB       |
+| Profile                          | Tuned for                       | Engine buffers sized from                         |
+| -------------------------------- | ------------------------------- | ------------------------------------------------- |
+| `FfiResourceProfile.server`      | Macs and server-class hardware  | the whole machine                                 |
+| `FfiResourceProfile.mobile`      | iPhone, iPad, Apple TV          | a quarter of its memory, one compaction thread    |
+| `FfiResourceProfile.constrained` | Apple Watch, low-memory devices | a sixteenth of its memory, one compaction thread  |
 
 ---
 
@@ -409,7 +407,9 @@ if let doc {
 
 let deleted: Bool = try db.jsonDeleteSync(space: "users", id: "usr:1")
 
-// Filtered query: a JSON object of field-equality predicates combined with AND.
+// Query: field paths (or index names) and values, combined with AND. An index on a
+// term serves the query; without one, the space is scanned.
+try db.jsonCreateIndexSync(space: "users", name: "role", path: "$.role", filter: nil)
 // Array fields match when any element equals the value (multikey).
 let admins: [FfiJsonEntry] = try db.jsonFindSync(
     space: "users",
@@ -428,6 +428,11 @@ let admins: [FfiJsonEntry] = try db.jsonFindSync(
 | `jsonPut`    | `(space: String, id: String, valueJson: String) async throws -> UInt64`                                |
 | `jsonDelete` | `(space: String, id: String) async throws -> Bool`                                                     |
 | `jsonFind`   | `(space: String, queryJson: String, afterId: String?, limit: UInt32) async throws -> [FfiJsonEntry]`   |
+| `jsonCreateIndex` | `(space: String, name: String, path: String, filter: String?) async throws`                       |
+| `jsonDropIndex`   | `(space: String, name: String) async throws -> Bool`                                              |
+| `jsonListIndexes` | `(space: String) async throws -> [FfiJsonIndexInfo]`                                              |
+
+`limit: 0` reads everything. Create an index on the fields you query often.
 
 Each method also has a `*Sync` variant.
 
@@ -484,7 +489,7 @@ Each method also has a `*Sync` variant.
 
 ## 11. Full-Text Search (`fts*`)
 
-SQLite FTS5 with BM25 ranking and snippet extraction.
+BM25 ranking with snippets, typo-tolerant search and suggestions.
 
 ```swift
 try db.ftsIndexSync(
@@ -508,6 +513,10 @@ let removed: Bool = try db.ftsDeleteSync(collection: "articles", docId: "art:1")
 | `ftsIndex`  | `(collection: String, docId: String, content: String) async throws`                          |
 | `ftsSearch` | `(collection: String, query: String, limit: UInt32) async throws -> [FfiFtsHit]`             |
 | `ftsDelete` | `(collection: String, docId: String) async throws -> Bool`                                   |
+| `ftsSuggest` | `(collection: String, prefix: String, maxDistance: UInt8, limit: UInt32) async throws -> [FfiFtsSuggestion]` |
+| `ftsFuzzySearch` | `(collection: String, query: String, maxDistance: UInt8, limit: UInt32) async throws -> [FfiFtsFuzzyHit]` |
+| `ftsPhoneticSearch` | `(collection: String, query: String, limit: UInt32) async throws -> [FfiFtsPhoneticHit]` |
+| `ftsLoadDictionary` | `(collection: String, words: [String]) async throws` |
 
 Each method also has a `*Sync` variant.
 
@@ -515,31 +524,34 @@ Each method also has a `*Sync` variant.
 
 ## 12. Declarative SQL (`sqlQuery`)
 
-SQLite views over the multimodel storage:
+Read-only SQL (the DataFusion dialect) over tables of every model:
 
-| View                | Columns                                                           |
-| ------------------- | ----------------------------------------------------------------- |
-| `lilia_json`        | `(space, id, value, version)` — decoded plaintext JSON            |
-| `lilia_kv`          | `(namespace, key, value, version, expires_at_ms)` — decoded bytes |
-| `lilia_graph_nodes` | `(graph, id, kind, metadata)`                                     |
-| `lilia_graph_edges` | `(graph, source, target, kind)`                                   |
+| Table               | Columns                                                       |
+| ------------------- | ------------------------------------------------------------- |
+| `lilia_json`        | `space`, `id`, `value` (JSON text), `version`                 |
+| `lilia_kv`          | `namespace`, `key`, `value` (bytes), `version`, `expires_at_ms` |
+| `lilia_graph_nodes` | `graph`, `id`, `kind`, `metadata` (JSON text)                 |
+| `lilia_graph_edges` | `graph`, `source`, `target`, `kind`, `weight`                 |
+| `lilia_timeseries`  | `series`, `timestamp`, `value`                                |
+| `<space>`           | one table per JSON space: `id`, `value`, `version`            |
 
-Positional parameters are bound by passing a JSON array of values as
-`paramsJson` (or `nil` for none):
+JSON is read with `value->>'field'` and `json_get_str` / `json_get_int` /
+`json_get_float` / `json_get_bool`. Parameters `$1`, `$2`... are bound from a JSON
+array passed as `paramsJson` (or `nil` for none):
 
 ```swift
 let result: FfiSqlQueryResult = try db.sqlQuerySync(
     sql: """
-    SELECT id, json_extract(value, '$.name') AS name
+    SELECT id, value->>'name' AS name
     FROM lilia_json
-    WHERE space = ?1
+    WHERE space = $1
     """,
     paramsJson: #"["users"]"#
 )
 
 result.columns      // ["id", "name"]
 result.rowsJson     // each row serialized as a JSON array, e.g. #"["usr:1","Alice"]"#
-result.rowsAffected // 0 for SELECT, mutation count otherwise
+result.rowsAffected // 0: SQL is read-only
 ```
 
 `FfiSqlQueryResult` is `{ columns: [String], rowsJson: [String], rowsAffected: UInt64 }`.
@@ -688,17 +700,16 @@ Free functions: `geoHaversineDistance(lat1:lon1:lat2:lon2:)`,
 
 ---
 
-## 14. Maintenance, Backup & Lifecycle
+## 14. Maintenance & Lifecycle
 
 ```swift
-// SQLite PRAGMA quick_check integrity verification
+// Verifies the ledger, fast (true without a ledger)
 let ok: Bool = try db.quickCheckSync()
+// Reads every stored entry, verifying block checksums, and verifies the ledger
+let intact: Bool = try db.integrityCheckSync()
 
-// Explicit WAL checkpoint
+// Writes recent commits to their sorted runs
 try db.checkpointSync()
-
-// Atomic online backup to another file
-try db.backupSync(destinationPath: "\(documentsPath)/backup.lilia")
 
 // Graceful close: drain accepted in-flight operations, then release resources.
 try db.closeSync(timeoutMs: 5_000) // timeout in milliseconds, as UInt64
@@ -707,13 +718,13 @@ try db.closeSync(timeoutMs: 5_000) // timeout in milliseconds, as UInt64
 - `close` drains accepted in-flight operations before releasing resources; the
   timeout bounds the wait in milliseconds.
 - Operations started after `close` fail.
-- The `async` variants `quickCheck`, `checkpoint`, `backup`, and `close` behave
-  identically for Swift concurrency callers.
+- The `async` variants `quickCheck`, `integrityCheck`, `checkpoint`, and `close`
+  behave identically for Swift concurrency callers.
 
 ### App lifecycle integration
 
-`prepareForBackground()` flushes the WAL and commits pending pages before the OS
-suspends your process. Call it when your app enters the background:
+`checkpoint()` writes recent commits to their sorted runs before the OS suspends
+your process. Call it when your app enters the background:
 
 ```swift
 #if os(iOS) || os(tvOS)
@@ -733,7 +744,7 @@ final class LiliaLifecycleObserver {
     }
 
     @objc private func didEnterBackground() {
-        try? db.prepareForBackground()
+        try? db.checkpointSync()
     }
 }
 #endif
@@ -750,11 +761,13 @@ All operations throw `LiliaFfiError`, an enum with a `String` payload per case:
 
 | Case                          | Meaning                                                              |
 | ----------------------------- | -------------------------------------------------------------------- |
-| `LiliaFfiError.Storage`       | SQLite / storage engine failure                                      |
+| `LiliaFfiError.Storage`       | Storage engine failure                                               |
 | `LiliaFfiError.InvalidInput`  | Malformed JSON, invalid key length, bad arguments                    |
 | `LiliaFfiError.NotFound`      | Requested entry does not exist                                       |
 | `LiliaFfiError.Conflict`      | Optimistic concurrency or busy conflict                              |
-| `LiliaFfiError.Crypto`        | Encryption / decryption failure (e.g. wrong key, invalid key length) |
+| `LiliaFfiError.Closed`        | The database is closed                                               |
+| `LiliaFfiError.Timeout`       | `close` still waiting for calls after its timeout                    |
+| `LiliaFfiError.Unsupported`   | An operation this engine version does not have                       |
 | `LiliaFfiError.Generic`       | Any other engine error                                               |
 
 ```swift
@@ -762,8 +775,8 @@ do {
     _ = try db.jsonPutSync(space: "users", id: "usr:1", valueJson: payload)
 } catch let LiliaFfiError.InvalidInput(message) {
     print("Malformed JSON payload: \(message)")
-} catch let LiliaFfiError.Crypto(message) {
-    print("Decryption failed (wrong key?): \(message)")
+} catch LiliaFfiError.Closed {
+    print("The database is closed")
 } catch {
     print("Database error: \(error)")
 }
@@ -776,20 +789,19 @@ returns a debug description of the case and payload.
 
 ## 16. API Reference
 
-Every method exists as an `async` function and as a `*Sync` blocking variant
-(except `prepareForBackground`, which is sync-only).
+Every method exists as an `async` function and as a `*Sync` blocking variant.
 
 | Area          | Methods                                                                                                                     | Notes                                                     |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Open          | `LiliaDatabase.open`, `LiliaDatabase.openWithPassphrase`                                                                    | Static constructors; profile + optional key/passphrase    |
+| Open          | `LiliaDatabase.open(path:options:)`                                                                                         | `FfiOpenOptions`: profile, durability, ledger, history, undo |
 | KV            | `kvSet`, `kvGet`, `kvScan`, `kvDelete`                                                                                      | Binary keys/values; TTL via `expiresAtMs`                 |
-| JSON          | `jsonPut`, `jsonGet`, `jsonDelete`, `jsonFind`                                                                              | JSON strings; equality filters with keyset pagination     |
+| JSON          | `jsonPut`, `jsonGet`, `jsonDelete`, `jsonFind`, `jsonCreateIndex`, `jsonDropIndex`, `jsonListIndexes`                       | JSON strings; indexed queries with keyset pagination      |
 | Graph         | `graphSetNode`, `graphGetNode`, `graphDeleteNode`, `graphAddEdge`, `graphRemoveEdge`, `graphNeighbors`, `graphReachability` | `FfiDirection.outgoing` / `.incoming` / `.both`           |
-| FTS           | `ftsIndex`, `ftsSearch`, `ftsDelete`                                                                                        | FTS5, BM25 rank, snippets                                 |
-| SQL           | `sqlQuery`                                                                                                                  | Views + positional JSON params                            |
-| Time-series   | `tsAppendPoints`, `tsQueryRange`, `tsQueryStats`, `tsQueryAuto`, `tsQueryRangeWithResolution`, `tsSetPolicy`, `tsGetPolicy`, `tsListPolicies`, `tsDeletePolicy`, `tsApplyRetention` | Gorilla compression, rollups, retention |
-| Geofencing    | `geoAddFence`, `geoRemoveFence`, `geoContainsPoint`, `geoFindFencesForPoint`, `geoRecordGpsPoints`, `geoGetTrackPoints`, `geoTrackDistance` | Geopoly fences, GPS tracks, breach events |
-| Maintenance   | `checkpoint`, `backup`, `quickCheck`, `prepareForBackground`, `close`                                                       | `close(timeoutMs: UInt64)`                                |
+| FTS           | `ftsIndex`, `ftsSearch`, `ftsDelete`, `ftsSuggest`, `ftsFuzzySearch`, `ftsPhoneticSearch`, `ftsLoadDictionary`              | BM25 rank, snippets, typo tolerance                       |
+| SQL           | `sqlQuery`                                                                                                                  | Read-only DataFusion; `$n` params as a JSON array         |
+| Time-series   | `tsAppendPoints`, `tsQueryRange`, `tsQueryStats`, `tsQueryAuto`, `tsQueryRangeWithResolution`, `tsSetPolicy`, `tsGetPolicy`, `tsListPolicies`, `tsDeletePolicy`, `tsApplyRetention` | Rollups and retention policies |
+| Geofencing    | `geoAddFence`, `geoRemoveFence`, `geoContainsPoint`, `geoFindFencesForPoint`, `geoRecordGpsPoints`, `geoGetTrackPoints`, `geoTrackDistance` | Polygon fences, GPS tracks, fence entries |
+| Maintenance   | `checkpoint`, `quickCheck`, `integrityCheck`, `close`                                                                       | `close(timeoutMs: UInt64)`                                |
 
 ### Generated types
 
@@ -797,6 +809,8 @@ Every method exists as an `async` function and as a `*Sync` blocking variant
 | --------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `FfiKvEntry`                      | `namespace`, `key: Data`, `value: Data`, `version: UInt64`, `expiresAtMs: Int64?`              |
 | `FfiJsonEntry`                    | `space`, `id`, `valueJson`, `version: UInt64`                                                  |
+| `FfiJsonIndexInfo`                | `space`, `indexName`, `jsonPath`                                                               |
+| `FfiOpenOptions`                  | `profile`, `durability`, `ledger`, `historyRetentionMs: UInt64?`, `undoDepth: UInt32`          |
 | `FfiGraphNode`                    | `graph`, `id`, `kind`, `metadataJson`                                                          |
 | `FfiGraphEdge`                    | `graph`, `source`, `target`, `kind`                                                            |
 | `FfiFtsHit`                       | `collection`, `docId`, `snippet`, `rank: Double`                                               |
@@ -809,18 +823,18 @@ Every method exists as an `async` function and as a `*Sync` blocking variant
 | `FfiGpsPoint`                     | `timestamp`, `latitude`, `longitude`, optional `altitude`, `speed`, `accuracy`                 |
 | `FfiGeofenceMatch`                | `id`, `name`, `category`, `metadata: String?`                                                  |
 | `FfiResourceProfile`              | `.server`, `.mobile`, `.constrained`                                                           |
+| `FfiDurability`                   | `.durable`, `.balanced`, `.performance`                                                        |
 | `FfiDirection`                    | `.outgoing`, `.incoming`, `.both`                                                              |
 | `FfiDownsampleAggregation`        | `.avg`, `.min`, `.max`, `.sum`, `.first`, `.last`, `.count`                                    |
-| `LiliaFfiError`                   | `Storage`, `InvalidInput`, `NotFound`, `Conflict`, `Crypto`, `Generic`                         |
+| `LiliaFfiError`                   | `Storage`, `InvalidInput`, `NotFound`, `Conflict`, `Closed`, `Timeout`, `Unsupported`, `Generic` |
 
 ---
 
 ## 17. Related Documentation
 
 - [Architecture](../../docs/architecture.md)
-- [Node.js SDK](../../docs/node_sdk.md)
+- [Node.js SDK](../node/README.md)
 - [HTTP REST API](../../docs/http_api.md)
-- [Plugins](../../docs/plugins.md)
 - [Security Policy](../../SECURITY.md)
 - [Android SDK](../android-sdk/README.md)
 - [React Native](../react-native/README.md)

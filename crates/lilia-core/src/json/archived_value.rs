@@ -1,5 +1,3 @@
-#![allow(unsafe_code)]
-
 //! Relative-Pointer Zero-Copy Dynamic JSON representation powered by `rkyv`.
 //!
 //! Employs a flat, cache-contiguous node arena layout to eliminate recursion overhead,
@@ -44,6 +42,10 @@ impl JsonDocument {
         Self { root, nodes }
     }
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "a document has fewer nodes than bytes, and a record is far smaller than 4 GiB"
+    )]
     fn insert_serde_value(value: &serde_json::Value, nodes: &mut Vec<FlatNode>) -> u32 {
         let node = match value {
             serde_json::Value::Null => FlatNode::Null,
@@ -129,17 +131,6 @@ pub fn access_archived_doc(bytes: &[u8]) -> Result<&ArchivedJsonDocument> {
     })
 }
 
-/// 0-nanosecond unchecked pointer reinterpretation into trusted memory.
-///
-/// # Safety
-/// The caller must ensure that `bytes` is correctly aligned and represents
-/// a valid archived `JsonDocument`.
-#[inline]
-#[must_use]
-pub unsafe fn access_archived_doc_unchecked(bytes: &[u8]) -> &ArchivedJsonDocument {
-    rkyv::access_unchecked::<ArchivedJsonDocument>(bytes)
-}
-
 /// A borrowed zero-copy view over a specific node inside an `ArchivedJsonDocument`.
 #[derive(Debug, Clone, Copy)]
 pub struct ArchivedJsonView<'a> {
@@ -174,15 +165,7 @@ impl<'a> ArchivedJsonView<'a> {
     pub fn as_i64(&self) -> Option<i64> {
         match self.node()? {
             ArchivedFlatNode::Int(i) => Some(i.to_native()),
-            ArchivedFlatNode::Float(f) => {
-                let val = f.to_native();
-                #[allow(clippy::cast_possible_truncation)]
-                if val.fract() == 0.0 {
-                    Some(val as i64)
-                } else {
-                    None
-                }
-            }
+            ArchivedFlatNode::Float(f) => crate::json::binary::exact_int(f.to_native()),
             _ => None,
         }
     }
@@ -192,8 +175,7 @@ impl<'a> ArchivedJsonView<'a> {
     pub fn as_f64(&self) -> Option<f64> {
         match self.node()? {
             ArchivedFlatNode::Float(f) => Some(f.to_native()),
-            #[allow(clippy::cast_precision_loss)]
-            ArchivedFlatNode::Int(i) => Some(i.to_native() as f64),
+            ArchivedFlatNode::Int(i) => Some(crate::json::binary::int_as_real(i.to_native())),
             _ => None,
         }
     }
@@ -405,14 +387,13 @@ mod tests {
         // 0-nanosecond in-situ extraction
         assert_eq!(archived.extract_i64("id"), Some(1001));
         assert_eq!(archived.extract_str("profile.name"), Some("Ada Lovelace"));
-        assert_eq!(archived.extract_str("profile.email"), Some("ada@lovelace.org"));
+        assert_eq!(
+            archived.extract_str("profile.email"),
+            Some("ada@lovelace.org")
+        );
         assert_eq!(archived.extract_bool("profile.active"), Some(true));
         assert_eq!(archived.extract_f64("profile.score"), Some(98.75));
         assert_eq!(archived.extract_str("tags.1"), Some("computing"));
-
-        // Unchecked 0 ns cast in trusted memory
-        let direct = unsafe { access_archived_doc_unchecked(&bytes) };
-        assert_eq!(direct.extract_str("profile.email"), Some("ada@lovelace.org"));
 
         // Relocation verification: copy to an offset memory buffer
         let mut relocated = vec![0u8; 16]; // offset by 16 bytes
@@ -425,7 +406,7 @@ mod tests {
         );
 
         // Roundtrip to serde value matches original
-        let reconstructed = direct.to_serde();
+        let reconstructed = archived.to_serde();
         assert_eq!(reconstructed, json_val);
     }
 }

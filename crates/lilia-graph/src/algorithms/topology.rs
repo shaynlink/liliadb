@@ -168,7 +168,10 @@ pub fn strongly_connected_components(
     sccs
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Tarjan's recursion threads its counter, stacks and output through each call"
+)]
 fn strongconnect(
     u: usize,
     view: &GraphView,

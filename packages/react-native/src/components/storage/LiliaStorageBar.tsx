@@ -12,7 +12,6 @@ import { useDatabaseMaintenance } from '../../hooks.js';
 import type { LiliaDatabase } from '../../database.js';
 
 export interface LiliaStorageBarProps {
-  showVacuumButton?: boolean;
   showCheckpointButton?: boolean;
   barHeight?: number;
   style?: StyleProp<ViewStyle>;
@@ -23,50 +22,35 @@ export interface LiliaStorageBarProps {
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B';
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
 /**
- * Idiomatic storage gauge and maintenance component for LiliaDB.
- * Visualizes storage distribution across main database, WAL journal, and SHM shared memory,
- * with one-tap native Vacuum and Checkpoint operations.
+ * Idiomatic storage gauge for LiliaDB: the bytes of the database's sorted runs, on disk, and of
+ * its memtables, in memory until a checkpoint writes them to runs; with a one-tap checkpoint.
  */
 export function LiliaStorageBar({
-  showVacuumButton = true,
   showCheckpointButton = true,
   barHeight = 10,
   style,
   db,
   onMaintenanceComplete,
 }: LiliaStorageBarProps): React.ReactElement {
-  const { metrics, isLoading, vacuum, checkpoint } = useDatabaseMaintenance(db);
+  const { stats, isLoading, checkpoint } = useDatabaseMaintenance(db);
   const [isOperating, setIsOperating] = useState(false);
 
-  const mainBytes = metrics?.mainBytes ?? 0;
-  const walBytes = metrics?.walBytes ?? 0;
-  const shmBytes = metrics?.shmBytes ?? 0;
-  const totalBytes = metrics?.totalBytes || (mainBytes + walBytes + shmBytes) || 1;
-
-  const mainPct = Math.round((mainBytes / totalBytes) * 100);
-  const walPct = Math.round((walBytes / totalBytes) * 100);
-  const shmPct = Math.max(0, 100 - mainPct - walPct);
-
-  const handleVacuum = async () => {
-    setIsOperating(true);
-    try {
-      await vacuum();
-      onMaintenanceComplete?.();
-    } finally {
-      setIsOperating(false);
-    }
-  };
+  const diskBytes = stats?.levels.reduce((sum, level) => sum + level.bytes, 0) ?? 0;
+  const memoryBytes = stats?.memtableBytes ?? 0;
+  const runs = stats?.levels.reduce((sum, level) => sum + level.runs, 0) ?? 0;
+  const totalBytes = diskBytes + memoryBytes;
+  const diskShare = totalBytes === 0 ? 0 : Math.round((diskBytes / totalBytes) * 100);
 
   const handleCheckpoint = async () => {
     setIsOperating(true);
     try {
-      await checkpoint('truncate');
+      await checkpoint();
       onMaintenanceComplete?.();
     } finally {
       setIsOperating(false);
@@ -77,17 +61,14 @@ export function LiliaStorageBar({
     <View style={[styles.container, style]}>
       <View style={styles.header}>
         <Text style={styles.title}>LiliaDB Storage</Text>
-        <Text style={styles.total}>{formatBytes(metrics?.totalBytes ?? 0)}</Text>
+        <Text style={styles.total}>{formatBytes(totalBytes)}</Text>
       </View>
 
       {/* Segmented Progress Bar */}
       <View style={[styles.barContainer, { height: barHeight }]}>
-        <View style={[styles.barSegment, { flex: Math.max(mainPct, 1), backgroundColor: '#3B82F6' }]} />
-        {walBytes > 0 && (
-          <View style={[styles.barSegment, { flex: Math.max(walPct, 1), backgroundColor: '#F59E0B' }]} />
-        )}
-        {shmBytes > 0 && (
-          <View style={[styles.barSegment, { flex: Math.max(shmPct, 1), backgroundColor: '#10B981' }]} />
+        {diskBytes > 0 && <View style={[styles.barSegment, { flex: Math.max(diskShare, 1), backgroundColor: '#3B82F6' }]} />}
+        {memoryBytes > 0 && (
+          <View style={[styles.barSegment, { flex: Math.max(100 - diskShare, 1), backgroundColor: '#F59E0B' }]} />
         )}
       </View>
 
@@ -95,41 +76,21 @@ export function LiliaStorageBar({
       <View style={styles.legend}>
         <View style={styles.legendItem}>
           <View style={[styles.dot, { backgroundColor: '#3B82F6' }]} />
-          <Text style={styles.legendText}>Data: {formatBytes(mainBytes)}</Text>
+          <Text style={styles.legendText}>
+            On disk: {formatBytes(diskBytes)} ({runs} {runs === 1 ? 'run' : 'runs'})
+          </Text>
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.dot, { backgroundColor: '#F59E0B' }]} />
-          <Text style={styles.legendText}>WAL: {formatBytes(walBytes)}</Text>
-        </View>
-        <View style={styles.legendItem}>
-          <View style={[styles.dot, { backgroundColor: '#10B981' }]} />
-          <Text style={styles.legendText}>SHM: {formatBytes(shmBytes)}</Text>
+          <Text style={styles.legendText}>In memory: {formatBytes(memoryBytes)}</Text>
         </View>
       </View>
 
-      {/* Maintenance Actions */}
-      {(showVacuumButton || showCheckpointButton) && (
+      {showCheckpointButton && (
         <View style={styles.actions}>
-          {showCheckpointButton && (
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={handleCheckpoint}
-              disabled={isOperating || isLoading}
-            >
-              <Text style={styles.actionButtonText}>Checkpoint WAL</Text>
-            </TouchableOpacity>
-          )}
-
-          {showVacuumButton && (
-            <TouchableOpacity
-              style={[styles.actionButton, styles.vacuumButton]}
-              onPress={handleVacuum}
-              disabled={isOperating || isLoading}
-            >
-              <Text style={[styles.actionButtonText, styles.vacuumButtonText]}>Vacuum DB</Text>
-            </TouchableOpacity>
-          )}
-
+          <TouchableOpacity style={styles.actionButton} onPress={handleCheckpoint} disabled={isOperating || isLoading}>
+            <Text style={styles.actionButtonText}>Checkpoint</Text>
+          </TouchableOpacity>
           {isOperating && <ActivityIndicator size="small" color="#3B82F6" style={{ marginLeft: 8 }} />}
         </View>
       )}
@@ -210,11 +171,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#374151',
-  },
-  vacuumButton: {
-    backgroundColor: '#EFF6FF',
-  },
-  vacuumButtonText: {
-    color: '#2563EB',
   },
 });

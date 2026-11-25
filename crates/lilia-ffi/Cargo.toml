@@ -21,10 +21,10 @@ cli = ["uniffi/cli"]
 
 [dependencies]
 lilia-core = { path = "../lilia-core" }
-lilia-shm = { path = "../lilia-shm" }
-lilia-storage-sqlite = { path = "../lilia-storage-sqlite" }
+lilia-db = { path = "../lilia-db" }
+lilia-protocol = { path = "../lilia-protocol" }
 uniffi = { version = "0.28.3", features = ["tokio"] }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
