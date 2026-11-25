@@ -91,6 +91,14 @@ codegen-units = 1
 strip = "symbols"
 panic = "abort"
 
+# CI check of the Apple slices (tools/mobile/build-apple.sh): proves that every target compiles and
+# links, so it skips the optimisation the release profile spends most of its time on.
+[profile.apple-check]
+inherits = "release"
+opt-level = 0
+lto = "off"
+codegen-units = 256
+
 # The browser module (tools/wasm/build.sh): size before speed, the download being the cost.
 [profile.wasm]
 inherits = "release"
