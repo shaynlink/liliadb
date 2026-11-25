@@ -21,7 +21,7 @@ jobs:
       RUSTFLAGS: ${{ matrix.runner == 'ubuntu-24.04-arm' && '-C target-feature=+fp16' || '' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: clippy,rustfmt
       - name: Rules of the storage paradigm (§5.2)
@@ -89,7 +89,7 @@ jobs:
       - run: pnpm --filter "@liliadb/node..." build
       - run: pnpm --filter "@liliadb/node..." lint
       - run: pnpm --filter @liliadb/client test
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - name: Five-surface Node version conformance
         run: pnpm nx run lilia-conformance:test
 
@@ -102,7 +102,7 @@ jobs:
       AR_wasm32_unknown_unknown: llvm-ar-18
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: wasm32-unknown-unknown
           components: clippy

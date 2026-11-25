@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         if: inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.target
         with:
           targets: ${{ matrix.target }}
