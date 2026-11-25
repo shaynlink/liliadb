@@ -1,7 +1,12 @@
 // @liliadb/wasm: a LiliaDB database in WebAssembly, in the browser's origin private file system
 // or in memory. The calls are those of `@liliadb/client`.
 
-import { Database as ClientDatabase, nativeError, type EngineOptions, type Transport } from "@liliadb/client";
+import {
+  Database as ClientDatabase,
+  nativeError,
+  type EngineOptions,
+  type Transport,
+} from "@liliadb/client";
 import type { Endpoint } from "./messages.js";
 import { loadModule, ModuleDatabase, type ModuleSource } from "./module.js";
 import { ModuleTransport, WorkerTransport } from "./transport.js";
@@ -34,7 +39,8 @@ export interface OpenOptions extends EngineOptions {
 
 /** Whether this thread is a dedicated worker, where OPFS files open synchronously. */
 function inDedicatedWorker(): boolean {
-  const scope = (globalThis as { DedicatedWorkerGlobalScope?: abstract new () => unknown }).DedicatedWorkerGlobalScope;
+  const scope = (globalThis as { DedicatedWorkerGlobalScope?: abstract new () => unknown })
+    .DedicatedWorkerGlobalScope;
   return scope !== undefined && globalThis instanceof scope;
 }
 
@@ -43,12 +49,21 @@ function hasOpfs(): boolean {
 }
 
 /** The worker `option` names, and how to end it once the database closes. */
-function workerOf(option: Exclude<OpenOptions["worker"], false | undefined>): { endpoint: Endpoint; release: () => void } {
+function workerOf(option: Exclude<OpenOptions["worker"], false | undefined>): {
+  endpoint: Endpoint;
+  release: () => void;
+} {
   if (typeof Worker === "undefined") {
-    throw nativeError(new Error('{"code":"UNSUPPORTED","message":"this runtime has no Web Workers: open with worker: false","retryable":false}'));
+    throw nativeError(
+      new Error(
+        '{"code":"UNSUPPORTED","message":"this runtime has no Web Workers: open with worker: false","retryable":false}',
+      ),
+    );
   }
   if (option instanceof Worker) return { endpoint: option, release: () => undefined };
-  const worker = new Worker(option === true ? new URL("./worker.js", import.meta.url) : option, { type: "module" });
+  const worker = new Worker(option === true ? new URL("./worker.js", import.meta.url) : option, {
+    type: "module",
+  });
   return { endpoint: worker, release: () => worker.terminate() };
 }
 

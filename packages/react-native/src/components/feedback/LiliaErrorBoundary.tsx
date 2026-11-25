@@ -1,5 +1,5 @@
-import React, { Component, type ReactNode, type ErrorInfo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { Component, type ReactNode, type ErrorInfo } from "react";
+import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 
 export interface LiliaErrorBoundaryProps {
   fallback?: (error: Error, retry: () => void) => ReactNode;
@@ -58,34 +58,34 @@ export class LiliaErrorBoundary extends Component<LiliaErrorBoundaryProps, State
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: '#FEF2F2',
+    backgroundColor: "#FEF2F2",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#F87171',
-    alignItems: 'center',
+    borderColor: "#F87171",
+    alignItems: "center",
     margin: 16,
   },
   title: {
     fontSize: 16,
-    fontWeight: '700',
-    color: '#991B1B',
+    fontWeight: "700",
+    color: "#991B1B",
     marginBottom: 8,
   },
   message: {
     fontSize: 14,
-    color: '#7F1D1D',
-    textAlign: 'center',
+    color: "#7F1D1D",
+    textAlign: "center",
     marginBottom: 16,
   },
   button: {
-    backgroundColor: '#DC2626',
+    backgroundColor: "#DC2626",
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 8,
   },
   buttonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
+    color: "#FFFFFF",
+    fontWeight: "600",
     fontSize: 14,
   },
 });

@@ -8,9 +8,10 @@ import { existsSync } from "node:fs";
 import { Database } from "../dist/index.js";
 
 // Universal test declaration for Deno test runner and Node test runner
-const runTest = typeof (globalThis as any).Deno !== "undefined"
-  ? (name: string, fn: () => Promise<void>) => (globalThis as any).Deno.test(name, fn)
-  : (await import("node:test")).default;
+const runTest =
+  typeof (globalThis as any).Deno !== "undefined"
+    ? (name: string, fn: () => Promise<void>) => (globalThis as any).Deno.test(name, fn)
+    : (await import("node:test")).default;
 
 const candidateDaemon = [
   new URL("../../../target/debug/lilia-daemon", import.meta.url).pathname,
@@ -20,7 +21,12 @@ const candidateDaemon = [
 const daemonBinary = process.env.LILIA_DAEMON_BIN ?? candidateDaemon;
 
 /** Waits until the daemon of `path` accepts a client. */
-async function waitUntilReady(path: string, endpoint: string, tokenFile: string, daemon: ChildProcess): Promise<void> {
+async function waitUntilReady(
+  path: string,
+  endpoint: string,
+  tokenFile: string,
+  daemon: ChildProcess,
+): Promise<void> {
   const deadline = Date.now() + 10_000;
   for (;;) {
     if (daemon.exitCode !== null) throw new Error(`daemon exited with ${daemon.exitCode}`);
@@ -49,7 +55,7 @@ runTest("Deno: daemon client connects over Unix domain socket IPC", async () => 
   const daemonProc = spawn(
     daemonBinary,
     ["--database", dbPath, "--endpoint", endpoint, "--token-file", tokenFile],
-    { stdio: "ignore" }
+    { stdio: "ignore" },
   );
 
   try {

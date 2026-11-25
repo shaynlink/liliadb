@@ -8,6 +8,12 @@ use std::time::Duration;
 
 use lilia_protocol::{read_frame, write_frame, Codec, Operation, Request, Response, ResponseValue};
 
+/// How long the daemon may take to start, answer or stop. An upper bound, not a pace: a debug
+/// build starting while other test binaries compile and run in parallel (`nx run-many`) has
+/// taken more than 5 s; on an idle machine each cycle takes about 2 s.
+const PROCESS_DEADLINE_SECS: u64 = 60;
+const PROCESS_DEADLINE: Duration = Duration::from_secs(PROCESS_DEADLINE_SECS);
+
 struct ChildGuard(Child);
 
 impl Drop for ChildGuard {
@@ -37,12 +43,12 @@ async fn request(directory: &Path, token: &str, operation: Operation) -> Respons
     let request = Request {
         id: uuid::Uuid::new_v4().to_string(),
         token: token.into(),
-        deadline_ms: Some(5_000),
+        deadline_ms: Some(PROCESS_DEADLINE_SECS * 1_000),
         operation,
     };
     write_frame(&mut stream, &request).await.unwrap();
     let response: Response =
-        tokio::time::timeout(Duration::from_secs(5), read_frame::<Response>(&mut stream))
+        tokio::time::timeout(PROCESS_DEADLINE, read_frame::<Response>(&mut stream))
             .await
             .unwrap()
             .unwrap();
@@ -63,7 +69,7 @@ async fn duplicate_start_preserves_live_credentials_and_clean_restart_rotates_th
                 .spawn()
                 .unwrap(),
         );
-        let token = tokio::time::timeout(Duration::from_secs(5), async {
+        let token = tokio::time::timeout(PROCESS_DEADLINE, async {
             loop {
                 assert!(
                     daemon.0.try_wait().unwrap().is_none(),
@@ -91,7 +97,7 @@ async fn duplicate_start_preserves_live_credentials_and_clean_restart_rotates_th
             request(&directory, &token, Operation::Shutdown).await,
             ResponseValue::Shutdown
         ));
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(PROCESS_DEADLINE, async {
             loop {
                 if let Some(status) = daemon.0.try_wait().unwrap() {
                     assert!(status.success());

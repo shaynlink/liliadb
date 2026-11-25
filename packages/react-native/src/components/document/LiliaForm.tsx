@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useDocument } from '../../hooks.js';
-import type { LiliaDatabase } from '../../database.js';
+import React, { useState, useCallback, useMemo } from "react";
+import { useDocument } from "../../hooks.js";
+import type { LiliaDatabase } from "../../database.js";
 
 export interface FormHelpers<T> {
   values: T;
@@ -39,7 +39,12 @@ export function LiliaForm<T extends Record<string, any>>({
   onError,
   children,
 }: LiliaFormProps<T>): React.ReactElement | null {
-  const { data: remoteDoc, isLoading, error: docError, update } = useDocument<T>(space, id, {
+  const {
+    data: remoteDoc,
+    isLoading,
+    error: docError,
+    update,
+  } = useDocument<T>(space, id, {
     defaultValue: initialValues,
     db,
   });
@@ -48,52 +53,59 @@ export function LiliaForm<T extends Record<string, any>>({
     return remoteDoc ?? initialValues ?? ({} as T);
   }, [remoteDoc, initialValues]);
 
-  const [values, setValuesState] = useState<T>(baseValues);
+  // The user's values while they differ from the document; the document (which other writers
+  // may change) shows when there are none.
+  const [edits, setEdits] = useState<T | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<Error | null>(docError);
-  const baseValuesRef = useRef<T>(baseValues);
-
-  useEffect(() => {
-    baseValuesRef.current = baseValues;
-    setValuesState(baseValues);
-  }, [baseValues]);
+  const [submitError, setSubmitError] = useState<Error | null>(null);
+  const values = edits ?? baseValues;
 
   const isDirty = useMemo(() => {
+    if (edits === null) return false;
     try {
-      return JSON.stringify(values) !== JSON.stringify(baseValuesRef.current);
+      return JSON.stringify(edits) !== JSON.stringify(baseValues);
     } catch {
-      return values !== baseValuesRef.current;
+      return edits !== baseValues;
     }
-  }, [values]);
+  }, [edits, baseValues]);
 
-  const setFieldValue = useCallback(<K extends keyof T>(field: K, val: T[K]) => {
-    setValuesState((prev) => ({
-      ...prev,
-      [field]: val,
-    }));
-  }, []);
+  const setFieldValue = useCallback(
+    <K extends keyof T>(field: K, val: T[K]) => {
+      setEdits((prev) => ({
+        ...(prev ?? baseValues),
+        [field]: val,
+      }));
+    },
+    [baseValues],
+  );
 
-  const setValues = useCallback((newValues: T | ((prev: T) => T)) => {
-    setValuesState(newValues);
-  }, []);
+  const setValues = useCallback(
+    (newValues: T | ((prev: T) => T)) => {
+      setEdits((prev) =>
+        typeof newValues === "function" ? newValues(prev ?? baseValues) : newValues,
+      );
+    },
+    [baseValues],
+  );
 
   const reset = useCallback(() => {
-    setValuesState(baseValuesRef.current);
+    setEdits(null);
   }, []);
 
   const submit = useCallback(async () => {
     setIsSubmitting(true);
-    setError(null);
+    setSubmitError(null);
     try {
       if (onSubmit) {
         await onSubmit(values);
       }
       await update(values);
-      baseValuesRef.current = values;
+      // The document now holds these values; edits made during the commit stay.
+      setEdits((current) => (current === values ? null : current));
       onSuccess?.(values);
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
-      setError(e);
+      setSubmitError(e);
       onError?.(e);
     } finally {
       setIsSubmitting(false);
@@ -107,7 +119,7 @@ export function LiliaForm<T extends Record<string, any>>({
     isDirty,
     isSubmitting,
     isLoading,
-    error,
+    error: submitError ?? docError,
     submit,
     reset,
   };

@@ -18,7 +18,9 @@ export interface NativeLilia {
 }
 
 /** The directories a database may live in, by name; each exists. */
-export type Directories = Partial<Record<"applicationSupport" | "documents" | "caches" | "noBackup" | "files" | "cache", string>>;
+export type Directories = Partial<
+  Record<"applicationSupport" | "documents" | "caches" | "noBackup" | "files" | "cache", string>
+>;
 
 declare global {
   // The binding's entry point, which the TurboModule installs when it is created.
@@ -26,12 +28,17 @@ declare global {
 }
 
 /** The TurboModule, whose creation installed the binding. */
-export function platformModule(): { directories(): Directories; groupContainer(identifier: string): string | null; excludeFromBackup(path: string): boolean } {
+export function platformModule(): {
+  directories(): Directories;
+  groupContainer(identifier: string): string | null;
+  excludeFromBackup(path: string): boolean;
+} {
   const module = LiliaModule;
   if (!module) {
     throw new LiliaError({
       code: "UNSUPPORTED",
-      message: "the LiliaDB native module is not linked: run `pod install` (iOS) or rebuild the app (Android)",
+      message:
+        "the LiliaDB native module is not linked: run `pod install` (iOS) or rebuild the app (Android)",
       retryable: false,
     });
   }
@@ -48,7 +55,8 @@ export function nativeLilia(): NativeLilia {
   if (!globalThis.__liliadb) {
     throw new LiliaError({
       code: "UNSUPPORTED",
-      message: "the LiliaDB JSI binding is not installed: the app must run the New Architecture, with JavaScript on the device",
+      message:
+        "the LiliaDB JSI binding is not installed: the app must run the New Architecture, with JavaScript on the device",
       retryable: false,
     });
   }

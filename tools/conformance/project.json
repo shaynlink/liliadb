@@ -21,16 +21,11 @@
     "test": {
       "executor": "nx:run-commands",
       "cache": false,
-      "dependsOn": [
-        "build"
-      ],
+      "dependsOn": ["build"],
       "options": {
         "command": "node tools/conformance/run.mjs"
       }
     }
   },
-  "tags": [
-    "scope:conformance",
-    "type:application"
-  ]
+  "tags": ["scope:conformance", "type:application"]
 }

@@ -1,9 +1,9 @@
-import React, { useCallback } from 'react';
-import { Switch, type SwitchProps } from 'react-native';
-import { useKvState } from '../../hooks.js';
-import type { LiliaDatabase } from '../../database.js';
+import React, { useCallback } from "react";
+import { Switch, type SwitchProps } from "react-native";
+import { useKvState } from "../../hooks.js";
+import type { LiliaDatabase } from "../../database.js";
 
-export interface LiliaKvSwitchProps extends Omit<SwitchProps, 'value' | 'onValueChange'> {
+export interface LiliaKvSwitchProps extends Omit<SwitchProps, "value" | "onValueChange"> {
   namespace: string;
   storageKey: string;
   defaultValue?: boolean;
@@ -30,14 +30,8 @@ export function LiliaKvSwitch({
       void setValue(newValue);
       onValueChange?.(newValue);
     },
-    [setValue, onValueChange]
+    [setValue, onValueChange],
   );
 
-  return (
-    <Switch
-      value={Boolean(value)}
-      onValueChange={handleValueChange}
-      {...switchProps}
-    />
-  );
+  return <Switch value={Boolean(value)} onValueChange={handleValueChange} {...switchProps} />;
 }

@@ -39,12 +39,16 @@ The SDK is a Gradle library module shipping:
 
 | Requirement                        | Version                                                     |
 | ---------------------------------- | ----------------------------------------------------------- |
-| Android Gradle Plugin / compileSdk | 34                                                          |
+| Android Gradle Plugin              | 9.x (built-in Kotlin: the module applies no Kotlin plugin)  |
+| `compileSdk`                       | 37                                                          |
 | `minSdk`                           | 21 (Android 5.0+, Wear OS 1.0+, Android TV)                 |
-| Kotlin                             | 2.x (any version compatible with your AGP)                  |
-| JNA                                | 5.14.0 (`net.java.dev.jna:jna@aar`, declared by the module) |
-| kotlinx-coroutines                 | 1.8.0 (declared by the module)                              |
+| JDK                                | 17 or later                                                 |
+| JNA                                | 5.19.1 (`net.java.dev.jna:jna@aar`, declared by the module) |
+| kotlinx-coroutines                 | 1.11.0 (declared by the module)                             |
 | Native ABIs                        | `arm64-v8a`, `armeabi-v7a`, `x86_64`                        |
+
+The module ships its R8 rules (`consumer-rules.pro`): JNA and the generated binding keep their
+names in a minified app.
 
 No additional Android permissions are required: the database is a single file
 your app owns (typically under `Context.filesDir`).
@@ -123,8 +127,8 @@ The script:
 3. Cross-compiles `lilia-ffi` in release mode for
    `aarch64-linux-android` (`arm64-v8a`), `armv7-linux-androideabi`
    (`armeabi-v7a`), and `x86_64-linux-android` (`x86_64`) into
-   `release/android/jniLibs/`.
-4. Rewrites `packages/android-sdk/build.gradle.kts`.
+   `release/android/jniLibs/` (with [cargo-ndk](https://github.com/bbqsrc/cargo-ndk) and
+   `ANDROID_NDK_HOME` pointing at an NDK).
 
 Continuous integration (`.github/workflows/mobile-targets.yml`) runs the script on
 every pull request touching `crates/**` or `tools/mobile/**` to verify Kotlin
@@ -135,6 +139,7 @@ binding generation against the Android toolchain targets.
 ```
 packages/android-sdk/
 ├── build.gradle.kts                            # Android library module
+├── consumer-rules.pro                          # R8 rules for the apps that use it
 └── src/main/java/uniffi/lilia_ffi/
     └── lilia_ffi.kt                            # Generated UniFFI Kotlin bindings
 ```

@@ -9,7 +9,10 @@ test("u64 validation rejects coercion and preserves both limits", () => {
     assert.equal(readVersion(value.toString()), value);
   }
   for (const value of [-1n, 18446744073709551616n, 1, "1", null]) {
-    assert.throws(() => checkedVersion(value as bigint), error => error instanceof LiliaError && error.code === "INVALID_INPUT" && !!error.requestId);
+    assert.throws(
+      () => checkedVersion(value as bigint),
+      (error) => error instanceof LiliaError && error.code === "INVALID_INPUT" && !!error.requestId,
+    );
   }
   for (const value of [9007199254740992, "01", "+1", "", "18446744073709551616", -1n]) {
     assert.throws(() => readVersion(value));

@@ -1,11 +1,55 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
+# Dependency updates, one pull request a week per ecosystem: minor and patch releases are grouped,
+# each major release gets its own pull request. Security updates are opened as soon as an
+# advisory is published, whatever the schedule.
 version: 2
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: cargo
+    directory: /
     schedule:
-      interval: "weekly"
+      interval: weekly
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /tools/lilia-bench
+    schedule:
+      interval: weekly
+    groups:
+      lilia-bench:
+        update-types: [minor, patch]
+
+  # The pnpm workspace: every package of pnpm-workspace.yaml, from the root lockfile.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        update-types: [minor, patch]
+
+  - package-ecosystem: gradle
+    directories: [/packages/android-sdk, /packages/react-native/android, /packages/flutter/android]
+    schedule:
+      interval: weekly
+    groups:
+      gradle:
+        update-types: [minor, patch]
+
+  - package-ecosystem: swift
+    directory: /packages/apple-spm
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pub
+    directory: /packages/flutter
+    schedule:
+      interval: weekly

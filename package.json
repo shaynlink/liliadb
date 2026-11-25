@@ -3,17 +3,19 @@
   "version": "0.2.0-alpha.1",
   "private": true,
   "license": "Apache-2.0",
-  "packageManager": "pnpm@11.5.2",
-  "workspaces": ["packages/*", "apps/lilia-vscode", "examples/*"],
-  "engines": {
-    "node": ">=22"
-  },
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "check:size": "tools/check-file-size.sh staged",
     "build": "nx run-many -t build",
     "test": "nx run-many -t test",
-    "lint": "nx run-many -t lint",
+    "lint": "pnpm lint:js && pnpm format:check && nx run-many -t lint",
+    "lint:js": "oxlint --deny-warnings --report-unused-disable-directives",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "bench": "nx run-many -t bench --parallel=1",
     "bench:compare": "node tools/build-prebuilds.mjs && pnpm --filter @liliadb/node build && cargo build --release -p lilia-daemon && cargo run --release --manifest-path tools/lilia-bench/Cargo.toml -- suite",
     "bench:compare:quick": "node tools/build-prebuilds.mjs && pnpm --filter @liliadb/node build && cargo build --release -p lilia-daemon && cargo run --release --manifest-path tools/lilia-bench/Cargo.toml -- suite --profile quick --out target/benchmarks-quick.jsonl --report target/benchmarks-quick.md",
@@ -23,11 +25,17 @@
     "lilia": "cargo run -p lilia-cli --"
   },
   "devDependencies": {
-    "@msgpack/msgpack": "3.1.2",
-    "@nx/js": "23.2.1",
-    "@types/react": "^18.3.31",
-    "nx": "23.2.1",
+    "@msgpack/msgpack": "3.1.3",
+    "@nx/js": "24.0.6",
+    "@types/react": "^19.3.0",
+    "nx": "24.0.6",
+    "oxfmt": "0.80.0",
+    "oxlint": "1.95.0",
     "react-native": "^0.88.1",
-    "typescript": "6.0.2"
-  }
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.5.2"
 }

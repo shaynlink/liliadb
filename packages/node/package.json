@@ -3,10 +3,11 @@
   "version": "0.2.0-alpha.1",
   "description": "Local-first multimodel database for Node.js",
   "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -21,16 +22,19 @@
       "default": "./dist/native.js"
     }
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test dist/**/*.test.js",
     "test:bun": "bun test tests/compat-bun.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "package": "pnpm pack --pack-destination ../../dist"
+  },
+  "dependencies": {
+    "@liliadb/client": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
   },
   "optionalDependencies": {
     "@liliadb/node-darwin-arm64": "workspace:*",
@@ -39,11 +43,7 @@
     "@liliadb/node-linux-x64-gnu": "workspace:*",
     "@liliadb/node-win32-x64-msvc": "workspace:*"
   },
-  "devDependencies": {
-    "@types/node": "24.10.0",
-    "typescript": "6.0.2"
-  },
-  "dependencies": {
-    "@liliadb/client": "workspace:*"
+  "engines": {
+    "node": ">=22"
   }
 }

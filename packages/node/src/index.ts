@@ -3,7 +3,13 @@
 // transports and Node's streams.
 
 import { Readable } from "node:stream";
-import { Database as ClientDatabase, type JsonEntry, type JsonValue, type KvEntry, type ScanStreamOptions } from "@liliadb/client";
+import {
+  Database as ClientDatabase,
+  type JsonEntry,
+  type JsonValue,
+  type KvEntry,
+  type ScanStreamOptions,
+} from "@liliadb/client";
 import type { OpenOptions } from "./options.js";
 import { DaemonTransport, NativeTransport, type Transport } from "./transport.js";
 
@@ -28,20 +34,28 @@ function webStream<T>(records: AsyncIterableIterator<T>): ReadableStream<T> {
 function kvStreams(kv: ClientDatabase["kv"]) {
   return {
     ...kv,
-    readableStream: (namespace: string, options: ScanStreamOptions<Uint8Array | string> = {}): ReadableStream<KvEntry> =>
-      webStream(kv.scanStream(namespace, options)),
-    createReadStream: (namespace: string, options: ScanStreamOptions<Uint8Array | string> = {}): Readable =>
-      Readable.from(kv.scanStream(namespace, options), { objectMode: true }),
+    readableStream: (
+      namespace: string,
+      options: ScanStreamOptions<Uint8Array | string> = {},
+    ): ReadableStream<KvEntry> => webStream(kv.scanStream(namespace, options)),
+    createReadStream: (
+      namespace: string,
+      options: ScanStreamOptions<Uint8Array | string> = {},
+    ): Readable => Readable.from(kv.scanStream(namespace, options), { objectMode: true }),
   };
 }
 
 function jsonStreams(json: ClientDatabase["json"]) {
   return {
     ...json,
-    readableStream: <T = JsonValue>(space: string, options: ScanStreamOptions<string> = {}): ReadableStream<JsonEntry<T>> =>
-      webStream(json.scanStream<T>(space, options)),
-    createReadStream: <T = JsonValue>(space: string, options: ScanStreamOptions<string> = {}): Readable =>
-      Readable.from(json.scanStream<T>(space, options), { objectMode: true }),
+    readableStream: <T = JsonValue>(
+      space: string,
+      options: ScanStreamOptions<string> = {},
+    ): ReadableStream<JsonEntry<T>> => webStream(json.scanStream<T>(space, options)),
+    createReadStream: <T = JsonValue>(
+      space: string,
+      options: ScanStreamOptions<string> = {},
+    ): Readable => Readable.from(json.scanStream<T>(space, options), { objectMode: true }),
   };
 }
 
@@ -58,19 +72,24 @@ export class Database extends ClientDatabase {
   /** Opens the database of `options.path`, embedded, or connects to its daemon (`mode: "daemon"`). */
   static async open(options: OpenOptions): Promise<Database> {
     options.signal?.throwIfAborted();
-    const transport = options.mode === "daemon"
-      ? await DaemonTransport.open(options.endpoint ?? `${options.path}.sock`, options.tokenFile ?? `${options.path}.token`, options.signal)
-      : await NativeTransport.open(
-          {
-            path: options.path,
-            durability: options.durability,
-            profile: options.profile,
-            ledger: options.ledger,
-            historyRetentionMs: options.historyRetentionMs,
-            undoDepth: options.undoDepth,
-          },
-          options.signal
-        );
+    const transport =
+      options.mode === "daemon"
+        ? await DaemonTransport.open(
+            options.endpoint ?? `${options.path}.sock`,
+            options.tokenFile ?? `${options.path}.token`,
+            options.signal,
+          )
+        : await NativeTransport.open(
+            {
+              path: options.path,
+              durability: options.durability,
+              profile: options.profile,
+              ledger: options.ledger,
+              historyRetentionMs: options.historyRetentionMs,
+              undoDepth: options.undoDepth,
+            },
+            options.signal,
+          );
     return new Database(transport);
   }
 }

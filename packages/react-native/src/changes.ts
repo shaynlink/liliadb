@@ -17,18 +17,23 @@ function hex(bytes: Uint8Array): string {
 export const topics = {
   /** A namespace, or one of its keys. */
   kv: (namespace: string, key?: Uint8Array | string): string =>
-    key === undefined ? `kv:${namespace}` : `kv:${namespace}:${hex(typeof key === "string" ? encoder.encode(key) : key)}`,
+    key === undefined
+      ? `kv:${namespace}`
+      : `kv:${namespace}:${hex(typeof key === "string" ? encoder.encode(key) : key)}`,
   /** A space, or one of its documents. */
-  json: (space: string, id?: string): string => (id === undefined ? `json:${space}` : `json:${space}:${id}`),
+  json: (space: string, id?: string): string =>
+    id === undefined ? `json:${space}` : `json:${space}:${id}`,
   graph: (graph: string): string => `graph:${graph}`,
   fts: (collection: string): string => `fts:${collection}`,
   vector: (collection: string): string => `vector:${collection}`,
   /** Every series, or one. */
-  timeseries: (series?: string): string => (series === undefined ? "timeseries" : `timeseries:${series}`),
+  timeseries: (seriesId?: string): string =>
+    seriesId === undefined ? "timeseries" : `timeseries:${seriesId}`,
   geofences: (): string => "geo:fences",
   track: (trackId: string): string => `geo:track:${trackId}`,
   /** A space of CRDTs, or one of them. */
-  crdt: (space: string, id?: string): string => (id === undefined ? `crdt:${space}` : `crdt:${space}:${id}`),
+  crdt: (space: string, id?: string): string =>
+    id === undefined ? `crdt:${space}` : `crdt:${space}:${id}`,
   /** A table of SQL queries: `lilia_kv`, `lilia_json`, a JSON space... */
   table: (name: string): string => `table:${name}`,
 };
@@ -39,11 +44,20 @@ function kv(namespace: string, key: Uint8Array): string[] {
 
 function json(space: string, id: string): string[] {
   // Every JSON space is a table of its own, besides `lilia_json`.
-  return [topics.json(space), topics.json(space, id), topics.table("lilia_json"), topics.table(space)];
+  return [
+    topics.json(space),
+    topics.json(space, id),
+    topics.table("lilia_json"),
+    topics.table(space),
+  ];
 }
 
 function nodes(graph: string): string[] {
-  return [topics.graph(graph), topics.table("lilia_graph_nodes"), topics.table("lilia_graph_edges")];
+  return [
+    topics.graph(graph),
+    topics.table("lilia_graph_nodes"),
+    topics.table("lilia_graph_edges"),
+  ];
 }
 
 function edges(graph: string): string[] {

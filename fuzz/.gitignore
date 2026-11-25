@@ -1,0 +1,5 @@
+# Build output, the corpus the fuzzer grows (seeds.mjs writes its seeds), and the inputs it found.
+target/
+corpus/
+artifacts/
+coverage/

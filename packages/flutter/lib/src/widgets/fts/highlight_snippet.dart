@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Renders a full-text search snippet, styling the matched terms it marks as `<b>match</b>`.
 class LiliaHighlightSnippet extends StatelessWidget {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from "react";
 import {
   View,
   TextInput,
@@ -9,10 +9,10 @@ import {
   type StyleProp,
   type ViewStyle,
   type TextStyle,
-} from 'react-native';
-import { useFts } from '../../hooks.js';
-import type { FtsHit } from '@liliadb/client';
-import type { LiliaDatabase } from '../../database.js';
+} from "react-native";
+import { useFts } from "../../hooks.js";
+import type { FtsHit } from "@liliadb/client";
+import type { LiliaDatabase } from "../../database.js";
 
 export interface LiliaSearchBarProps {
   collection: string;
@@ -35,13 +35,13 @@ export function LiliaSearchBar({
   onSearch,
   limit = 20,
   debounceMs = 250,
-  placeholder = 'Search...',
+  placeholder = "Search...",
   containerStyle,
   inputStyle,
   db,
   onClear,
 }: LiliaSearchBarProps): React.ReactElement {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
   const { hits, isSearching } = useFts(collection, query, {
     limit,
     debounceMs,
@@ -53,7 +53,7 @@ export function LiliaSearchBar({
   }, [hits, onSearch]);
 
   const handleClear = () => {
-    setQuery('');
+    setQuery("");
     onClear?.();
   };
 
@@ -73,7 +73,11 @@ export function LiliaSearchBar({
       {isSearching ? (
         <ActivityIndicator size="small" color="#6B7280" style={styles.actionIcon} />
       ) : query.length > 0 ? (
-        <TouchableOpacity onPress={handleClear} style={styles.actionIcon} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity
+          onPress={handleClear}
+          style={styles.actionIcon}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Text style={styles.clearText}>✕</Text>
         </TouchableOpacity>
       ) : null}
@@ -83,9 +87,9 @@ export function LiliaSearchBar({
 
 const styles = StyleSheet.create({
   container: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F3F4F6',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
     borderRadius: 10,
     paddingHorizontal: 12,
     height: 44,
@@ -97,7 +101,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     fontSize: 16,
-    color: '#111827',
+    color: "#111827",
     paddingVertical: 0,
   },
   actionIcon: {
@@ -105,7 +109,7 @@ const styles = StyleSheet.create({
   },
   clearText: {
     fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '700',
+    color: "#6B7280",
+    fontWeight: "700",
   },
 });

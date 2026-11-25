@@ -78,6 +78,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   benchmark numbers.
 - JavaScript benchmark drivers moved out of the published `@liliadb/node` package into
   `tools/benchmarks/sdk/`, one process per surface, with read workloads added.
+- **JavaScript lint and format**: `oxlint` (correctness, suspicious and perf rules, with the
+  TypeScript, React, import, Node and promise plugins) and `oxfmt` (100 columns) check the
+  TypeScript and JavaScript of the workspace: `pnpm lint:js`, `pnpm format`, `pnpm format:check`,
+  and a CI job. Development dependencies `fast-xml-parser` and `minimatch` are pinned to their
+  patched releases (5.12.1, 11.0.9) by workspace overrides.
+- **`@liliadb/client`**: the calls are defined in one module per model (`src/api/`), on shared
+  helpers; the API does not change. `CallOptions` (a call's `signal`) and `VectorInput` are now
+  exported types.
+- **Security policy and supply chain**: `SECURITY.md` (private reporting through GitHub, the
+  security model); `cargo deny check` in CI (advisories, licenses, sources; `deny.toml`), the
+  workspace crates marked `publish = false`; Dependabot for Cargo, npm, GitHub Actions, Gradle,
+  Swift and pub; `url`, `rustix` and `tokio` updated past RUSTSEC-2026-0592, -0486 and -0386.
+- **Fuzzing** (`fuzz/`, nightly in CI): `request-rkyv`, `request-msgpack`, `execute` (sequences
+  of operations, seeded from what `@liliadb/client` sends) and `disk-open` (damaged database
+  files).
+- **Dependencies at their latest releases**:
+  - Rust: `uniffi` 0.32 (the Swift and Kotlin bindings are regenerated; `bincode`, unmaintained,
+    leaves the tree), `ort` 2.0.0-rc.15 (rustls instead of the platform TLS to download ONNX
+    Runtime), `rand` 0.10, `sha2` 0.11, `simd-json` 0.19, `base64` 0.23, `parking_lot` 0.13,
+    `criterion` 0.8, `wasm-bindgen` 0.2.130 (and its CLI in CI); the benchmarks' `rusqlite` 0.43
+    and `duckdb` 1.20001. DataFusion stays on 55 until `datafusion-functions-json` supports 56.
+  - JavaScript: TypeScript 7, nx 24 (patched to match globs without `minimatch.makeRe`, which
+    the patched minimatch 11 no longer has), `@types/node` 26, `@types/react` 19.
+  - Android: AGP 9.5, compile SDK 37, JNA 5.19, kotlinx-coroutines 1.11. `android-sdk` and the
+    Flutter plugin drop the Kotlin Gradle plugin (AGP 9 compiles Kotlin itself) and `targetSdk`
+    (an app's setting). `android-sdk` ships the R8 rules (`consumer-rules.pro`) its build
+    referred to but never had: JNA and the binding keep their names in minified apps.
+  - Flutter: `ffi` 2.2, `flutter_lints` 6, `material_ui` 1.11 (in place of
+    `package:flutter/material.dart`), Dart 3.13 and Flutter 3.47 at least.
+  - GitHub Actions: `checkout` v7, `setup-node` v7, `upload-artifact` v7, `download-artifact` v8,
+    `pnpm/action-setup` v6.
 - **`lilia-cli`** runs on `lilia-db`: the commands the protocol has are operations of
   `lilia_protocol::execute`, as for the daemon and the bindings, and print what their response
   carries; bitemporal reads and the ledger use the database itself. The database is a directory;
@@ -150,6 +181,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`lilia-core`**: a timestamp with more than 21 fractional digits overflowed while scaling them
   to milliseconds; digits beyond the millisecond are now ignored. A whole archived float beyond
   the range of `i64` read as `i64::MAX` or `i64::MIN`; `as_i64` now answers `None`.
+- **`lilia-engine`**: a damaged table footer or index entry could give a block size of gigabytes,
+  allocated before the checksum refused the block (found by the `disk-open` fuzz target). A block
+  must now end before the table's footer, and a table shorter than its manifest records is
+  corruption.
+- **`liliadb_flutter` builds and runs**: five optional calls written `f?.(x)` (not Dart) kept the
+  package from compiling. The plugin declared a `LiliadbFlutterPlugin` class that existed on iOS
+  only (and macOS had no native project at all); it is now an FFI plugin (`ffiPlugin`) whose iOS
+  and macOS share `darwin/`, a Swift package and a podspec around the xcframework. A C file
+  references the engine's C ABI so that the static library is linked in and Dart finds its
+  functions in the process, on macOS as on iOS (the loader opened a dylib on macOS that the
+  xcframework does not have). Checked on an Android 36 emulator, the iOS simulator and macOS,
+  with Swift Package Manager and with CocoaPods.
+- **Mobile build scripts**: `build-apple.sh` builds the iOS slices with Xcode's SDKs (the Command
+  Line Tools that `.cargo/config.toml` names have none) and copies the xcframework into the
+  Flutter plugin; `build-android.sh` no longer rewrites `packages/android-sdk/build.gradle.kts`
+  with stale versions.
+- **`lilia-daemon` tests**: the startup test waited 5 s for a debug daemon, which a machine busy
+  with parallel test binaries exceeded; it now waits up to 60 s.
+- **`@liliadb/react-native`**: a `LiliaKvInput` given `onBlur` no longer skips storing the text
+  typed when it loses focus, and the list components no longer let their own props
+  (`ListFooterComponent`, `ListEmptyComponent`, `refreshControl`) override the loading footer,
+  empty state and pull-to-refresh they set. `LiliaForm` keeps the user's edits when another writer
+  changes the document, and reports the document's read errors as well as its own. The hooks no
+  longer write refs during render nor set state synchronously in effects; `useLiliaDatabase` no
+  longer shows the database of the previous options while the new ones open.
 
 ### Removed
 - `lilia_bench`, `bench_rusqlite` and `lilia_bench_analytics` binaries and the `bench-bin` feature of
@@ -185,6 +241,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lilia` commands retired with SQLite: `backup`, `blob`, `integrity` (references and checks),
   `json create-collection` and `json set-check`, `plugin` and the global `--plugin` (the daemon no
   longer loads plugins), and `zk setup --template` (one circuit).
+- The VS Code extension (`apps/lilia-vscode`) and its launch configuration: it still called the
+  backup and change-event APIs removed with the SQLite engine and was never ported to the v0.2 SDK.
 
 ---
 

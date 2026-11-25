@@ -28,13 +28,15 @@ export class LiliaDatabase extends Database {
     /** The database's directory. */
     readonly path: string,
     private readonly observer: DatabaseObserver,
-    checkpointOnBackground: boolean
+    checkpointOnBackground: boolean,
   ) {
     super(transport);
     if (checkpointOnBackground) {
       this.appState = AppState.addEventListener("change", (state) => {
         if (state === "background" && !this.isClosed) {
-          this.checkpoint().catch((error: unknown) => console.warn("[LiliaDB] background checkpoint failed", error));
+          this.checkpoint().catch((error: unknown) =>
+            console.warn("[LiliaDB] background checkpoint failed", error),
+          );
         }
       });
     }
@@ -60,7 +62,7 @@ export class LiliaDatabase extends Database {
           ledger: options.ledger,
           history_retention_ms: options.historyRetentionMs,
           undo_depth: options.undoDepth,
-        })
+        }),
       );
     } catch (error) {
       throw nativeError(error);
@@ -69,8 +71,15 @@ export class LiliaDatabase extends Database {
       platformModule().excludeFromBackup(path);
     }
     const observer = new DatabaseObserver();
-    const transport = new JsiTransport(native, (operation) => observer.emit(changedTopics(operation)));
-    const database = new LiliaDatabase(transport, path, observer, options.checkpointOnBackground ?? true);
+    const transport = new JsiTransport(native, (operation) =>
+      observer.emit(changedTopics(operation)),
+    );
+    const database = new LiliaDatabase(
+      transport,
+      path,
+      observer,
+      options.checkpointOnBackground ?? true,
+    );
     if (reuse) (globalThis.__LILIA_DEV_DATABASES__ ??= new Map()).set(path, database);
     return database;
   }
@@ -85,7 +94,8 @@ export class LiliaDatabase extends Database {
 
   override async close(options?: CloseOptions): Promise<void> {
     this.appState?.remove();
-    if (globalThis.__LILIA_DEV_DATABASES__?.get(this.path) === this) globalThis.__LILIA_DEV_DATABASES__.delete(this.path);
+    if (globalThis.__LILIA_DEV_DATABASES__?.get(this.path) === this)
+      globalThis.__LILIA_DEV_DATABASES__.delete(this.path);
     try {
       await super.close(options);
     } finally {

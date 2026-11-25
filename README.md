@@ -217,7 +217,7 @@ pnpm bench:compare
 
 ## Workspace Structure
 
-- `apps/`: CLI (`lilia-cli`), local daemon (`lilia-daemon`), VS Code extension (`lilia-vscode`).
+- `apps/`: CLI (`lilia-cli`) and local daemon (`lilia-daemon`).
 - `crates/`:
   - `lilia-io`: the platform layer: file systems (native, in-memory with crash simulation, the
     browser's OPFS), durability primitives, hardware probe, and the access control of the

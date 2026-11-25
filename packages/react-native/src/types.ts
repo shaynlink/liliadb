@@ -1,7 +1,13 @@
 import type React from "react";
 import type { DependencyList } from "react";
 import type { FlatListProps, ListRenderItem } from "react-native";
-import type { EngineOptions, FtsHit, GraphDirection, JsonValue, StorageStats } from "@liliadb/client";
+import type {
+  EngineOptions,
+  FtsHit,
+  GraphDirection,
+  JsonValue,
+  StorageStats,
+} from "@liliadb/client";
 import type { LiliaDatabase } from "./database.js";
 
 export interface IosDatabaseConfig {
@@ -83,7 +89,11 @@ export interface UseKvMeta<T> {
   reload: () => Promise<void>;
 }
 
-export type UseKvReturn<T> = [T, (newValue: T | ((prev: T) => T), expiresAtMs?: number) => Promise<void>, UseKvMeta<T>] &
+export type UseKvReturn<T> = [
+  T,
+  (newValue: T | ((prev: T) => T), expiresAtMs?: number) => Promise<void>,
+  UseKvMeta<T>,
+] &
   UseKvMeta<T>;
 
 export interface UseDocumentOptions<T> {
@@ -100,7 +110,11 @@ export interface UseDocumentMeta<T> {
   reload: () => Promise<void>;
 }
 
-export type UseDocumentReturn<T> = [T | null, (updater: Partial<T> | T | ((prev: T | null) => T)) => Promise<void>, UseDocumentMeta<T>] &
+export type UseDocumentReturn<T> = [
+  T | null,
+  (updater: Partial<T> | T | ((prev: T | null) => T)) => Promise<void>,
+  UseDocumentMeta<T>,
+] &
   UseDocumentMeta<T>;
 
 export interface UseSqlQueryOptions {
@@ -127,7 +141,11 @@ export interface UseSqlQueryReturn<T> {
 export interface UseMutationOptions<TData, TVariables> {
   onSuccess?: (data: TData, variables: TVariables) => void | Promise<void>;
   onError?: (error: Error, variables: TVariables) => void | Promise<void>;
-  onSettled?: (data: TData | undefined, error: Error | null, variables: TVariables) => void | Promise<void>;
+  onSettled?: (
+    data: TData | undefined,
+    error: Error | null,
+    variables: TVariables,
+  ) => void | Promise<void>;
   db?: LiliaDatabase | null;
 }
 

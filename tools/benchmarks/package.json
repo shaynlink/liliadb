@@ -3,11 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "description": "JavaScript surfaces of the comparative benchmark suite: LiliaDB and the local databases of Node, Bun and Deno",
-  "type": "module",
   "license": "Apache-2.0",
+  "type": "module",
   "dependencies": {
     "@duckdb/node-api": "2.0.1-r.1",
-    "@electric-sql/pglite": "^0.5.17",
+    "@electric-sql/pglite": "^0.6.0",
     "@surrealdb/node": "^3.2.0",
     "@surrealdb/node-native": "4.0.1",
     "better-sqlite3": "^13.2.0",

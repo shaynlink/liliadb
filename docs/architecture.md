@@ -264,9 +264,6 @@ integer milliseconds.
 | Browser (`@liliadb/wasm`) | `lilia-wasm` on an `OpfsPool` (dedicated workers) or in memory, without background threads, in the calling thread or in the package's worker. Built by `tools/wasm/build.sh`. |
 | CLI (`lilia`) | Each command the protocol knows is one operation; bitemporal reads, the ledger and zero-knowledge proofs call `lilia-db` and `lilia-zk`. Output is human, JSON or JSONL; execution errors print the structured error on stderr with exit code 1. |
 
-The VS Code extension (`apps/lilia-vscode`) still calls APIs removed with the SQLite engine (backup,
-change events) and has not been ported to the v0.2 SDK.
-
 ## Daemon
 
 `lilia-daemon` serves one database to the processes of its user over a Unix socket or a Windows

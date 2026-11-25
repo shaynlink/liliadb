@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../../builders/document_builder.dart';
 import '../../database.dart';
 
@@ -110,9 +110,9 @@ class _LiliaFormState<T> extends State<LiliaForm<T>> {
             }
             await update(_currentValues);
             _baseValues = _currentValues;
-            widget.onSuccess?.(_currentValues);
+            widget.onSuccess?.call(_currentValues);
           } catch (e) {
-            widget.onError?.(e);
+            widget.onError?.call(e);
           } finally {
             if (mounted) {
               setState(() {

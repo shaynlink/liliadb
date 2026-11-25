@@ -23,7 +23,7 @@ export class JsiTransport implements Transport {
   /** `done` hears of each operation that succeeded. */
   constructor(
     private readonly database: NativeDatabase,
-    private readonly done: (operation: Operation) => void
+    private readonly done: (operation: Operation) => void,
   ) {}
 
   async execute(operation: Operation): Promise<ResponseValue> {

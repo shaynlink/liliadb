@@ -108,18 +108,25 @@ export class DaemonTransport implements Transport {
 
   private constructor(
     private readonly endpoint: string,
-    private readonly token: string
+    private readonly token: string,
   ) {}
 
   /** Connects to the daemon of `endpoint` with the token of `tokenFile`, checking its protocol. */
-  static async open(endpoint: string, tokenFile: string, signal?: AbortSignal): Promise<DaemonTransport> {
+  static async open(
+    endpoint: string,
+    tokenFile: string,
+    signal?: AbortSignal,
+  ): Promise<DaemonTransport> {
     signal?.throwIfAborted();
     const token = (await readFile(tokenFile, "utf8")).trim();
     const transport = new DaemonTransport(endpoint, token);
     try {
       const handshake = expect(
-        await abortable(transport.execute({ type: "handshake", major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR }), signal),
-        "handshake"
+        await abortable(
+          transport.execute({ type: "handshake", major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR }),
+          signal,
+        ),
+        "handshake",
       );
       if (handshake.major !== PROTOCOL_MAJOR) {
         throw new LiliaError({
@@ -137,13 +144,21 @@ export class DaemonTransport implements Transport {
 
   async execute(operation: Operation): Promise<ResponseValue> {
     if (this.closed) {
-      throw new LiliaError({ code: "CLOSED", message: "the daemon connection is closed", retryable: false });
+      throw new LiliaError({
+        code: "CLOSED",
+        message: "the daemon connection is closed",
+        retryable: false,
+      });
     }
     const socket = await this.connection();
     const id = getUuid();
     const payload = encodeWire({ id, token: this.token, operation });
     if (payload.length > MAX_FRAME_BYTES) {
-      throw new LiliaError({ code: "INVALID_INPUT", message: "the request exceeds the frame limit", retryable: false });
+      throw new LiliaError({
+        code: "INVALID_INPUT",
+        message: "the request exceeds the frame limit",
+        retryable: false,
+      });
     }
     const header = Buffer.alloc(4);
     header.writeUInt32BE(payload.length);
@@ -178,11 +193,15 @@ export class DaemonTransport implements Transport {
         socket.off("error", reject);
         socket.on("data", (chunk: Buffer) => this.receive(chunk));
         socket.on("error", (error) => this.fail(error));
-        socket.on("close", () => this.fail(new LiliaError({
-          code: "CLOSED",
-          message: "the daemon closed the connection",
-          retryable: true,
-        })));
+        socket.on("close", () =>
+          this.fail(
+            new LiliaError({
+              code: "CLOSED",
+              message: "the daemon closed the connection",
+              retryable: true,
+            }),
+          ),
+        );
         socket.write(JS_PREFACE);
         this.socket = socket;
         this.buffer = Buffer.alloc(0);
@@ -199,12 +218,20 @@ export class DaemonTransport implements Transport {
     while (this.buffer.length >= 4) {
       const length = this.buffer.readUInt32BE(0);
       if (length === 0 || length > MAX_FRAME_BYTES) {
-        this.fail(new LiliaError({ code: "PROTOCOL", message: "invalid frame length from the daemon", retryable: false }));
+        this.fail(
+          new LiliaError({
+            code: "PROTOCOL",
+            message: "invalid frame length from the daemon",
+            retryable: false,
+          }),
+        );
         this.socket?.destroy();
         return;
       }
       if (this.buffer.length < 4 + length) return;
-      const { value: response, segment } = nodeFrame<WireResponse>(this.buffer.subarray(4, 4 + length));
+      const { value: response, segment } = nodeFrame<WireResponse>(
+        this.buffer.subarray(4, 4 + length),
+      );
       this.buffer = this.buffer.subarray(4 + length);
       this.pending.get(response.id)?.resolve(bytesOf(response.result, segment));
     }

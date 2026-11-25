@@ -1,4 +1,4 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useState } from "react";
 import {
   View,
   Text,
@@ -9,46 +9,47 @@ import {
   SafeAreaView,
   ActivityIndicator,
   StyleSheet,
-  type StyleProp,
   type ViewStyle,
-} from 'react-native';
-import type { JsonValue, SqlQueryResult } from '@liliadb/client';
-import { LiliaContext } from '../../context.js';
-import type { LiliaDatabase } from '../../database.js';
-import { decodeUtf8 } from '../../utf8.js';
-import { LiliaStorageBar } from '../storage/LiliaStorageBar.js';
+} from "react-native";
+import type { JsonValue, SqlQueryResult } from "@liliadb/client";
+import { LiliaContext } from "../../context.js";
+import type { LiliaDatabase } from "../../database.js";
+import { decodeUtf8 } from "../../utf8.js";
+import { LiliaStorageBar } from "../storage/LiliaStorageBar.js";
 
 export interface LiliaDevInspectorProps {
   enabled?: boolean;
-  position?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+  position?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
   db?: LiliaDatabase | null;
 }
 
-type TabType = 'sql' | 'storage' | 'kv';
+type TabType = "sql" | "storage" | "kv";
 
 /**
  * Idiomatic mobile DevTools floating inspector for LiliaDB.
  * Provides an on-device SQL console, live storage statistics, and KV inspector in __DEV__.
  */
 export function LiliaDevInspector({
-  enabled = typeof __DEV__ !== 'undefined' ? __DEV__ : true,
-  position = 'bottom-right',
+  enabled = typeof __DEV__ !== "undefined" ? __DEV__ : true,
+  position = "bottom-right",
   db: explicitDb,
 }: LiliaDevInspectorProps): React.ReactElement | null {
   const provided = useContext(LiliaContext);
   const db = explicitDb ?? provided;
   const [isOpen, setIsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabType>('sql');
+  const [activeTab, setActiveTab] = useState<TabType>("sql");
 
   // SQL Console State
   const [sqlQuery, setSqlQuery] = useState("SELECT space, id FROM lilia_json LIMIT 20");
-  const [sqlResults, setSqlResults] = useState<SqlQueryResult<Record<string, JsonValue>> | null>(null);
+  const [sqlResults, setSqlResults] = useState<SqlQueryResult<Record<string, JsonValue>> | null>(
+    null,
+  );
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [isExecutingSql, setIsExecutingSql] = useState(false);
 
   // KV Inspector State
-  const [kvNamespace, setKvNamespace] = useState('app_settings');
-  const [kvKey, setKvKey] = useState('theme');
+  const [kvNamespace, setKvNamespace] = useState("app_settings");
+  const [kvKey, setKvKey] = useState("theme");
   const [kvValue, setKvValue] = useState<string | null>(null);
   const [kvStatus, setKvStatus] = useState<string | null>(null);
 
@@ -58,7 +59,7 @@ export function LiliaDevInspector({
 
   const handleRunSql = async () => {
     if (!db) {
-      setSqlError('No open LiliaDB database.');
+      setSqlError("No open LiliaDB database.");
       return;
     }
     setIsExecutingSql(true);
@@ -77,7 +78,7 @@ export function LiliaDevInspector({
     try {
       const entry = db.sync.kv.get(kvNamespace, kvKey);
       setKvValue(entry ? decodeUtf8(entry.value) : null);
-      setKvStatus(entry ? `Read version ${entry.version}` : 'No such key');
+      setKvStatus(entry ? `Read version ${entry.version}` : "No such key");
     } catch (err) {
       setKvStatus(`Error: ${String(err)}`);
     }
@@ -95,13 +96,13 @@ export function LiliaDevInspector({
 
   const getBubblePositionStyle = (): ViewStyle => {
     switch (position) {
-      case 'bottom-left':
+      case "bottom-left":
         return { bottom: 24, left: 16 };
-      case 'top-right':
+      case "top-right":
         return { top: 60, right: 16 };
-      case 'top-left':
+      case "top-left":
         return { top: 60, left: 16 };
-      case 'bottom-right':
+      case "bottom-right":
       default:
         return { bottom: 24, right: 16 };
     }
@@ -126,7 +127,7 @@ export function LiliaDevInspector({
             <View>
               <Text style={styles.modalTitle}>LiliaDB Dev Inspector</Text>
               <Text style={styles.modalSubtitle} numberOfLines={1}>
-                {db?.path ?? 'No open database'}
+                {db?.path ?? "No open database"}
               </Text>
             </View>
             <TouchableOpacity onPress={() => setIsOpen(false)} style={styles.closeButton}>
@@ -137,28 +138,28 @@ export function LiliaDevInspector({
           {/* Tab Navigation */}
           <View style={styles.tabBar}>
             <TouchableOpacity
-              style={[styles.tab, activeTab === 'sql' && styles.activeTab]}
-              onPress={() => setActiveTab('sql')}
+              style={[styles.tab, activeTab === "sql" && styles.activeTab]}
+              onPress={() => setActiveTab("sql")}
             >
-              <Text style={[styles.tabText, activeTab === 'sql' && styles.activeTabText]}>
+              <Text style={[styles.tabText, activeTab === "sql" && styles.activeTabText]}>
                 SQL Console
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.tab, activeTab === 'storage' && styles.activeTab]}
-              onPress={() => setActiveTab('storage')}
+              style={[styles.tab, activeTab === "storage" && styles.activeTab]}
+              onPress={() => setActiveTab("storage")}
             >
-              <Text style={[styles.tabText, activeTab === 'storage' && styles.activeTabText]}>
+              <Text style={[styles.tabText, activeTab === "storage" && styles.activeTabText]}>
                 Storage
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.tab, activeTab === 'kv' && styles.activeTab]}
-              onPress={() => setActiveTab('kv')}
+              style={[styles.tab, activeTab === "kv" && styles.activeTab]}
+              onPress={() => setActiveTab("kv")}
             >
-              <Text style={[styles.tabText, activeTab === 'kv' && styles.activeTabText]}>
+              <Text style={[styles.tabText, activeTab === "kv" && styles.activeTabText]}>
                 KV Store
               </Text>
             </TouchableOpacity>
@@ -166,7 +167,7 @@ export function LiliaDevInspector({
 
           {/* Tab Contents */}
           <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
-            {activeTab === 'sql' && (
+            {activeTab === "sql" && (
               <View>
                 <Text style={styles.sectionLabel}>Enter SQL Statement</Text>
                 <TextInput
@@ -215,10 +216,19 @@ export function LiliaDevInspector({
 
                         {/* Table Rows */}
                         {sqlResults.records.map((row, i) => (
-                          <View key={i} style={[styles.tableRow, i % 2 === 1 && styles.tableRowAlt]}>
+                          <View
+                            // The records of an ad hoc query have no identity but their position.
+                            // oxlint-disable-next-line react/no-array-index-key
+                            key={i}
+                            style={[styles.tableRow, i % 2 === 1 && styles.tableRowAlt]}
+                          >
                             {sqlResults.columns.map((col) => (
                               <Text key={col} style={styles.tableCell}>
-                                {row[col] === null || row[col] === undefined ? 'NULL' : typeof row[col] === 'object' ? JSON.stringify(row[col]) : String(row[col])}
+                                {row[col] === null || row[col] === undefined
+                                  ? "NULL"
+                                  : typeof row[col] === "object"
+                                    ? JSON.stringify(row[col])
+                                    : String(row[col])}
                               </Text>
                             ))}
                           </View>
@@ -230,13 +240,13 @@ export function LiliaDevInspector({
               </View>
             )}
 
-            {activeTab === 'storage' && (
+            {activeTab === "storage" && (
               <View style={{ paddingTop: 8 }}>
                 <LiliaStorageBar db={db} />
               </View>
             )}
 
-            {activeTab === 'kv' && (
+            {activeTab === "kv" && (
               <View>
                 <Text style={styles.sectionLabel}>Namespace</Text>
                 <TextInput
@@ -258,7 +268,10 @@ export function LiliaDevInspector({
                   <TouchableOpacity style={styles.actionBtn} onPress={handleKvGet}>
                     <Text style={styles.actionBtnText}>Read Peek</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.actionBtn, styles.saveBtn]} onPress={handleKvSet}>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.saveBtn]}
+                    onPress={handleKvSet}
+                  >
                     <Text style={[styles.actionBtnText, styles.saveBtnText]}>Save Value</Text>
                   </TouchableOpacity>
                 </View>
@@ -266,7 +279,7 @@ export function LiliaDevInspector({
                 <Text style={styles.sectionLabel}>Value</Text>
                 <TextInput
                   style={styles.sqlInput}
-                  value={kvValue ?? ''}
+                  value={kvValue ?? ""}
                   onChangeText={setKvValue}
                   multiline
                   placeholder="<Value content>"
@@ -284,44 +297,44 @@ export function LiliaDevInspector({
 
 const styles = StyleSheet.create({
   bubble: {
-    position: 'absolute',
-    backgroundColor: '#1E293B',
+    position: "absolute",
+    backgroundColor: "#1E293B",
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 20,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOpacity: 0.3,
     shadowRadius: 6,
     elevation: 8,
     zIndex: 9999,
   },
   bubbleText: {
-    color: '#38BDF8',
+    color: "#38BDF8",
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   modalContainer: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: "#F8FAFC",
   },
   modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-    backgroundColor: '#FFFFFF',
+    borderBottomColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
   },
   modalTitle: {
     fontSize: 18,
-    fontWeight: '800',
-    color: '#0F172A',
+    fontWeight: "800",
+    color: "#0F172A",
   },
   modalSubtitle: {
     fontSize: 12,
-    color: '#64748B',
+    color: "#64748B",
     maxWidth: 260,
   },
   closeButton: {
@@ -329,31 +342,31 @@ const styles = StyleSheet.create({
   },
   closeButtonText: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#64748B',
+    fontWeight: "700",
+    color: "#64748B",
   },
   tabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
+    flexDirection: "row",
+    backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: "#E2E8F0",
   },
   tab: {
     flex: 1,
     paddingVertical: 12,
-    alignItems: 'center',
+    alignItems: "center",
   },
   activeTab: {
     borderBottomWidth: 2,
-    borderBottomColor: '#2563EB',
+    borderBottomColor: "#2563EB",
   },
   tabText: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#64748B',
+    fontWeight: "600",
+    color: "#64748B",
   },
   activeTabText: {
-    color: '#2563EB',
+    color: "#2563EB",
   },
   content: {
     flex: 1,
@@ -361,106 +374,106 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     fontSize: 12,
-    fontWeight: '700',
-    color: '#475569',
+    fontWeight: "700",
+    color: "#475569",
     marginBottom: 6,
     marginTop: 10,
-    textTransform: 'uppercase',
+    textTransform: "uppercase",
   },
   sqlInput: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#CBD5E1',
+    backgroundColor: "#FFFFFF",
+    borderColor: "#CBD5E1",
     borderWidth: 1,
     borderRadius: 8,
     padding: 12,
     fontSize: 14,
-    fontFamily: 'monospace',
+    fontFamily: "monospace",
     minHeight: 80,
-    textAlignVertical: 'top',
+    textAlignVertical: "top",
   },
   inputSingle: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#CBD5E1',
+    backgroundColor: "#FFFFFF",
+    borderColor: "#CBD5E1",
     borderWidth: 1,
     borderRadius: 8,
     padding: 10,
     fontSize: 14,
   },
   runButton: {
-    backgroundColor: '#2563EB',
+    backgroundColor: "#2563EB",
     paddingVertical: 12,
     borderRadius: 8,
-    alignItems: 'center',
+    alignItems: "center",
     marginTop: 10,
   },
   runButtonText: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   errorBox: {
-    backgroundColor: '#FEF2F2',
+    backgroundColor: "#FEF2F2",
     borderWidth: 1,
-    borderColor: '#F87171',
+    borderColor: "#F87171",
     padding: 12,
     borderRadius: 8,
     marginTop: 12,
   },
   errorBoxText: {
-    color: '#991B1B',
+    color: "#991B1B",
     fontSize: 13,
-    fontFamily: 'monospace',
+    fontFamily: "monospace",
   },
   resultsBox: {
     marginTop: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: "#E2E8F0",
     padding: 12,
   },
   resultsSummary: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
+    fontWeight: "600",
+    color: "#64748B",
     marginBottom: 8,
   },
   tableRowHeader: {
-    flexDirection: 'row',
-    backgroundColor: '#F1F5F9',
+    flexDirection: "row",
+    backgroundColor: "#F1F5F9",
     paddingVertical: 6,
     borderBottomWidth: 1,
-    borderBottomColor: '#CBD5E1',
+    borderBottomColor: "#CBD5E1",
   },
   tableCellHeader: {
     minWidth: 100,
     paddingHorizontal: 8,
     fontSize: 12,
-    fontWeight: '700',
-    color: '#334155',
+    fontWeight: "700",
+    color: "#334155",
   },
   tableRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     paddingVertical: 6,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: "#F1F5F9",
   },
   tableRowAlt: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: "#F8FAFC",
   },
   tableCell: {
     minWidth: 100,
     paddingHorizontal: 8,
     fontSize: 12,
-    color: '#1E293B',
-    fontFamily: 'monospace',
+    color: "#1E293B",
+    fontFamily: "monospace",
   },
   buttonRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     marginVertical: 10,
   },
   actionBtn: {
-    backgroundColor: '#E2E8F0',
+    backgroundColor: "#E2E8F0",
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 6,
@@ -468,19 +481,19 @@ const styles = StyleSheet.create({
   },
   actionBtnText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#334155',
+    fontWeight: "600",
+    color: "#334155",
   },
   saveBtn: {
-    backgroundColor: '#10B981',
+    backgroundColor: "#10B981",
   },
   saveBtnText: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
   },
   statusText: {
     marginTop: 10,
     fontSize: 13,
-    color: '#059669',
-    fontStyle: 'italic',
+    color: "#059669",
+    fontStyle: "italic",
   },
 });

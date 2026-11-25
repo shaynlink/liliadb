@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Embedded Zero-Knowledge Proof (zk-SNARK) micro-prover and verifier for LiliaDB"
 
 [dependencies]

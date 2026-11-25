@@ -26,10 +26,18 @@ function OpenedProvider(props: {
  */
 export function LiliaProvider(props: LiliaProviderProps): React.ReactElement {
   if (props.database) {
-    return <LiliaContext.Provider value={props.database as LiliaDatabase}>{props.children}</LiliaContext.Provider>;
+    return (
+      <LiliaContext.Provider value={props.database as LiliaDatabase}>
+        {props.children}
+      </LiliaContext.Provider>
+    );
   }
   return (
-    <OpenedProvider options={props.options} fallback={props.fallback} errorFallback={props.errorFallback}>
+    <OpenedProvider
+      options={props.options}
+      fallback={props.fallback}
+      errorFallback={props.errorFallback}
+    >
       {props.children}
     </OpenedProvider>
   );

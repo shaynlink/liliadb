@@ -13,7 +13,10 @@ process.on("exit", () => rmSync(root, { recursive: true, force: true }));
 /** A frame as the binding hands it over: its JSON text and the bytes after it. */
 function parts(frame) {
   const json = frame.readUInt32LE(0);
-  return [frame.toString("utf8", 4, 4 + json), frame.buffer.slice(frame.byteOffset + 4 + json, frame.byteOffset + frame.length)];
+  return [
+    frame.toString("utf8", 4, 4 + json),
+    frame.buffer.slice(frame.byteOffset + 4 + json, frame.byteOffset + frame.length),
+  ];
 }
 
 function database(handle) {
@@ -48,7 +51,7 @@ const directories = Object.fromEntries(
     const path = join(root, name);
     mkdirSync(path, { recursive: true });
     return [name, path];
-  })
+  }),
 );
 
 /** The paths `excludeFromBackup` received. */
@@ -81,15 +84,13 @@ export const AppState = {
   },
   /** Moves the app to `state`, as the system would. */
   emit(state) {
-    for (const listener of [...appStateListeners]) listener(state);
+    // A snapshot: a listener may remove itself while they run.
+    for (const listener of Array.from(appStateListeners)) listener(state);
   },
 };
 
-const component = (name) => {
-  const host = ({ children }) => children ?? null;
-  host.displayName = name;
-  return host;
-};
+const component = (name) =>
+  Object.assign(({ children }) => children ?? null, { displayName: name });
 
 export const View = component("View");
 export const Text = component("Text");

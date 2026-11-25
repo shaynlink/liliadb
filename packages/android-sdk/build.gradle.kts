@@ -1,15 +1,14 @@
+// AGP 9 compiles Kotlin itself: no Kotlin Gradle plugin.
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "io.liliadb"
-    compileSdk = 34
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 21 // Android 5.0+, Wear OS 1.0+, Android TV
-        targetSdk = 34
         consumerProguardFiles("consumer-rules.pro")
     }
 
@@ -21,6 +20,6 @@ android {
 }
 
 dependencies {
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
+    implementation("net.java.dev.jna:jna:5.19.1@aar")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 }

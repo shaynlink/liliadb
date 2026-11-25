@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "LiliaDB in WebAssembly: the protocol's operations over a database in the browser's origin private file system, or in memory"
 
 [lib]
@@ -17,11 +18,9 @@ lilia-io = { path = "../lilia-io" }
 lilia-protocol = { path = "../lilia-protocol" }
 serde.workspace = true
 serde_json.workspace = true
-wasm-bindgen = "0.2.128"
+wasm-bindgen = "0.2.130"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-# Random numbers (request ids) from the JavaScript host; see `.cargo/config.toml`.
-getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { workspace = true, features = ["js"] }
 web-sys = { version = "0.3", features = ["console"] }
 

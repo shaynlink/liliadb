@@ -1,14 +1,8 @@
-import React, { useMemo } from 'react';
-import {
-  SectionList,
-  RefreshControl,
-  type SectionListProps,
-  type SectionListData,
-  View,
-} from 'react-native';
-import type { JsonValue } from '@liliadb/client';
-import { useSqlQuery } from '../../hooks.js';
-import type { LiliaDatabase } from '../../database.js';
+import React, { useMemo } from "react";
+import { SectionList, RefreshControl, type SectionListProps } from "react-native";
+import type { JsonValue } from "@liliadb/client";
+import { useSqlQuery } from "../../hooks.js";
+import type { LiliaDatabase } from "../../database.js";
 
 export interface LiliaSectionData<T> {
   title: string;
@@ -16,8 +10,10 @@ export interface LiliaSectionData<T> {
   [key: string]: any;
 }
 
-export interface LiliaSectionListProps<T = Record<string, unknown>>
-  extends Omit<SectionListProps<T, LiliaSectionData<T>>, 'sections'> {
+export interface LiliaSectionListProps<T = Record<string, unknown>> extends Omit<
+  SectionListProps<T, LiliaSectionData<T>>,
+  "sections"
+> {
   sql: string;
   sqlParams?: JsonValue[];
   tables?: string[];
@@ -61,7 +57,7 @@ export function LiliaSectionList<T = Record<string, unknown>>({
 
     const groups = new Map<string, T[]>();
     for (const item of queryResult.data) {
-      const groupKey = groupBy(item) || 'Other';
+      const groupKey = groupBy(item) || "Other";
       const existing = groups.get(groupKey);
       if (existing) {
         existing.push(item);
@@ -91,33 +87,28 @@ export function LiliaSectionList<T = Record<string, unknown>>({
 
   const defaultKeyExtractor = (item: T, index: number): string => {
     if (keyExtractor) return keyExtractor(item, index);
-    if (item && typeof item === 'object') {
+    if (item && typeof item === "object") {
       const anyObj = item as Record<string, unknown>;
-      if ('id' in anyObj && anyObj.id != null) return String(anyObj.id);
-      if ('rowid' in anyObj && anyObj.rowid != null) return String(anyObj.rowid);
-      if ('key' in anyObj && anyObj.key != null) return String(anyObj.key);
+      if ("id" in anyObj && anyObj.id != null) return String(anyObj.id);
+      if ("rowid" in anyObj && anyObj.rowid != null) return String(anyObj.rowid);
+      if ("key" in anyObj && anyObj.key != null) return String(anyObj.key);
     }
     return String(index);
   };
 
   const refreshControl = (
-    <RefreshControl
-      refreshing={queryResult.isRefetching}
-      onRefresh={queryResult.refetch}
-    />
+    <RefreshControl refreshing={queryResult.isRefetching} onRefresh={queryResult.refetch} />
   );
 
   return (
     <SectionList<T, LiliaSectionData<T>>
+      {...restProps}
       sections={sections}
       renderItem={renderItem}
       renderSectionHeader={renderSectionHeader}
       keyExtractor={defaultKeyExtractor}
-      ListEmptyComponent={
-        emptyComponent ? () => <>{emptyComponent}</> : restProps.ListEmptyComponent
-      }
+      ListEmptyComponent={emptyComponent ? <>{emptyComponent}</> : restProps.ListEmptyComponent}
       refreshControl={refreshControl}
-      {...restProps}
     />
   );
 }

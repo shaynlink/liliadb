@@ -1,11 +1,5 @@
-import React, { useMemo } from 'react';
-import {
-  Text,
-  StyleSheet,
-  type StyleProp,
-  type TextStyle,
-  type TextProps,
-} from 'react-native';
+import React, { useMemo } from "react";
+import { Text, StyleSheet, type StyleProp, type TextStyle, type TextProps } from "react-native";
 
 export interface LiliaHighlightSnippetProps extends TextProps {
   snippet: string;
@@ -16,10 +10,12 @@ export interface LiliaHighlightSnippetProps extends TextProps {
 interface SnippetPart {
   text: string;
   isHighlight: boolean;
+  /** Where the part starts in the snippet: it names the part. */
+  offset: number;
 }
 
-const OPENING_TAG = '<b>';
-const CLOSING_TAG = '</b>';
+const OPENING_TAG = "<b>";
+const CLOSING_TAG = "</b>";
 
 /**
  * Split the engine's trusted `<b>…</b>` markers without a backtracking regular
@@ -32,25 +28,30 @@ export function splitSnippet(snippet: string): SnippetPart[] {
   while (cursor < snippet.length) {
     const openingIndex = snippet.indexOf(OPENING_TAG, cursor);
     if (openingIndex === -1) {
-      result.push({ text: snippet.slice(cursor), isHighlight: false });
+      result.push({ text: snippet.slice(cursor), isHighlight: false, offset: cursor });
       break;
     }
 
     if (openingIndex > cursor) {
-      result.push({ text: snippet.slice(cursor, openingIndex), isHighlight: false });
+      result.push({
+        text: snippet.slice(cursor, openingIndex),
+        isHighlight: false,
+        offset: cursor,
+      });
     }
 
     const contentStart = openingIndex + OPENING_TAG.length;
     const closingIndex = snippet.indexOf(CLOSING_TAG, contentStart);
     if (closingIndex === -1) {
       // Preserve malformed markup as text, just as a non-matching marker would.
-      result.push({ text: snippet.slice(openingIndex), isHighlight: false });
+      result.push({ text: snippet.slice(openingIndex), isHighlight: false, offset: openingIndex });
       break;
     }
 
     result.push({
       text: snippet.slice(contentStart, closingIndex),
       isHighlight: true,
+      offset: openingIndex,
     });
     cursor = closingIndex + CLOSING_TAG.length;
   }
@@ -73,14 +74,14 @@ export function LiliaHighlightSnippet({
 
   return (
     <Text style={[styles.defaultText, textStyle, style]} {...textProps}>
-      {parts.map((part, index) =>
+      {parts.map((part) =>
         part.isHighlight ? (
-          <Text key={index} style={[styles.defaultHighlight, highlightStyle]}>
+          <Text key={part.offset} style={[styles.defaultHighlight, highlightStyle]}>
             {part.text}
           </Text>
         ) : (
           part.text
-        )
+        ),
       )}
     </Text>
   );
@@ -89,13 +90,13 @@ export function LiliaHighlightSnippet({
 const styles = StyleSheet.create({
   defaultText: {
     fontSize: 14,
-    color: '#374151',
+    color: "#374151",
     lineHeight: 20,
   },
   defaultHighlight: {
-    backgroundColor: '#FEF08A',
-    color: '#854D0E',
-    fontWeight: '700',
+    backgroundColor: "#FEF08A",
+    color: "#854D0E",
+    fontWeight: "700",
     borderRadius: 3,
   },
 });

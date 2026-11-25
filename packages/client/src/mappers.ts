@@ -124,12 +124,15 @@ export function toWireLwwDocument(state: LwwJsonDocumentState): WireLwwDocument 
         {
           value: field.value,
           clock: {
-            clock: { timestamp_ms: field.clock.clock.timestampMs, counter: field.clock.clock.counter },
+            clock: {
+              timestamp_ms: field.clock.clock.timestampMs,
+              counter: field.clock.clock.counter,
+            },
             actor_id: field.clock.actorId,
           },
           is_deleted: field.isDeleted,
         },
-      ])
+      ]),
     ),
   };
 }
@@ -153,13 +156,35 @@ export function toWireBatchOperation(operation: BatchOperation): WireBatchOperat
         expires_at_ms: checkedExpiry(operation.expiresAtMs),
       };
     case "kv_delete":
-      return { model: "kv_delete", namespace: operation.namespace, key: operation.key, if_version: checkedVersion(operation.ifVersion) };
+      return {
+        model: "kv_delete",
+        namespace: operation.namespace,
+        key: operation.key,
+        if_version: checkedVersion(operation.ifVersion),
+      };
     case "json_put":
-      return { model: "json_put", space: operation.space, id: operation.id, value: operation.value, if_version: checkedVersion(operation.ifVersion) };
+      return {
+        model: "json_put",
+        space: operation.space,
+        id: operation.id,
+        value: operation.value,
+        if_version: checkedVersion(operation.ifVersion),
+      };
     case "json_put_raw":
-      return { model: "json_put_raw", space: operation.space, id: operation.id, data: operation.data, if_version: checkedVersion(operation.ifVersion) };
+      return {
+        model: "json_put_raw",
+        space: operation.space,
+        id: operation.id,
+        data: operation.data,
+        if_version: checkedVersion(operation.ifVersion),
+      };
     case "json_delete":
-      return { model: "json_delete", space: operation.space, id: operation.id, if_version: checkedVersion(operation.ifVersion) };
+      return {
+        model: "json_delete",
+        space: operation.space,
+        id: operation.id,
+        if_version: checkedVersion(operation.ifVersion),
+      };
     case "graph_set_node":
       return {
         model: "graph_set_node",
@@ -182,9 +207,20 @@ export function toWireBatchOperation(operation: BatchOperation): WireBatchOperat
         weight: operation.weight ?? 1,
       };
     case "graph_remove_edge":
-      return { model: "graph_remove_edge", graph: operation.graph, source: operation.source, target: operation.target, kind: operation.kind };
+      return {
+        model: "graph_remove_edge",
+        graph: operation.graph,
+        source: operation.source,
+        target: operation.target,
+        kind: operation.kind,
+      };
     case "fts_index":
-      return { model: "fts_index", collection: operation.collection, doc_id: operation.docId, content: operation.content };
+      return {
+        model: "fts_index",
+        collection: operation.collection,
+        doc_id: operation.docId,
+        content: operation.content,
+      };
     case "fts_delete":
       return { model: "fts_delete", collection: operation.collection, doc_id: operation.docId };
     case "vector_set":
@@ -200,11 +236,29 @@ export function toWireBatchOperation(operation: BatchOperation): WireBatchOperat
       return { model: "vector_delete", collection: operation.collection, id: operation.id };
     case "crdt_pn_counter_increment":
     case "crdt_pn_counter_decrement":
-      return { model: operation.model, space: operation.space, id: operation.id, actor_id: operation.actorId, amount: operation.amount };
+      return {
+        model: operation.model,
+        space: operation.space,
+        id: operation.id,
+        actor_id: operation.actorId,
+        amount: operation.amount,
+      };
     case "crdt_or_set_add":
-      return { model: "crdt_or_set_add", space: operation.space, id: operation.id, actor_id: operation.actorId, element: operation.element };
+      return {
+        model: "crdt_or_set_add",
+        space: operation.space,
+        id: operation.id,
+        actor_id: operation.actorId,
+        element: operation.element,
+      };
     case "crdt_or_set_remove":
-      return { model: "crdt_or_set_remove", space: operation.space, id: operation.id, element: operation.element, timestamp_ms: operation.timestampMs };
+      return {
+        model: "crdt_or_set_remove",
+        space: operation.space,
+        id: operation.id,
+        element: operation.element,
+        timestamp_ms: operation.timestampMs,
+      };
     case "crdt_json_set_field":
       return {
         model: "crdt_json_set_field",
@@ -225,7 +279,12 @@ export function toWireBatchOperation(operation: BatchOperation): WireBatchOperat
         timestamp_ms: operation.timestampMs,
       };
     case "crdt_json_merge":
-      return { model: "crdt_json_merge", space: operation.space, id: operation.id, state: lwwStateBytes(operation.state) };
+      return {
+        model: "crdt_json_merge",
+        space: operation.space,
+        id: operation.id,
+        state: lwwStateBytes(operation.state),
+      };
   }
 }
 
@@ -248,7 +307,9 @@ export function mapJsonEntry<T = JsonValue>(entry: WireJsonEntry): JsonEntry<T> 
   };
 }
 
-export function mapJsonRevisions<T = JsonValue>(revisions: ResponseOf<"json_revisions">): JsonRevision<T>[] {
+export function mapJsonRevisions<T = JsonValue>(
+  revisions: ResponseOf<"json_revisions">,
+): JsonRevision<T>[] {
   return revisions.map((revision) => ({
     version: readVersion(revision.version),
     ...(revision.doc ? { document: mapJsonEntry<T>(revision.doc) } : {}),
@@ -256,7 +317,11 @@ export function mapJsonRevisions<T = JsonValue>(revisions: ResponseOf<"json_revi
 }
 
 export function mapJsonIndexes(indexes: ResponseOf<"json_indexes">): JsonIndexInfo[] {
-  return indexes.map((index) => ({ space: index.space, indexName: index.index_name, jsonPath: index.json_path }));
+  return indexes.map((index) => ({
+    space: index.space,
+    indexName: index.index_name,
+    jsonPath: index.json_path,
+  }));
 }
 
 export function mapMutations(results: ResponseOf<"mutations">): MutationResult[] {
@@ -267,15 +332,26 @@ export function mapMutations(results: ResponseOf<"mutations">): MutationResult[]
 }
 
 function records<T>(columns: string[], rows: JsonValue[][]): T[] {
-  return rows.map((row) => Object.fromEntries(columns.map((column, i) => [column, row[i] ?? null])) as T);
+  return rows.map(
+    (row) => Object.fromEntries(columns.map((column, i) => [column, row[i] ?? null])) as T,
+  );
 }
 
-export function mapSqlResult<T = Record<string, unknown>>(result: ResponseOf<"sql">): SqlQueryResult<T> {
+export function mapSqlResult<T = Record<string, unknown>>(
+  result: ResponseOf<"sql">,
+): SqlQueryResult<T> {
   const rows = result.rows;
-  return { columns: result.columns, rows, rowsAffected: num(result.rows_affected), records: records<T>(result.columns, rows) };
+  return {
+    columns: result.columns,
+    rows,
+    rowsAffected: num(result.rows_affected),
+    records: records<T>(result.columns, rows),
+  };
 }
 
-export function mapCypherResult<T = Record<string, JsonValue>>(result: ResponseOf<"cypher_result">): CypherResult<T> {
+export function mapCypherResult<T = Record<string, JsonValue>>(
+  result: ResponseOf<"cypher_result">,
+): CypherResult<T> {
   const rows = result.rows;
   return { columns: result.columns, rows, records: records<T>(result.columns, rows) };
 }
@@ -303,8 +379,12 @@ export function mapWeightedPath(path: WireWeightedPath): WeightedPath {
   };
 }
 
-export function mapWeightedPaths(paths: ResponseOf<"weighted_path_map">): Record<string, WeightedPath> {
-  return Object.fromEntries(Object.entries(paths).map(([node, path]) => [node, mapWeightedPath(path)]));
+export function mapWeightedPaths(
+  paths: ResponseOf<"weighted_path_map">,
+): Record<string, WeightedPath> {
+  return Object.fromEntries(
+    Object.entries(paths).map(([node, path]) => [node, mapWeightedPath(path)]),
+  );
 }
 
 export function mapNodeScores(scores: ResponseOf<"node_scores">): NodeScore[] {
@@ -312,11 +392,20 @@ export function mapNodeScores(scores: ResponseOf<"node_scores">): NodeScore[] {
 }
 
 export function mapImpact(impact: ResponseOf<"graph_impact">): ImpactAnalysis {
-  return { direct: impact.direct, dependants: impact.dependants, totalAffected: num(impact.total_affected) };
+  return {
+    direct: impact.direct,
+    dependants: impact.dependants,
+    totalAffected: num(impact.total_affected),
+  };
 }
 
 function mapFtsHit(hit: WireFtsHit): FtsHit {
-  return { collection: hit.collection, docId: hit.doc_id, snippet: hit.snippet, rank: num(hit.rank) };
+  return {
+    collection: hit.collection,
+    docId: hit.doc_id,
+    snippet: hit.snippet,
+    rank: num(hit.rank),
+  };
 }
 
 export function mapFtsHits(hits: ResponseOf<"fts_hits">): FtsHit[] {
@@ -324,22 +413,41 @@ export function mapFtsHits(hits: ResponseOf<"fts_hits">): FtsHit[] {
 }
 
 export function mapFtsSuggestions(suggestions: ResponseOf<"fts_suggestions">): FtsSuggestion[] {
-  return suggestions.map((s) => ({ term: s.term, distance: num(s.distance), docCount: num(s.doc_count), exactPrefix: s.exact_prefix }));
+  return suggestions.map((s) => ({
+    term: s.term,
+    distance: num(s.distance),
+    docCount: num(s.doc_count),
+    exactPrefix: s.exact_prefix,
+  }));
 }
 
 export function mapFtsFuzzyHits(hits: ResponseOf<"fts_fuzzy_hits">): FtsFuzzyHit[] {
-  return hits.map((hit) => ({ ...mapFtsHit(hit), editDistance: num(hit.edit_distance), matchedTerms: hit.matched_terms }));
+  return hits.map((hit) => ({
+    ...mapFtsHit(hit),
+    editDistance: num(hit.edit_distance),
+    matchedTerms: hit.matched_terms,
+  }));
 }
 
 export function mapFtsPhoneticHits(hits: ResponseOf<"fts_phonetic_hits">): FtsPhoneticHit[] {
-  return hits.map((hit) => ({ ...mapFtsHit(hit), matchedTerms: hit.matched_terms, phoneticCodes: hit.phonetic_codes }));
+  return hits.map((hit) => ({
+    ...mapFtsHit(hit),
+    matchedTerms: hit.matched_terms,
+    phoneticCodes: hit.phonetic_codes,
+  }));
 }
 
 export function mapVectorHits(hits: ResponseOf<"vector_hits">): VectorHit[] {
-  return hits.map((hit) => ({ collection: hit.collection, id: hit.id, distance: num(hit.distance) }));
+  return hits.map((hit) => ({
+    collection: hit.collection,
+    id: hit.id,
+    distance: num(hit.distance),
+  }));
 }
 
-export function mapVectorIndexInfo(info: NonNullable<ResponseOf<"vector_index_info">>): VectorIndexInfo {
+export function mapVectorIndexInfo(
+  info: NonNullable<ResponseOf<"vector_index_info">>,
+): VectorIndexInfo {
   return {
     collection: info.collection,
     nodeCount: num(info.node_count),
@@ -369,11 +477,19 @@ export function mapPoints(points: ResponseOf<"ts_points">): TimeSeriesPoint[] {
 }
 
 export function mapSeriesStats(stats: NonNullable<ResponseOf<"ts_stats">>): TimeSeriesStats {
-  return { min: num(stats.min), max: num(stats.max), avg: num(stats.avg), sum: num(stats.sum), count: num(stats.count) };
+  return {
+    min: num(stats.min),
+    max: num(stats.max),
+    avg: num(stats.avg),
+    sum: num(stats.sum),
+    count: num(stats.count),
+  };
 }
 
 export function mapPolicy(policy: WirePolicy): TimeSeriesLifecyclePolicy {
-  const names = Object.fromEntries(Object.entries(AGGREGATIONS).map(([name, wire]) => [wire, name])) as Record<WireAggregation, DownsampleAggregation>;
+  const names = Object.fromEntries(
+    Object.entries(AGGREGATIONS).map(([name, wire]) => [wire, name]),
+  ) as Record<WireAggregation, DownsampleAggregation>;
   return {
     seriesPattern: policy.series_pattern,
     rules: policy.rules.map((rule) => ({
@@ -384,7 +500,9 @@ export function mapPolicy(policy: WirePolicy): TimeSeriesLifecyclePolicy {
   };
 }
 
-export function mapRetentionStats(stats: ResponseOf<"ts_retention_stats">): TimeSeriesRetentionStats {
+export function mapRetentionStats(
+  stats: ResponseOf<"ts_retention_stats">,
+): TimeSeriesRetentionStats {
   return {
     seriesProcessed: num(stats.series_processed),
     downsampledPointsCreated: num(stats.downsampled_points_created),
@@ -432,12 +550,15 @@ export function mapLwwDocument(state: WireLwwDocument): LwwJsonDocumentState {
         {
           value: field.value,
           clock: {
-            clock: { timestampMs: num(field.clock.clock.timestamp_ms), counter: num(field.clock.clock.counter) },
+            clock: {
+              timestampMs: num(field.clock.clock.timestamp_ms),
+              counter: num(field.clock.clock.counter),
+            },
             actorId: field.clock.actor_id,
           },
           isDeleted: field.is_deleted,
         },
-      ])
+      ]),
     ),
   };
 }

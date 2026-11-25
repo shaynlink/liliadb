@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useLayoutEffect, useRef } from "react";
 import {
   FlatList,
   RefreshControl,
@@ -6,14 +6,16 @@ import {
   View,
   type FlatListProps,
   type ListRenderItem,
-} from 'react-native';
-import type { JsonEntry, JsonValue } from '@liliadb/client';
-import { topics } from '../../changes.js';
-import { useDatabase } from '../../context.js';
-import type { LiliaDatabase } from '../../database.js';
+} from "react-native";
+import type { JsonEntry, JsonValue } from "@liliadb/client";
+import { topics } from "../../changes.js";
+import { useDatabase } from "../../context.js";
+import type { LiliaDatabase } from "../../database.js";
 
-export interface LiliaInfiniteListProps<T = JsonValue>
-  extends Omit<FlatListProps<JsonEntry<T>>, 'data' | 'renderItem'> {
+export interface LiliaInfiniteListProps<T = JsonValue> extends Omit<
+  FlatListProps<JsonEntry<T>>,
+  "data" | "renderItem"
+> {
   space: string;
   pageSize?: number;
   /** The documents shown, as `json.find` selects them; all of them by default. */
@@ -51,8 +53,18 @@ export function LiliaInfiniteList<T = JsonValue>({
   const [error, setError] = useState<Error | null>(null);
 
   const filterKey = JSON.stringify(filter ?? {});
+  // A new database or query shows the loading state until its first page.
+  const queryKey = JSON.stringify([space, filterKey, pageSize]);
+  const [shownFor, setShownFor] = useState({ db, queryKey });
+  if (shownFor.db !== db || shownFor.queryKey !== queryKey) {
+    setShownFor({ db, queryKey });
+    setIsLoading(true);
+  }
+
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useLayoutEffect(() => {
+    itemsRef.current = items;
+  });
   const loading = useRef(false);
   /** Counts reads: a read that a newer one replaced shows nothing. */
   const sequence = useRef(0);
@@ -70,7 +82,8 @@ export function LiliaInfiniteList<T = JsonValue>({
         setHasMore(page.length >= limit);
         setError(null);
       } catch (failure) {
-        if (run === sequence.current) setError(failure instanceof Error ? failure : new Error(String(failure)));
+        if (run === sequence.current)
+          setError(failure instanceof Error ? failure : new Error(String(failure)));
       } finally {
         if (run === sequence.current) {
           loading.current = false;
@@ -80,11 +93,12 @@ export function LiliaInfiniteList<T = JsonValue>({
         }
       }
     },
-    [db, space, filterKey]
+    [db, space, filterKey],
   );
 
   useEffect(() => {
-    setIsLoading(true);
+    // `read` sets state only once the page is read, after its `await`.
+    // oxlint-disable-next-line react/set-state-in-effect
     void read(undefined, pageSize, false);
     // A write reads again as many documents as the list shows.
     return db.subscribe(topics.json(space), () => {
@@ -117,7 +131,7 @@ export function LiliaInfiniteList<T = JsonValue>({
   };
 
   const footerComponent = isLoadingMore ? (
-    <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+    <View style={{ paddingVertical: 16, alignItems: "center" }}>
       <ActivityIndicator size="small" />
     </View>
   ) : (
@@ -126,19 +140,15 @@ export function LiliaInfiniteList<T = JsonValue>({
 
   return (
     <FlatList<JsonEntry<T>>
+      {...flatListProps}
       data={items}
       renderItem={renderItem}
       keyExtractor={defaultKeyExtractor}
       onEndReached={handleEndReached}
       onEndReachedThreshold={onEndReachedThreshold}
-      refreshControl={
-        <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
-      }
-      ListEmptyComponent={
-        emptyComponent ? () => <>{emptyComponent}</> : flatListProps.ListEmptyComponent
-      }
+      refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
+      ListEmptyComponent={emptyComponent ? <>{emptyComponent}</> : flatListProps.ListEmptyComponent}
       ListFooterComponent={footerComponent}
-      {...flatListProps}
     />
   );
 }

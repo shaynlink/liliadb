@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 import {
   View,
   Text,
@@ -8,7 +8,7 @@ import {
   type StyleProp,
   type ViewStyle,
   type TextStyle,
-} from 'react-native';
+} from "react-native";
 
 export interface LiliaGraphBreadcrumbsProps {
   path: string[];
@@ -26,7 +26,7 @@ export interface LiliaGraphBreadcrumbsProps {
 export function LiliaGraphBreadcrumbs({
   path,
   onNodePress,
-  separator = '›',
+  separator = "›",
   containerStyle,
   nodeStyle,
   separatorStyle,
@@ -41,6 +41,8 @@ export function LiliaGraphBreadcrumbs({
       {path.map((nodeId, index) => {
         const isLast = index === path.length - 1;
         return (
+          // A node may appear twice in a path: its depth names the crumb.
+          // oxlint-disable-next-line react/no-array-index-key
           <View key={`${nodeId}-${index}`} style={styles.segment}>
             <TouchableOpacity
               onPress={() => onNodePress?.(nodeId, index)}
@@ -58,9 +60,7 @@ export function LiliaGraphBreadcrumbs({
               </Text>
             </TouchableOpacity>
 
-            {!isLast && (
-              <Text style={[styles.separator, separatorStyle]}>{separator}</Text>
-            )}
+            {!isLast && <Text style={[styles.separator, separatorStyle]}>{separator}</Text>}
           </View>
         );
       })}
@@ -70,27 +70,27 @@ export function LiliaGraphBreadcrumbs({
 
 const styles = StyleSheet.create({
   container: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingVertical: 8,
     paddingHorizontal: 12,
   },
   segment: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
   },
   nodeText: {
     fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
+    color: "#6B7280",
+    fontWeight: "500",
   },
   activeNodeText: {
-    color: '#111827',
-    fontWeight: '700',
+    color: "#111827",
+    fontWeight: "700",
   },
   separator: {
     marginHorizontal: 8,
     fontSize: 16,
-    color: '#9CA3AF',
+    color: "#9CA3AF",
   },
 });

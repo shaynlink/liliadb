@@ -1,4 +1,10 @@
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 export type Durability = "durable" | "balanced" | "performance";
 export type ResourceProfile = "server" | "mobile" | "constrained";
 
@@ -100,6 +106,14 @@ export interface ScanStreamOptions<T = string | Uint8Array> {
   batchSize?: number;
   signal?: AbortSignal;
 }
+
+/** Options of a call that only takes its cancellation signal. */
+export interface CallOptions {
+  signal?: AbortSignal;
+}
+
+/** A vector: its numbers, or the bytes of its elements (`int8`, `bit`). */
+export type VectorInput = Float32Array | number[] | Uint8Array;
 
 export interface CloseOptions {
   timeoutMs?: number;
@@ -376,25 +390,87 @@ export interface LwwJsonDocumentState {
 }
 
 export type BatchOperation =
-  | { model: "kv_set"; namespace: string; key: Uint8Array; value: Uint8Array; ifVersion?: bigint; expiresAtMs?: number }
+  | {
+      model: "kv_set";
+      namespace: string;
+      key: Uint8Array;
+      value: Uint8Array;
+      ifVersion?: bigint;
+      expiresAtMs?: number;
+    }
   | { model: "kv_delete"; namespace: string; key: Uint8Array; ifVersion?: bigint }
   | { model: "json_put"; space: string; id: string; value: JsonValue; ifVersion?: bigint }
   | { model: "json_put_raw"; space: string; id: string; data: Uint8Array; ifVersion?: bigint }
   | { model: "json_delete"; space: string; id: string; ifVersion?: bigint }
-  | { model: "graph_set_node"; graph: string; id: string; kind: string; metadata?: JsonValue; docSpace?: string; docId?: string }
+  | {
+      model: "graph_set_node";
+      graph: string;
+      id: string;
+      kind: string;
+      metadata?: JsonValue;
+      docSpace?: string;
+      docId?: string;
+    }
   | { model: "graph_delete_node"; graph: string; id: string }
-  | { model: "graph_add_edge"; graph: string; source: string; target: string; kind: string; weight?: number }
+  | {
+      model: "graph_add_edge";
+      graph: string;
+      source: string;
+      target: string;
+      kind: string;
+      weight?: number;
+    }
   | { model: "graph_remove_edge"; graph: string; source: string; target: string; kind: string }
   | { model: "fts_index"; collection: string; docId: string; content: string }
   | { model: "fts_delete"; collection: string; docId: string }
-  | { model: "vector_set"; collection: string; id: string; dim: number; elementType?: VectorElementType; vector: Uint8Array | number[] | Float32Array }
+  | {
+      model: "vector_set";
+      collection: string;
+      id: string;
+      dim: number;
+      elementType?: VectorElementType;
+      vector: Uint8Array | number[] | Float32Array;
+    }
   | { model: "vector_delete"; collection: string; id: string }
-  | { model: "crdt_pn_counter_increment"; space: string; id: string; actorId: string; amount: number | bigint }
-  | { model: "crdt_pn_counter_decrement"; space: string; id: string; actorId: string; amount: number | bigint }
+  | {
+      model: "crdt_pn_counter_increment";
+      space: string;
+      id: string;
+      actorId: string;
+      amount: number | bigint;
+    }
+  | {
+      model: "crdt_pn_counter_decrement";
+      space: string;
+      id: string;
+      actorId: string;
+      amount: number | bigint;
+    }
   | { model: "crdt_or_set_add"; space: string; id: string; actorId: string; element: string }
-  | { model: "crdt_or_set_remove"; space: string; id: string; element: string; timestampMs?: number }
-  | { model: "crdt_json_set_field"; space: string; id: string; actorId: string; path: string; value: JsonValue; timestampMs?: number }
-  | { model: "crdt_json_delete_field"; space: string; id: string; actorId: string; path: string; timestampMs?: number }
+  | {
+      model: "crdt_or_set_remove";
+      space: string;
+      id: string;
+      element: string;
+      timestampMs?: number;
+    }
+  | {
+      model: "crdt_json_set_field";
+      space: string;
+      id: string;
+      actorId: string;
+      path: string;
+      value: JsonValue;
+      timestampMs?: number;
+    }
+  | {
+      model: "crdt_json_delete_field";
+      space: string;
+      id: string;
+      actorId: string;
+      path: string;
+      timestampMs?: number;
+    }
   | { model: "crdt_json_merge"; space: string; id: string; state: LwwJsonDocumentState };
 
 /** One version of a document; `document` is absent where it was deleted. */
@@ -447,9 +523,20 @@ export interface SqlQueryOptions {
 }
 
 export interface SqlFunction {
-  <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: JsonValue[]): Promise<T[]>;
-  query<T = Record<string, unknown>>(sql: string, params?: JsonValue[], options?: SqlQueryOptions): Promise<T[]>;
-  raw<T = Record<string, unknown>>(sql: string, params?: JsonValue[], options?: SqlQueryOptions): Promise<SqlQueryResult<T>>;
+  <T = Record<string, unknown>>(
+    strings: TemplateStringsArray,
+    ...values: JsonValue[]
+  ): Promise<T[]>;
+  query<T = Record<string, unknown>>(
+    sql: string,
+    params?: JsonValue[],
+    options?: SqlQueryOptions,
+  ): Promise<T[]>;
+  raw<T = Record<string, unknown>>(
+    sql: string,
+    params?: JsonValue[],
+    options?: SqlQueryOptions,
+  ): Promise<SqlQueryResult<T>>;
 }
 
 export interface SyncSqlFunction {

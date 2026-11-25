@@ -115,7 +115,17 @@ async function workloads(adapter, info, payload, records, budgetMs, valueSize) {
       i++;
     }
     const seconds = (performance.now() - start) / 1e3;
-    emit(record(info, "write.commit", { threads: 1, value_size: valueSize }, i, seconds, nanos, i * (16 + valueSize)));
+    emit(
+      record(
+        info,
+        "write.commit",
+        { threads: 1, value_size: valueSize },
+        i,
+        seconds,
+        nanos,
+        i * (16 + valueSize),
+      ),
+    );
   }
 
   // write.batch: 100 keys per transaction.
@@ -134,7 +144,17 @@ async function workloads(adapter, info, payload, records, budgetMs, valueSize) {
       written += 100;
     }
     const seconds = (performance.now() - start) / 1e3;
-    emit(record(info, "write.batch", { batch: 100, value_size: valueSize }, written, seconds, nanos, written * (16 + valueSize)));
+    emit(
+      record(
+        info,
+        "write.batch",
+        { batch: 100, value_size: valueSize },
+        written,
+        seconds,
+        nanos,
+        written * (16 + valueSize),
+      ),
+    );
   }
 
   // load (not reported), then read.get of uniformly random loaded keys.
@@ -168,7 +188,17 @@ async function workloads(adapter, info, payload, records, budgetMs, valueSize) {
     if (found !== reads) {
       throw new Error(`read.get found ${found} of ${reads} loaded keys`);
     }
-    emit(record(info, "read.get", { threads: 1, state: "warm", records }, reads, seconds, nanos, reads * valueSize));
+    emit(
+      record(
+        info,
+        "read.get",
+        { threads: 1, state: "warm", records },
+        reads,
+        seconds,
+        nanos,
+        reads * valueSize,
+      ),
+    );
   }
 }
 
@@ -199,7 +229,8 @@ export function sqliteSetup(fullfsync) {
     "CREATE TABLE IF NOT EXISTS kv(k BLOB PRIMARY KEY, v BLOB NOT NULL) STRICT, WITHOUT ROWID",
   ];
 }
-export const SQLITE_UPSERT = "INSERT INTO kv(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v";
+export const SQLITE_UPSERT =
+  "INSERT INTO kv(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v";
 export const SQLITE_GET = "SELECT length(v) AS n FROM kv WHERE k = ?";
 
 /**

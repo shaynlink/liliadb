@@ -33,9 +33,13 @@ export class DatabaseObserver {
    */
   emit(topics: readonly string[] | undefined): void {
     if (topics?.length === 0) return;
-    const sets = topics === undefined ? [...this.listeners.values()] : [...topics, ANY_CHANGE].map((topic) => this.listeners.get(topic));
+    const sets =
+      topics === undefined
+        ? [...this.listeners.values()]
+        : [...topics, ANY_CHANGE].map((topic) => this.listeners.get(topic));
     // A snapshot, each listener once: a listener may subscribe or unsubscribe while they run.
-    const listeners = new Set(sets.flatMap((set) => (set ? [...set] : [])));
+    const listeners = new Set<() => void>();
+    for (const set of sets) set?.forEach((listener) => listeners.add(listener));
     for (const listener of listeners) {
       try {
         listener();

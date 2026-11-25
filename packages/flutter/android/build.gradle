@@ -2,26 +2,27 @@ group 'io.liliadb.flutter'
 version '0.2.0-alpha.1'
 
 buildscript {
-    ext.kotlin_version = '1.9.22'
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.2.1'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath 'com.android.tools.build:gradle:9.5.2'
     }
 }
 
+// The plugin ships the native libraries only: its Dart code calls them through dart:ffi.
 apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
 
 android {
-    compileSdkVersion 34
+    namespace 'io.liliadb.flutter'
+    // Flutter's default (flutter.compileSdkVersion): an app compiles against at least the
+    // compileSdk of its plugins, and this one has no Kotlin or Java code that needs a newer one.
+    compileSdk 36
 
     defaultConfig {
-        minSdkVersion 21
+        minSdk 21
     }
 
     sourceSets {
@@ -34,8 +35,4 @@ android {
 repositories {
     google()
     mavenCentral()
-}
-
-dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
 }

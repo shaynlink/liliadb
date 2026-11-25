@@ -17,25 +17,75 @@ export type WireMetric = "cosine" | "l2" | "dot" | "hamming";
 export type WireAggregation = "Avg" | "Min" | "Max" | "Sum" | "First" | "Last" | "Count";
 
 export type WireBatchOperation =
-  | { model: "kv_set"; namespace: string; key: Uint8Array; value: Uint8Array; if_version?: Int; expires_at_ms?: number }
+  | {
+      model: "kv_set";
+      namespace: string;
+      key: Uint8Array;
+      value: Uint8Array;
+      if_version?: Int;
+      expires_at_ms?: number;
+    }
   | { model: "kv_delete"; namespace: string; key: Uint8Array; if_version?: Int }
   | { model: "json_put"; space: string; id: string; value: JsonValue; if_version?: Int }
   | { model: "json_put_raw"; space: string; id: string; data: Uint8Array; if_version?: Int }
   | { model: "json_delete"; space: string; id: string; if_version?: Int }
-  | { model: "graph_set_node"; graph: string; id: string; kind: string; metadata: JsonValue; doc_space?: string; doc_id?: string }
+  | {
+      model: "graph_set_node";
+      graph: string;
+      id: string;
+      kind: string;
+      metadata: JsonValue;
+      doc_space?: string;
+      doc_id?: string;
+    }
   | { model: "graph_delete_node"; graph: string; id: string }
-  | { model: "graph_add_edge"; graph: string; source: string; target: string; kind: string; weight: number }
+  | {
+      model: "graph_add_edge";
+      graph: string;
+      source: string;
+      target: string;
+      kind: string;
+      weight: number;
+    }
   | { model: "graph_remove_edge"; graph: string; source: string; target: string; kind: string }
   | { model: "fts_index"; collection: string; doc_id: string; content: string }
   | { model: "fts_delete"; collection: string; doc_id: string }
-  | { model: "vector_set"; collection: string; id: string; dim: number; element_type: WireElementType; vector: Uint8Array }
+  | {
+      model: "vector_set";
+      collection: string;
+      id: string;
+      dim: number;
+      element_type: WireElementType;
+      vector: Uint8Array;
+    }
   | { model: "vector_delete"; collection: string; id: string }
   | { model: "crdt_pn_counter_increment"; space: string; id: string; actor_id: string; amount: Int }
   | { model: "crdt_pn_counter_decrement"; space: string; id: string; actor_id: string; amount: Int }
   | { model: "crdt_or_set_add"; space: string; id: string; actor_id: string; element: string }
-  | { model: "crdt_or_set_remove"; space: string; id: string; element: string; timestamp_ms?: number }
-  | { model: "crdt_json_set_field"; space: string; id: string; actor_id: string; path: string; value: JsonValue; timestamp_ms?: number }
-  | { model: "crdt_json_delete_field"; space: string; id: string; actor_id: string; path: string; timestamp_ms?: number }
+  | {
+      model: "crdt_or_set_remove";
+      space: string;
+      id: string;
+      element: string;
+      timestamp_ms?: number;
+    }
+  | {
+      model: "crdt_json_set_field";
+      space: string;
+      id: string;
+      actor_id: string;
+      path: string;
+      value: JsonValue;
+      timestamp_ms?: number;
+    }
+  | {
+      model: "crdt_json_delete_field";
+      space: string;
+      id: string;
+      actor_id: string;
+      path: string;
+      timestamp_ms?: number;
+    }
   | { model: "crdt_json_merge"; space: string; id: string; state: Uint8Array };
 
 export interface WirePageRankConfig {
@@ -116,44 +166,123 @@ export type Operation =
   | { type: "json_scan"; space: string; after?: string; limit: number }
   | { type: "json_scan_prefix"; space: string; prefix: string; after_id?: string; limit: number }
   | { type: "json_extract"; space: string; id: string; path: string }
-  | { type: "json_find"; space: string; query: Record<string, JsonValue>; after?: string; limit: number }
+  | {
+      type: "json_find";
+      space: string;
+      query: Record<string, JsonValue>;
+      after?: string;
+      limit: number;
+    }
   | { type: "json_create_index"; space: string; name: string; path: string; filter?: string }
   | { type: "json_drop_index"; space: string; name: string }
   | { type: "json_list_indexes"; space: string }
-  | { type: "json_scan_by_index"; space: string; index_name: string; value: string; after?: string; limit: number }
+  | {
+      type: "json_scan_by_index";
+      space: string;
+      index_name: string;
+      value: string;
+      after?: string;
+      limit: number;
+    }
   | { type: "json_get_at_version"; space: string; id: string; version: bigint }
   | { type: "json_get_at_timestamp"; space: string; id: string; timestamp_ms: number }
   | { type: "json_history"; space: string; id: string }
   | { type: "json_diff"; space: string; id: string; from_version: bigint; to_version: bigint }
   | { type: "batch"; operations: WireBatchOperation[] }
   | { type: "sql_query"; sql: string; params: JsonValue[] }
-  | { type: "graph_neighbors"; graph: string; node: string; direction: WireDirection; kind?: string }
+  | {
+      type: "graph_neighbors";
+      graph: string;
+      node: string;
+      direction: WireDirection;
+      kind?: string;
+    }
   | { type: "graph_reachability"; graph: string; start_nodes: string[]; direction: WireDirection }
   | { type: "graph_get_node"; graph: string; id: string }
   | { type: "graph_get_node_document"; graph: string; id: string }
   | { type: "graph_delete_node"; graph: string; id: string }
   | { type: "graph_list_nodes"; graph: string; kind?: string; limit: number }
   | { type: "graph_remove_edge"; graph: string; source: string; target: string; kind: string }
-  | { type: "graph_list_edges"; graph: string; source?: string; target?: string; kind?: string; limit: number }
+  | {
+      type: "graph_list_edges";
+      graph: string;
+      source?: string;
+      target?: string;
+      kind?: string;
+      limit: number;
+    }
   | { type: "graph_impact_analysis"; graph: string; changed_nodes: string[] }
-  | { type: "graph_shortest_path"; graph: string; start: string; target: string; direction: WireDirection; kind_filter?: string }
-  | { type: "graph_dijkstra"; graph: string; start: string; target?: string; direction: WireDirection; kind_filter?: string }
-  | { type: "graph_all_shortest_paths"; graph: string; start: string; direction: WireDirection; kind_filter?: string }
-  | { type: "graph_astar_spatial"; graph: string; start: string; target: string; direction: WireDirection; kind_filter?: string }
+  | {
+      type: "graph_shortest_path";
+      graph: string;
+      start: string;
+      target: string;
+      direction: WireDirection;
+      kind_filter?: string;
+    }
+  | {
+      type: "graph_dijkstra";
+      graph: string;
+      start: string;
+      target?: string;
+      direction: WireDirection;
+      kind_filter?: string;
+    }
+  | {
+      type: "graph_all_shortest_paths";
+      graph: string;
+      start: string;
+      direction: WireDirection;
+      kind_filter?: string;
+    }
+  | {
+      type: "graph_astar_spatial";
+      graph: string;
+      start: string;
+      target: string;
+      direction: WireDirection;
+      kind_filter?: string;
+    }
   | { type: "graph_page_rank"; graph: string; config: WirePageRankConfig }
-  | { type: "graph_centrality"; graph: string; centrality: string; direction: WireDirection; kind_filter?: string; normalized: boolean }
+  | {
+      type: "graph_centrality";
+      graph: string;
+      centrality: string;
+      direction: WireDirection;
+      kind_filter?: string;
+      normalized: boolean;
+    }
   | { type: "graph_has_cycle"; graph: string; direction: WireDirection; kind_filter?: string }
   | { type: "graph_find_cycles"; graph: string; max_cycles: number; kind_filter?: string }
-  | { type: "graph_connected_components"; graph: string; component_type: string; kind_filter?: string }
+  | {
+      type: "graph_connected_components";
+      graph: string;
+      component_type: string;
+      kind_filter?: string;
+    }
   | { type: "graph_cypher"; graph: string; query: string }
   | { type: "fts_search"; collection: string; query: string; limit: number }
   | { type: "fts_delete"; collection: string; doc_id: string }
   | { type: "fts_suggest"; collection: string; prefix: string; max_distance: number; limit: number }
-  | { type: "fts_fuzzy_search"; collection: string; query: string; max_distance: number; limit: number }
+  | {
+      type: "fts_fuzzy_search";
+      collection: string;
+      query: string;
+      max_distance: number;
+      limit: number;
+    }
   | { type: "fts_phonetic_search"; collection: string; query: string; limit: number }
   | { type: "fts_load_dictionary"; collection: string; words: string[] }
   | { type: "vector_get"; collection: string; id: string }
-  | { type: "vector_search"; collection: string; vector: Uint8Array; dim: number; element_type: WireElementType; metric: WireMetric; limit: number }
+  | {
+      type: "vector_search";
+      collection: string;
+      vector: Uint8Array;
+      dim: number;
+      element_type: WireElementType;
+      metric: WireMetric;
+      limit: number;
+    }
   | { type: "vector_create_index"; collection: string; config: WireHnswConfig }
   | { type: "vector_get_index_info"; collection: string }
   | { type: "vector_drop_index"; collection: string }
@@ -205,15 +334,40 @@ export type Operation =
       limit: number;
     }
   | { type: "ts_append_points"; series_id: string; points: WirePoint[]; resolution_ms?: number }
-  | { type: "ts_query_range"; series_id: string; start_time: number; end_time: number; resolution_ms?: number }
-  | { type: "ts_query_auto"; series_id: string; start_time: number; end_time: number; max_points: number }
-  | { type: "ts_query_stats"; series_id: string; start_time: number; end_time: number; resolution_ms?: number }
+  | {
+      type: "ts_query_range";
+      series_id: string;
+      start_time: number;
+      end_time: number;
+      resolution_ms?: number;
+    }
+  | {
+      type: "ts_query_auto";
+      series_id: string;
+      start_time: number;
+      end_time: number;
+      max_points: number;
+    }
+  | {
+      type: "ts_query_stats";
+      series_id: string;
+      start_time: number;
+      end_time: number;
+      resolution_ms?: number;
+    }
   | { type: "ts_set_policy"; policy: WirePolicy }
   | { type: "ts_get_policy"; series_pattern: string }
   | { type: "ts_list_policies" }
   | { type: "ts_delete_policy"; series_pattern: string }
   | { type: "ts_apply_retention"; now_ms?: number }
-  | { type: "geo_add_fence"; id: string; name: string; category: string; polygon_json: string; metadata?: string }
+  | {
+      type: "geo_add_fence";
+      id: string;
+      name: string;
+      category: string;
+      polygon_json: string;
+      metadata?: string;
+    }
   | { type: "geo_remove_fence"; id: string }
   | { type: "geo_contains_point"; polygon_json: string; lon: number; lat: number }
   | { type: "geo_find_fences_for_point"; lon: number; lat: number }
@@ -330,12 +484,29 @@ export type ResponseValue =
   | { type: "node_groups"; value: string[][] }
   | { type: "cypher_result"; value: { columns: string[]; rows: JsonValue[][] } }
   | { type: "fts_hits"; value: WireFtsHit[] }
-  | { type: "fts_suggestions"; value: { term: string; distance: number; doc_count: number; exact_prefix: boolean }[] }
-  | { type: "fts_fuzzy_hits"; value: (WireFtsHit & { edit_distance: number; matched_terms: string[] })[] }
-  | { type: "fts_phonetic_hits"; value: (WireFtsHit & { matched_terms: string[]; phonetic_codes: string[] })[] }
-  | { type: "vector"; value: { dim: number; element_type: WireElementType; data: Uint8Array } | null }
+  | {
+      type: "fts_suggestions";
+      value: { term: string; distance: number; doc_count: number; exact_prefix: boolean }[];
+    }
+  | {
+      type: "fts_fuzzy_hits";
+      value: (WireFtsHit & { edit_distance: number; matched_terms: string[] })[];
+    }
+  | {
+      type: "fts_phonetic_hits";
+      value: (WireFtsHit & { matched_terms: string[]; phonetic_codes: string[] })[];
+    }
+  | {
+      type: "vector";
+      value: { dim: number; element_type: WireElementType; data: Uint8Array } | null;
+    }
   | { type: "vector_hits"; value: WireVectorHit[] }
-  | { type: "vector_index_info"; value: (Required<WireHnswConfig> & { collection: string; node_count: Int; max_level: Int }) | null }
+  | {
+      type: "vector_index_info";
+      value:
+        | (Required<WireHnswConfig> & { collection: string; node_count: Int; max_level: Int })
+        | null;
+    }
   | {
       type: "hybrid_hits";
       value: {
@@ -348,14 +519,25 @@ export type ResponseValue =
       }[];
     }
   | { type: "ts_points"; value: WirePoint[] }
-  | { type: "ts_stats"; value: { min: number; max: number; avg: number; sum: number; count: Int } | null }
+  | {
+      type: "ts_stats";
+      value: { min: number; max: number; avg: number; sum: number; count: Int } | null;
+    }
   | { type: "ts_policy"; value: WirePolicy | null }
   | { type: "ts_policies"; value: WirePolicy[] }
   | {
       type: "ts_retention_stats";
-      value: { series_processed: Int; downsampled_points_created: Int; chunks_pruned: Int; bytes_reclaimed_approx: Int };
+      value: {
+        series_processed: Int;
+        downsampled_points_created: Int;
+        chunks_pruned: Int;
+        bytes_reclaimed_approx: Int;
+      };
     }
-  | { type: "geofence_matches"; value: { id: string; name: string; category: string; metadata?: string | null }[] }
+  | {
+      type: "geofence_matches";
+      value: { id: string; name: string; category: string; metadata?: string | null }[];
+    }
   | { type: "gps_points"; value: WireGpsPoint[] }
   | { type: "crdt_counter"; value: Int }
   | { type: "crdt_counter_state"; value: WireCounterState }
@@ -367,7 +549,8 @@ export type ResponseValue =
 
 export type ResponseType = ResponseValue["type"];
 /** The value a response of type `K` carries. */
-export type ResponseOf<K extends ResponseType> = Extract<ResponseValue, { type: K }> extends { value: infer V } ? V : undefined;
+export type ResponseOf<K extends ResponseType> =
+  Extract<ResponseValue, { type: K }> extends { value: infer V } ? V : undefined;
 
 /** An error as the protocol carries it. */
 export interface WireError {
@@ -390,7 +573,9 @@ const packr = new Packr({ useRecords: false, encodeUndefinedAsNil: true });
  */
 function integers(value: unknown): unknown {
   if (typeof value === "number") {
-    return Number.isSafeInteger(value) && (value < -0x8000_0000 || value > 0xffff_ffff) ? BigInt(value) : value;
+    return Number.isSafeInteger(value) && (value < -0x8000_0000 || value > 0xffff_ffff)
+      ? BigInt(value)
+      : value;
   }
   if (value === null || typeof value !== "object" || ArrayBuffer.isView(value)) return value;
   if (Array.isArray(value)) return value.map(integers);
@@ -411,7 +596,9 @@ export function encodeWire(value: unknown): Uint8Array {
 
 /** The little-endian `u32` at `at` in `bytes`. */
 function u32(bytes: Uint8Array, at: number): number {
-  return (bytes[at]! | (bytes[at + 1]! << 8) | (bytes[at + 2]! << 16)) + bytes[at + 3]! * 0x100_0000;
+  return (
+    (bytes[at]! | (bytes[at + 1]! << 8) | (bytes[at + 2]! << 16)) + bytes[at + 3]! * 0x100_0000
+  );
 }
 
 /** The length of the JSON text a JS frame starts with (after its own 4 bytes). */
@@ -425,7 +612,10 @@ export function frameJsonLength(frame: Uint8Array): number {
  * after it, `tail` (from the segment count on): each runtime decodes the text its fastest way.
  * Each byte string of the value is the number of its segment until `bytesOf` replaces it.
  */
-export function readFrame<T>(json: string, tail: Uint8Array): { value: T; segment: (index: number) => Uint8Array } {
+export function readFrame<T>(
+  json: string,
+  tail: Uint8Array,
+): { value: T; segment: (index: number) => Uint8Array } {
   const value = JSON.parse(json) as T;
   const bytes = 4 + u32(tail, 0) * 8;
   const segment = (index: number): Uint8Array => {
@@ -448,7 +638,8 @@ export function bytesOf(result: WireResult, segment: (index: number) => Uint8Arr
   };
   if (response.type === "kv" && response.value) entry(response.value);
   else if (response.type === "kv_page") response.value.forEach(entry);
-  else if (response.type === "vector" && response.value) response.value.data = segment(response.value.data as unknown as number);
+  else if (response.type === "vector" && response.value)
+    response.value.data = segment(response.value.data as unknown as number);
   return result;
 }
 

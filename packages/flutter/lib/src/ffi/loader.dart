@@ -8,12 +8,9 @@ DynamicLibrary loadLiliaDynamicLibrary([String? customPath]) {
   if (explicit != null && explicit.isNotEmpty) {
     return DynamicLibrary.open(explicit);
   }
-  if (Platform.isIOS) {
-    // Linked statically into the app through the xcframework.
+  if (Platform.isIOS || Platform.isMacOS) {
+    // Linked statically into the plugin through the xcframework of its podspec.
     return DynamicLibrary.process();
-  }
-  if (Platform.isMacOS) {
-    return DynamicLibrary.open('liblilia_ffi.dylib');
   }
   if (Platform.isAndroid || Platform.isLinux) {
     return DynamicLibrary.open('liblilia_ffi.so');

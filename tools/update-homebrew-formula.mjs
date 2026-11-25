@@ -50,10 +50,7 @@ function main() {
 
   if (version) {
     console.log(`Updating Formula version to ${version}...`);
-    formulaContent = formulaContent.replace(
-      /version\s+"[^"]+"/,
-      `version "${version}"`
-    );
+    formulaContent = formulaContent.replace(/version\s+"[^"]+"/, `version "${version}"`);
   }
 
   const targets = [

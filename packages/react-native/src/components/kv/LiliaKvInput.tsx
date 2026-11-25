@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { TextInput, type TextInputProps } from 'react-native';
-import { useKv } from '../../hooks.js';
-import type { LiliaDatabase } from '../../database.js';
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { TextInput, type TextInputProps } from "react-native";
+import { useKv } from "../../hooks.js";
+import type { LiliaDatabase } from "../../database.js";
 
-export interface LiliaKvInputProps extends Omit<TextInputProps, 'value'> {
+export interface LiliaKvInputProps extends Omit<TextInputProps, "value"> {
   namespace: string;
   storageKey: string;
   defaultValue?: string;
@@ -18,10 +18,11 @@ export interface LiliaKvInputProps extends Omit<TextInputProps, 'value'> {
 export function LiliaKvInput({
   namespace,
   storageKey,
-  defaultValue = '',
+  defaultValue = "",
   debounceMs = 300,
   db,
   onChangeText,
+  onBlur,
   ...inputProps
 }: LiliaKvInputProps): React.ReactElement {
   const [storedValue, setStoredValue] = useKv<string>(namespace, storageKey, {
@@ -29,16 +30,10 @@ export function LiliaKvInput({
     db,
   });
 
-  const [localText, setLocalText] = useState<string>(storedValue ?? defaultValue);
+  // What the user typed and is not stored yet; the stored value (which other writers may change)
+  // shows when there is none.
+  const [draft, setDraft] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isEditingRef = useRef(false);
-
-  // Sync external changes if not actively typing
-  useEffect(() => {
-    if (!isEditingRef.current && storedValue != null && storedValue !== localText) {
-      setLocalText(storedValue);
-    }
-  }, [storedValue]);
 
   useEffect(() => {
     return () => {
@@ -48,10 +43,18 @@ export function LiliaKvInput({
     };
   }, []);
 
+  /** Stores `text`, then shows the stored value again unless the user typed since. */
+  const store = useCallback(
+    async (text: string) => {
+      await setStoredValue(text);
+      setDraft((current) => (current === text ? null : current));
+    },
+    [setStoredValue],
+  );
+
   const handleChangeText = useCallback(
     (text: string) => {
-      isEditingRef.current = true;
-      setLocalText(text);
+      setDraft(text);
       onChangeText?.(text);
 
       if (timerRef.current) {
@@ -59,31 +62,33 @@ export function LiliaKvInput({
       }
 
       timerRef.current = setTimeout(() => {
-        isEditingRef.current = false;
-        void setStoredValue(text);
+        timerRef.current = null;
+        void store(text);
       }, debounceMs);
     },
-    [debounceMs, onChangeText, setStoredValue]
+    [debounceMs, onChangeText, store],
   );
 
-  const handleBlur = useCallback(
-    (e: any) => {
+  const handleBlur = useCallback<NonNullable<TextInputProps["onBlur"]>>(
+    (event) => {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
+        timerRef.current = null;
       }
-      isEditingRef.current = false;
-      void setStoredValue(localText);
-      inputProps.onBlur?.(e);
+      if (draft !== null) {
+        void store(draft);
+      }
+      onBlur?.(event);
     },
-    [localText, setStoredValue, inputProps.onBlur]
+    [draft, store, onBlur],
   );
 
   return (
     <TextInput
-      value={localText}
+      {...inputProps}
+      value={draft ?? storedValue ?? defaultValue}
       onChangeText={handleChangeText}
       onBlur={handleBlur}
-      {...inputProps}
     />
   );
 }
