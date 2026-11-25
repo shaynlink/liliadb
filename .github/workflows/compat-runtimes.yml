@@ -19,7 +19,7 @@ jobs:
         node: [22, 24, 26]
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

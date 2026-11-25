@@ -31,7 +31,7 @@ jobs:
           xcode-version: latest-stable
       - name: Export the selected Xcode developer directory
         run: echo "DEVELOPER_DIR=${MD_APPLE_SDK_ROOT}/Contents/Developer" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,aarch64-apple-watchos,aarch64-apple-tvos
       - uses: Swatinem/rust-cache@v2
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi
       - name: Verify Kotlin bindings generation
