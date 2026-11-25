@@ -10,7 +10,10 @@ let opened = 0;
 const open = () => LiliaDatabase.open({ name: `hooks-${++opened}`, durability: "performance" });
 
 /** Renders `use` inside a provider of `db`; `latest()` is what it returned last. */
-async function render<T>(db: LiliaDatabase, use: () => T): Promise<{ latest: () => T; renders: T[]; renderer: ReactTestRenderer }> {
+async function render<T>(
+  db: LiliaDatabase,
+  use: () => T,
+): Promise<{ latest: () => T; renders: T[]; renderer: ReactTestRenderer }> {
   const renders: T[] = [];
   function Probe(): null {
     renders.push(use());
@@ -21,7 +24,7 @@ async function render<T>(db: LiliaDatabase, use: () => T): Promise<{ latest: () 
     renderer = create(
       <LiliaProvider database={db}>
         <Probe />
-      </LiliaProvider>
+      </LiliaProvider>,
     );
   });
   return { latest: () => renders[renders.length - 1]!, renders, renderer };
@@ -38,13 +41,18 @@ async function until(check: () => boolean): Promise<void> {
 test("useKv shows the stored value on its first render and follows writes", async () => {
   const db = await open();
   await db.kv.set("settings", "theme", JSON.stringify("dark"));
-  const view = await render(db, () => useKv<string>("settings", "theme", { defaultValue: "light" }));
+  const view = await render(db, () =>
+    useKv<string>("settings", "theme", { defaultValue: "light" }),
+  );
   assert.equal(view.renders[0]![0], "dark", "read synchronously, before any effect");
   assert.equal(view.renders[0]!.isLoading, false);
 
   await act(() => view.latest()[1]("blue"));
   assert.equal(view.latest().value, "blue");
-  assert.equal(JSON.parse(new TextDecoder().decode((await db.kv.get("settings", "theme"))!.value)), "blue");
+  assert.equal(
+    JSON.parse(new TextDecoder().decode((await db.kv.get("settings", "theme"))!.value)),
+    "blue",
+  );
 
   await db.kv.set("settings", "theme", JSON.stringify("green"));
   await until(() => view.latest().value === "green");
@@ -74,11 +82,21 @@ test("useSqlQuery runs again after writes to its tables", async () => {
   const db = await open();
   await db.json.put("users", "u1", { name: "Ada" });
   const view = await render(db, () =>
-    useSqlQuery<{ id: string }>("SELECT id FROM lilia_json WHERE space = $1 ORDER BY id", ["users"], { tables: ["lilia_json"] })
+    useSqlQuery<{ id: string }>(
+      "SELECT id FROM lilia_json WHERE space = $1 ORDER BY id",
+      ["users"],
+      { tables: ["lilia_json"] },
+    ),
   );
   await until(() => view.latest().data.length === 1);
   await db.json.put("users", "u2", { name: "Grace" });
-  await until(() => view.latest().data.map((row) => row.id).join() === "u1,u2");
+  await until(
+    () =>
+      view
+        .latest()
+        .data.map((row) => row.id)
+        .join() === "u1,u2",
+  );
 
   const reads = view.renders.length;
   await db.kv.set("other", "k", "v");

@@ -176,12 +176,27 @@ impl TableBuilder {
 pub struct Table {
     number: u64,
     file: Arc<dyn File>,
+    /// Where the footer starts: every block ends before it.
+    blocks_end: u64,
     index: Arc<Block>,
     filter: Bytes,
     cache: Arc<BlockCache>,
 }
 
-fn read_block(file: &dyn File, handle: Handle, what: &str) -> Result<Bytes> {
+/// Reads the block at `handle` and checks its checksum. The handle comes from the file: a block
+/// that does not end before `blocks_end` (where the footer starts) is corruption, refused before
+/// anything is allocated for it.
+fn read_block(file: &dyn File, handle: Handle, blocks_end: u64, what: &str) -> Result<Bytes> {
+    let stored_len = handle.size.checked_add(CRC as u64);
+    if stored_len
+        .and_then(|len| handle.offset.checked_add(len))
+        .is_none_or(|end| end > blocks_end)
+    {
+        return Err(corruption(format!(
+            "{what}: block of {} bytes at {} ends past the blocks ({blocks_end} bytes)",
+            handle.size, handle.offset
+        )));
+    }
     let size = usize::try_from(handle.size)
         .map_err(|_| corruption(format!("{what}: block size overflows")))?;
     let mut data = vec![0u8; size + CRC];
@@ -214,8 +229,15 @@ impl Table {
                 "{what}: {size} bytes is shorter than a footer"
             )));
         }
+        let length = file.len()?;
+        if length < size {
+            return Err(corruption(format!(
+                "{what}: {length} bytes, shorter than the {size} the manifest records"
+            )));
+        }
+        let blocks_end = size - FOOTER as u64;
         let mut footer = [0u8; FOOTER];
-        file.read_exact_at(&mut footer, size - FOOTER as u64)?;
+        file.read_exact_at(&mut footer, blocks_end)?;
         let mut reader = Reader::new(&footer, "table footer");
         let mut next = || reader.fixed_u64();
         let filter = Handle {
@@ -230,11 +252,17 @@ impl Table {
         if next()? != MAGIC {
             return Err(corruption(format!("{what}: bad magic number")));
         }
-        let filter = read_block(file.as_ref(), filter, &what)?;
-        let index = Arc::new(Block::new(read_block(file.as_ref(), index, &what)?)?);
+        let filter = read_block(file.as_ref(), filter, blocks_end, &what)?;
+        let index = Arc::new(Block::new(read_block(
+            file.as_ref(),
+            index,
+            blocks_end,
+            &what,
+        )?)?);
         Ok(Self {
             number,
             file,
+            blocks_end,
             index,
             filter,
             cache,
@@ -253,6 +281,7 @@ impl Table {
         let block = Arc::new(Block::new(read_block(
             self.file.as_ref(),
             handle,
+            self.blocks_end,
             &format!("table {}", self.number),
         )?)?);
         self.cache
@@ -454,6 +483,38 @@ mod tests {
         let table = Table::open(2, file, info.size, Arc::new(BlockCache::new(0))).unwrap();
         assert!(matches!(
             table.get(&lookup(b"k", 5), b"k"),
+            Err(crate::Error::Corruption(_))
+        ));
+    }
+
+    /// Found by the `disk-open` fuzz target: a damaged footer gave a block size of gigabytes,
+    /// allocated before the checksum could refuse it.
+    #[test]
+    fn a_block_handle_past_the_table_is_refused_before_reading() {
+        let vfs = MemVfs::new(3);
+        vfs.create_dir_all(Path::new("/t")).unwrap();
+        let file = vfs
+            .open(Path::new("/t/3.sst"), OpenMode::CreateNew)
+            .unwrap();
+        let mut builder = TableBuilder::new(Arc::clone(&file), 4096, 10);
+        builder.add(&encode(b"k", 1, Kind::Put), b"value").unwrap();
+        let info = builder.finish(SyncLevel::Full).unwrap();
+        // The footer's index handle: its size becomes 6 GiB.
+        let index_size_at = info.size - FOOTER as u64 + 24;
+        file.write_all_at(&(6u64 << 30).to_le_bytes(), index_size_at)
+            .unwrap();
+        assert!(matches!(
+            Table::open(
+                3,
+                Arc::clone(&file),
+                info.size,
+                Arc::new(BlockCache::new(0))
+            ),
+            Err(crate::Error::Corruption(_))
+        ));
+        // A manifest that records more bytes than the file holds.
+        assert!(matches!(
+            Table::open(3, file, info.size + 1, Arc::new(BlockCache::new(0))),
             Err(crate::Error::Corruption(_))
         ));
     }

@@ -1,0 +1,51 @@
+# cargo-deny: what the Rust dependencies of the workspace may be. CI runs `cargo deny check` on
+# every pull request; run it before adding or updating a dependency.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities and unsound crates always fail. An unmaintained crate fails when the workspace
+# depends on it directly; the ones below come with a dependency that has no release without them.
+unmaintained = "workspace"
+ignore = [
+  # chrono: DataFusion and Arrow take and return chrono types (`Utc::now()` stamps each query), so
+  # lilia-analytics depends on it until DataFusion moves to another time library.
+  { id = "RUSTSEC-2026-0543", reason = "chrono is part of the DataFusion/Arrow API lilia-analytics uses" },
+]
+
+[licenses]
+# Permissive licenses, and MPL-2.0 (file-level copyleft: the files of those crates stay MPL, the
+# rest of LiliaDB stays Apache-2.0). CDLA-Permissive-2.0 is the license of the Mozilla root
+# certificates (`webpki-roots`), which ort-sys's build script uses to download ONNX Runtime.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of one crate cost build time and binary size; they are reported, not refused.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only: no git dependency and no other registry.
+unknown-registry = "deny"
+unknown-git = "deny"
+# The `psm` patch of Cargo.toml (watchOS assembly), pinned to one commit, until its crates.io
+# release.
+allow-git = ["https://github.com/rust-lang/stacker"]

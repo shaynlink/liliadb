@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback } from "react";
 import {
   TouchableOpacity,
   Text,
@@ -7,7 +7,23 @@ import {
   type StyleProp,
   type ViewStyle,
   type TextStyle,
-} from 'react-native';
+} from "react-native";
+
+/** The calls of `expo-haptics` this component makes. */
+interface Haptics {
+  impactAsync(style: unknown): Promise<void>;
+  ImpactFeedbackStyle: { Light: unknown };
+}
+
+/** `expo-haptics`, when the app installed it. */
+const haptics: Haptics | null = (() => {
+  try {
+    const module = require("expo-haptics") as Partial<Haptics> | null;
+    return module?.impactAsync && module.ImpactFeedbackStyle ? (module as Haptics) : null;
+  } catch {
+    return null;
+  }
+})();
 
 export interface LiliaOptimisticButtonProps {
   onPress: () => Promise<void> | void;
@@ -38,16 +54,8 @@ export function LiliaOptimisticButton({
   const handlePress = useCallback(async () => {
     if (isPending || disabled) return;
 
-    if (haptic) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const haptics = require('expo-haptics');
-        if (haptics?.impactAsync && haptics?.ImpactFeedbackStyle) {
-          void haptics.impactAsync(haptics.ImpactFeedbackStyle.Light);
-        }
-      } catch {
-        // Optional dependency not installed
-      }
+    if (haptic && haptics) {
+      void haptics.impactAsync(haptics.ImpactFeedbackStyle.Light);
     }
 
     try {
@@ -66,7 +74,7 @@ export function LiliaOptimisticButton({
       activeOpacity={0.7}
     >
       {isPending ? (
-        loadingComponent ?? <ActivityIndicator size="small" color="#FFFFFF" />
+        (loadingComponent ?? <ActivityIndicator size="small" color="#FFFFFF" />)
       ) : children ? (
         children
       ) : (
@@ -78,20 +86,20 @@ export function LiliaOptimisticButton({
 
 const styles = StyleSheet.create({
   button: {
-    backgroundColor: '#3B82F6',
+    backgroundColor: "#3B82F6",
     paddingVertical: 12,
     paddingHorizontal: 20,
     borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
   },
   buttonPending: {
     opacity: 0.8,
   },
   text: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });

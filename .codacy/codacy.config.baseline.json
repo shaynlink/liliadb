@@ -3075,11 +3075,7 @@
           "patternId": "Lizard_parameter-count-medium"
         }
       ],
-      "exclude": [
-        "packages/flutter/test/**",
-        "**/tests/**",
-        "*.test.ts"
-      ]
+      "exclude": ["packages/flutter/test/**", "**/tests/**", "*.test.ts"]
     },
     {
       "toolId": "PMD7",

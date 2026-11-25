@@ -1,0 +1,58 @@
+[package]
+name = "lilia-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Fuzz targets of LiliaDB: the decoders of untrusted requests, the execution of the operations they carry, and the reading of corrupted database files"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: the fuzz targets build with a nightly toolchain and sanitizers, apart from
+# the workspace of the repository.
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+lilia-db = { path = "../crates/lilia-db" }
+lilia-engine = { path = "../crates/lilia-engine" }
+lilia-io = { path = "../crates/lilia-io" }
+lilia-protocol = { path = "../crates/lilia-protocol" }
+rkyv = { version = "0.8.18", default-features = false, features = ["std", "bytecheck"] }
+
+[dev-dependencies]
+lilia-core = { path = "../crates/lilia-core" }
+serde_json = "1.0.145"
+
+[[bin]]
+name = "request-rkyv"
+path = "fuzz_targets/request_rkyv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request-msgpack"
+path = "fuzz_targets/request_msgpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "execute"
+path = "fuzz_targets/execute.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "disk-open"
+path = "fuzz_targets/disk_open.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

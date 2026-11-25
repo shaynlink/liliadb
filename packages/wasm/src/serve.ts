@@ -21,7 +21,10 @@ export function serve(endpoint: Endpoint): void {
         database = await ModuleDatabase.open(request.options);
         return { id: request.id };
       case "execute": {
-        if (!database) throw new Error('{"code":"CLOSED","message":"the database is not open","retryable":false}');
+        if (!database)
+          throw new Error(
+            '{"code":"CLOSED","message":"the database is not open","retryable":false}',
+          );
         const frame = await database.execute(new Uint8Array(request.request));
         return { id: request.id, frame: frame.buffer as ArrayBuffer };
       }
@@ -33,17 +36,19 @@ export function serve(endpoint: Endpoint): void {
     }
   };
 
+  const respond = async (request: Request): Promise<void> => {
+    let reply: Reply;
+    try {
+      reply = await handle(request);
+    } catch (error) {
+      reply = { id: request.id, error: message(error) };
+    }
+    endpoint.postMessage(reply, "frame" in reply && reply.frame ? [reply.frame] : []);
+  };
+
   endpoint.addEventListener("message", (event: MessageEvent) => {
     const request = event.data as Request;
-    queue = queue.then(async () => {
-      let reply: Reply;
-      try {
-        reply = await handle(request);
-      } catch (error) {
-        reply = { id: request.id, error: message(error) };
-      }
-      endpoint.postMessage(reply, "frame" in reply && reply.frame ? [reply.frame] : []);
-    });
+    queue = queue.then(() => respond(request));
   });
   endpoint.start?.();
 }

@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
 import { AppState, excludedFromBackup, root } from "../tests/react-native.js";
-import { changedTopics, decodeUtf8, LiliaDatabase, LiliaError, resolveDatabasePath, topics, type Operation } from "./index.js";
+import {
+  changedTopics,
+  decodeUtf8,
+  LiliaDatabase,
+  LiliaError,
+  resolveDatabasePath,
+  topics,
+  type Operation,
+} from "./index.js";
 
 const encoder = new TextEncoder();
 let opened = 0;
@@ -21,20 +29,26 @@ test("a database opens in Application Support, excluded from backups, and runs e
   const entry = await db.kv.get("settings", "theme");
   assert.equal(decodeUtf8(entry!.value), "dark");
   assert.equal(entry!.version, written.version);
-  assert.equal(decodeUtf8(db.sync.kv.get("settings", "theme")!.value), "dark", "the synchronous API reads the same");
+  assert.equal(
+    decodeUtf8(db.sync.kv.get("settings", "theme")!.value),
+    "dark",
+    "the synchronous API reads the same",
+  );
 
   db.sync.json.put("users", "u1", { name: "Ada", age: 36 });
   assert.deepEqual((await db.json.get("users", "u1"))?.value, { name: "Ada", age: 36 });
   assert.deepEqual(
     (await db.json.find("users", { age: 36 })).map((document) => document.id),
-    ["u1"]
+    ["u1"],
   );
 
   await db.graph.addEdge("g", "a", "b", "follows");
   assert.deepEqual(await db.graph.neighbors("g", "a"), ["b"]);
   await db.fts.index("notes", "n1", "local first storage");
   assert.equal((await db.fts.search("notes", "storage"))[0]?.docId, "n1");
-  assert.deepEqual(await db.sql.query("SELECT id FROM lilia_json WHERE space = $1", ["users"]), [{ id: "u1" }]);
+  assert.deepEqual(await db.sql.query("SELECT id FROM lilia_json WHERE space = $1", ["users"]), [
+    { id: "u1" },
+  ]);
   await db.close();
 });
 
@@ -49,7 +63,7 @@ test("writes notify the topics they change, reads none", async () => {
   listen("*");
 
   await db.kv.set("settings", "theme", "light");
-  assert.deepEqual(heard.sort(), ["*", "kv:settings:" + "7468656d65", "table:lilia_kv"]);
+  assert.deepEqual(heard.toSorted(), ["*", "kv:settings:7468656d65", "table:lilia_kv"]);
   heard.length = 0;
   await db.kv.get("settings", "theme");
   await db.sql.query("SELECT 1");
@@ -60,11 +74,17 @@ test("writes notify the topics they change, reads none", async () => {
     { model: "json_put", space: "users", id: "u1", value: { name: "Ada" } },
     { model: "kv_delete", namespace: "settings", key: encoder.encode("other") },
   ]);
-  assert.deepEqual(heard.sort(), ["*", "json:users", "kv:settings:6f74686572", "table:lilia_kv", "u1"]);
+  assert.deepEqual(heard.toSorted(), [
+    "*",
+    "json:users",
+    "kv:settings:6f74686572",
+    "table:lilia_kv",
+    "u1",
+  ]);
   unsubscribe();
   heard.length = 0;
   await db.json.put("users", "u1", { name: "Grace" });
-  assert.deepEqual(heard.sort(), ["*", "json:users"], "an unsubscribed listener hears nothing");
+  assert.deepEqual(heard.toSorted(), ["*", "json:users"], "an unsubscribed listener hears nothing");
   await db.close();
 });
 
@@ -104,10 +124,17 @@ test("close refuses later calls, clears the listeners, and checkpoints happen in
   db.subscribe("*", () => heard++);
   await db.close();
   assert.ok(db.isClosed);
-  await assert.rejects(db.kv.get("a", "b"), (error: unknown) => error instanceof LiliaError && error.code === "CLOSED");
+  await assert.rejects(
+    db.kv.get("a", "b"),
+    (error: unknown) => error instanceof LiliaError && error.code === "CLOSED",
+  );
 
   const reopened = await LiliaDatabase.open({ path: db.path });
-  assert.equal(decodeUtf8((await reopened.kv.get("a", "b"))!.value), "c", "the write survived the close");
+  assert.equal(
+    decodeUtf8((await reopened.kv.get("a", "b"))!.value),
+    "c",
+    "the write survived the close",
+  );
   await reopened.close();
   assert.equal(heard, 0);
 });
@@ -129,17 +156,26 @@ test("in development, open returns the database already open at the path", async
 
 test("paths follow the platform options", () => {
   assert.equal(resolveDatabasePath({ name: "app" }), join(root, "applicationSupport", "app.lilia"));
-  assert.equal(resolveDatabasePath({ name: "app.lilia", ios: { directory: "caches" } }), join(root, "caches", "app.lilia"));
-  assert.equal(resolveDatabasePath({ name: "w", ios: { groupContainerIdentifier: "group.test" } }), join(root, "documents", "w.lilia"));
+  assert.equal(
+    resolveDatabasePath({ name: "app.lilia", ios: { directory: "caches" } }),
+    join(root, "caches", "app.lilia"),
+  );
+  assert.equal(
+    resolveDatabasePath({ name: "w", ios: { groupContainerIdentifier: "group.test" } }),
+    join(root, "documents", "w.lilia"),
+  );
   assert.equal(resolveDatabasePath({ path: "/explicit" }), "/explicit");
-  assert.throws(() => resolveDatabasePath({ ios: { groupContainerIdentifier: "group.other" } }), LiliaError);
+  assert.throws(
+    () => resolveDatabasePath({ ios: { groupContainerIdentifier: "group.other" } }),
+    LiliaError,
+  );
   assert.throws(() => resolveDatabasePath({ path: " " }), LiliaError);
 });
 
 test("open reports the engine's errors as LiliaErrors", async () => {
   await assert.rejects(
     LiliaDatabase.open({ name: "bad", durability: "fast" as never }),
-    (error: unknown) => error instanceof LiliaError && error.code === "INVALID_INPUT"
+    (error: unknown) => error instanceof LiliaError && error.code === "INVALID_INPUT",
   );
 });
 

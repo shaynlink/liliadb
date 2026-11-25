@@ -14,12 +14,14 @@ let loading: Promise<void> | undefined;
  * (which needs a `fetch` of `file:` URLs outside the browser: give the bytes there).
  */
 export function loadModule(source?: ModuleSource): Promise<void> {
-  loading ??= init({ module_or_path: source ?? new URL("../pkg/lilia_wasm_bg.wasm", import.meta.url) }).then(
+  loading ??= init({
+    module_or_path: source ?? new URL("../pkg/lilia_wasm_bg.wasm", import.meta.url),
+  }).then(
     () => undefined,
     (error: unknown) => {
       loading = undefined;
       throw error;
-    }
+    },
   );
   return loading;
 }

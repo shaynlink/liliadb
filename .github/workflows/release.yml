@@ -13,7 +13,7 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Restore annotated tag
@@ -41,11 +41,11 @@ jobs:
       # @liliadb/wasm builds its module (tools/wasm/build.sh) before its TypeScript.
       - uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen@0.2.128
-      - uses: pnpm/action-setup@v4
+          tool: wasm-bindgen@0.2.130
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -54,6 +54,8 @@ jobs:
         shell: bash
         run: tools/lint.sh
       - run: cargo test --workspace
+      - run: pnpm lint:js
+      - run: pnpm format:check
       - run: pnpm nx run-many -t build,lint,test --all
         env:
           CC_wasm32_unknown_unknown: clang-18
@@ -64,12 +66,12 @@ jobs:
     name: Cross-Runtime Compatibility Gate (Node, Bun, Deno)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.100.0
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -123,14 +125,14 @@ jobs:
             artifact: win32-x64-msvc
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: ${{ matrix.target }}
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: cargo build --target ${{ matrix.target }} -p lilia-node-native -p lilia-cli -p lilia-daemon --release
@@ -150,7 +152,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/lilia-daemon" bin-archive/ 2>/dev/null || cp "target/release/lilia-daemon" bin-archive/
             tar -czf "release/lilia-${{ matrix.artifact }}.tar.gz" -C bin-archive .
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: release/*
@@ -159,8 +161,8 @@ jobs:
     needs: [native, compat-verify]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: release
           merge-multiple: true

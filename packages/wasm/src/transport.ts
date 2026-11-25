@@ -17,14 +17,19 @@ import type { Endpoint, Reply, Request } from "./messages.js";
 import type { ModuleDatabase, ModuleSource } from "./module.js";
 
 /** A request without its id, which `WorkerTransport.request` gives it. */
-type Outgoing = { [K in Request["type"]]: Omit<Extract<Request, { type: K }>, "id"> }[Request["type"]];
+type Outgoing = {
+  [K in Request["type"]]: Omit<Extract<Request, { type: K }>, "id">;
+}[Request["type"]];
 
 const decoder = new TextDecoder();
 
 /** The response a JS frame holds; its error, thrown. */
 function response(frame: Uint8Array): ResponseValue {
   const json = frameJsonLength(frame);
-  const { value, segment } = readFrame<WireResult>(decoder.decode(frame.subarray(4, 4 + json)), frame.subarray(4 + json));
+  const { value, segment } = readFrame<WireResult>(
+    decoder.decode(frame.subarray(4, 4 + json)),
+    frame.subarray(4 + json),
+  );
   return unwrap(bytesOf(value, segment));
 }
 
@@ -76,14 +81,19 @@ export class WorkerTransport implements Transport {
   /** `release` ends the worker once the database is closed. */
   private constructor(
     private readonly endpoint: Endpoint,
-    private readonly release: () => void
+    private readonly release: () => void,
   ) {
     endpoint.addEventListener("message", this.onMessage);
     endpoint.start?.();
   }
 
   /** Opens the database `options` (the module's JSON) describe in the worker of `endpoint`. */
-  static async open(endpoint: Endpoint, options: string, wasm: ModuleSource | undefined, release: () => void): Promise<WorkerTransport> {
+  static async open(
+    endpoint: Endpoint,
+    options: string,
+    wasm: ModuleSource | undefined,
+    release: () => void,
+  ): Promise<WorkerTransport> {
     const transport = new WorkerTransport(endpoint, release);
     try {
       await transport.request({ type: "open", options, wasm });
@@ -100,7 +110,11 @@ export class WorkerTransport implements Transport {
     const request = new Uint8Array(encodeWire(operation)).buffer;
     const reply = await this.request({ type: "execute", request }, [request]);
     if (!("frame" in reply) || !reply.frame) {
-      throw new LiliaError({ code: "PROTOCOL", message: "the worker answered without a frame", retryable: false });
+      throw new LiliaError({
+        code: "PROTOCOL",
+        message: "the worker answered without a frame",
+        retryable: false,
+      });
     }
     return response(new Uint8Array(reply.frame));
   }
@@ -116,7 +130,13 @@ export class WorkerTransport implements Transport {
   private detach(): void {
     this.endpoint.removeEventListener("message", this.onMessage);
     for (const waiting of this.pending.values()) {
-      waiting.reject(new LiliaError({ code: "CLOSED", message: "the database's worker ended", retryable: false }));
+      waiting.reject(
+        new LiliaError({
+          code: "CLOSED",
+          message: "the database's worker ended",
+          retryable: false,
+        }),
+      );
     }
     this.pending.clear();
     this.release();

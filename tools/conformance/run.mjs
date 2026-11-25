@@ -1,56 +1,97 @@
-import assert from 'node:assert/strict';
-import { mkdtemp, realpath, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { command, bounded } from './process.mjs';
-import { cli, daemon, sdk } from './adapters.mjs';
-import { Database } from '../../packages/node/dist/index.js';
-import { Versions } from './oracle.mjs';
+import assert from "node:assert/strict";
+import { mkdtemp, realpath, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { command, bounded } from "./process.mjs";
+import { cli, daemon, sdk } from "./adapters.mjs";
+import { Database } from "../../packages/node/dist/index.js";
+import { Versions } from "./oracle.mjs";
 
-const rust = command('cargo', ['test', '-p', 'lilia-protocol', '--test', 'conformance'], { stdio: 'inherit', timeout: 0 });
-assert.equal(rust.status, 0, 'Rust embedded conformance');
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-const codec = command(pnpm, ['--filter', '@liliadb/client', 'test'], { stdio: 'inherit', shell: process.platform === 'win32' });
-assert.equal(codec.status, 0, 'SDK version codec validation');
-const fixtures = JSON.parse(await readFile(new URL('./fixtures.json', import.meta.url), 'utf8'));
+const rust = command("cargo", ["test", "-p", "lilia-protocol", "--test", "conformance"], {
+  stdio: "inherit",
+  timeout: 0,
+});
+assert.equal(rust.status, 0, "Rust embedded conformance");
+const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const codec = command(pnpm, ["--filter", "@liliadb/client", "test"], {
+  stdio: "inherit",
+  shell: process.platform === "win32",
+});
+assert.equal(codec.status, 0, "SDK version codec validation");
+const fixtures = JSON.parse(await readFile(new URL("./fixtures.json", import.meta.url), "utf8"));
 assert(fixtures.length > 0);
-process.env.LILIA_NATIVE_PATH = resolve('target/debug/lilia_node_native.node');
-const executable = name => resolve('target/debug', name + (process.platform === 'win32' ? '.exe' : ''));
-const directory = await realpath(await mkdtemp(join(tmpdir(), 'lilia-conf-')));
+process.env.LILIA_NATIVE_PATH = resolve("target/debug/lilia_node_native.node");
+const executable = (name) =>
+  resolve("target/debug", name + (process.platform === "win32" ? ".exe" : ""));
+const directory = await realpath(await mkdtemp(join(tmpdir(), "lilia-conf-")));
 
 async function check(surface, execute) {
   const versions = new Versions();
   for (const step of fixtures) {
     const { expected, ...request } = step;
     let result;
-    try { result = { value: await bounded(execute(versions.substitute(request)), `${surface}: ${step.name}`) }; }
-    catch (error) { result = { error }; }
+    try {
+      result = {
+        value: await bounded(execute(versions.substitute(request)), `${surface}: ${step.name}`),
+      };
+    } catch (error) {
+      result = { error };
+    }
     const context = `${surface}: ${step.name}`;
     if (step.error) {
       assert(result.error, `${context}: expected error`);
-      assert.deepEqual({ code: result.error.code, retryable: result.error.retryable }, step.error, context);
-      assert.match(result.error.requestId ?? result.error.request_id ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i, context);
+      assert.deepEqual(
+        { code: result.error.code, retryable: result.error.retryable },
+        step.error,
+        context,
+      );
+      assert.match(
+        result.error.requestId ?? result.error.request_id ?? "",
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        context,
+      );
     } else {
       if (result.error) throw new Error(context, { cause: result.error });
-      assert(versions.matches(result.value, expected), `${context}: ${JSON.stringify(result.value)} is not ${JSON.stringify(expected)}`);
+      assert(
+        versions.matches(result.value, expected),
+        `${context}: ${JSON.stringify(result.value)} is not ${JSON.stringify(expected)}`,
+      );
     }
   }
   console.log(`${surface}: ${fixtures.length} shared fixtures passed`);
 }
 
 try {
-  const embedded = await Database.open({ path: join(directory, 'embedded.lilia') });
-  try { await check('Node embedded', sdk(embedded)); }
-  finally { await embedded.close(); }
-  const shared = await daemon(executable('lilia-daemon'), directory);
-  try { await check('daemon via Node SDK', shared.execute); }
-  finally { await shared.close(); }
-  await check('CLI JSON', cli(executable('lilia'), join(directory, 'cli.lilia'), directory));
-  const malformed = command(executable('lilia'), ['--database', join(directory, 'cli.lilia'), '--output', 'json', 'json', 'put', 'docs', 'invalid', '{']);
+  const embedded = await Database.open({ path: join(directory, "embedded.lilia") });
+  try {
+    await check("Node embedded", sdk(embedded));
+  } finally {
+    await embedded.close();
+  }
+  const shared = await daemon(executable("lilia-daemon"), directory);
+  try {
+    await check("daemon via Node SDK", shared.execute);
+  } finally {
+    await shared.close();
+  }
+  await check("CLI JSON", cli(executable("lilia"), join(directory, "cli.lilia"), directory));
+  const malformed = command(executable("lilia"), [
+    "--database",
+    join(directory, "cli.lilia"),
+    "--output",
+    "json",
+    "json",
+    "put",
+    "docs",
+    "invalid",
+    "{",
+  ]);
   assert.equal(malformed.status, 1);
-  assert.equal(malformed.stdout, '');
+  assert.equal(malformed.stdout, "");
   const parseError = JSON.parse(malformed.stderr).error;
-  assert.equal(parseError.code, 'INVALID_INPUT');
-  assert.equal(typeof parseError.request_id, 'string');
+  assert.equal(parseError.code, "INVALID_INPUT");
+  assert.equal(typeof parseError.request_id, "string");
   console.log(`Conformance passed: 4 surfaces × ${fixtures.length} shared steps`);
-} finally { await rm(directory, { recursive: true, force: true }); }
+} finally {
+  await rm(directory, { recursive: true, force: true });
+}

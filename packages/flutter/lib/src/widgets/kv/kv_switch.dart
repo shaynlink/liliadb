@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../../builders/value_builder.dart';
 import '../../database.dart';
 
@@ -33,10 +33,10 @@ class LiliaKvSwitch extends StatelessWidget {
       builder: (context, value, setValue) {
         return Switch.adaptive(
           value: value,
-          activeColor: activeColor,
+          activeThumbColor: activeColor,
           onChanged: (newValue) {
             setValue(newValue);
-            onChanged?.(newValue);
+            onChanged?.call(newValue);
           },
         );
       },

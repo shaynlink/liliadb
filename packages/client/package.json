@@ -3,6 +3,11 @@
   "version": "0.2.0-alpha.1",
   "description": "The LiliaDB calls for every JavaScript runtime: protocol, wire format, database over a transport",
   "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "README.md"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,11 +17,6 @@
       "default": "./dist/index.js"
     }
   },
-  "files": [
-    "dist",
-    "!dist/**/*.test.*",
-    "README.md"
-  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "tsc -p tsconfig.test.json && node --test 'dist/**/*.test.js'",
@@ -27,7 +27,7 @@
     "msgpackr": "2.1.4"
   },
   "devDependencies": {
-    "@types/node": "24.10.0",
-    "typescript": "6.0.2"
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
   }
 }

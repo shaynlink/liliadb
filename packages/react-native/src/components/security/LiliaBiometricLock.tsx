@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -6,7 +6,27 @@ import {
   StyleSheet,
   type StyleProp,
   type ViewStyle,
-} from 'react-native';
+} from "react-native";
+
+/** The calls of `expo-local-authentication` this component makes. */
+interface LocalAuthentication {
+  hasHardwareAsync(): Promise<boolean>;
+  isEnrolledAsync(): Promise<boolean>;
+  authenticateAsync(options: {
+    promptMessage: string;
+    fallbackLabel: string;
+  }): Promise<{ success: boolean; error?: string }>;
+}
+
+/** `expo-local-authentication`, when the app installed it. */
+const LocalAuth: LocalAuthentication | null = (() => {
+  try {
+    const module = require("expo-local-authentication") as Partial<LocalAuthentication> | null;
+    return typeof module?.authenticateAsync === "function" ? (module as LocalAuthentication) : null;
+  } catch {
+    return null;
+  }
+})();
 
 export interface LiliaBiometricLockProps {
   promptMessage?: string;
@@ -22,25 +42,19 @@ export interface LiliaBiometricLockProps {
  * Dynamically uses `expo-local-authentication` if present.
  */
 export function LiliaBiometricLock({
-  promptMessage = 'Unlock to view protected data',
+  promptMessage = "Unlock to view protected data",
   fallbackComponent,
   children,
   autoPrompt = true,
   containerStyle,
 }: LiliaBiometricLockProps): React.ReactElement {
-  const [isUnlocked, setIsUnlocked] = useState(false);
+  // Without `expo-local-authentication` (a mock environment), there is nothing to unlock with.
+  const [isUnlocked, setIsUnlocked] = useState(LocalAuth === null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const authenticate = useCallback(async () => {
+    if (!LocalAuth) return;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const LocalAuth = require('expo-local-authentication');
-      if (!LocalAuth || typeof LocalAuth.authenticateAsync !== 'function') {
-        // Module not found or mock environment
-        setIsUnlocked(true);
-        return;
-      }
-
       const hasHardware = await LocalAuth.hasHardwareAsync();
       const isEnrolled = await LocalAuth.isEnrolledAsync();
 
@@ -52,23 +66,25 @@ export function LiliaBiometricLock({
 
       const result = await LocalAuth.authenticateAsync({
         promptMessage,
-        fallbackLabel: 'Use Device Passcode',
+        fallbackLabel: "Use Device Passcode",
       });
 
       if (result.success) {
         setIsUnlocked(true);
         setErrorMessage(null);
       } else {
-        setErrorMessage(result.error ?? 'Authentication failed');
+        setErrorMessage(result.error ?? "Authentication failed");
       }
-    } catch (err) {
-      // If expo-local-authentication is missing, gracefully unlock in dev
+    } catch {
+      // The platform could not prompt (no biometric service): access is not gated.
       setIsUnlocked(true);
     }
   }, [promptMessage]);
 
   useEffect(() => {
     if (autoPrompt) {
+      // `authenticate` sets state only once the platform answered, after its `await`s.
+      // oxlint-disable-next-line react/set-state-in-effect
       void authenticate();
     }
   }, [autoPrompt, authenticate]);
@@ -78,7 +94,7 @@ export function LiliaBiometricLock({
   }
 
   if (fallbackComponent) {
-    if (typeof fallbackComponent === 'function') {
+    if (typeof fallbackComponent === "function") {
       return <>{fallbackComponent(authenticate)}</>;
     }
     return <>{fallbackComponent}</>;
@@ -90,15 +106,9 @@ export function LiliaBiometricLock({
       <Text style={styles.title}>Protected Content</Text>
       <Text style={styles.subtitle}>{promptMessage}</Text>
 
-      {errorMessage ? (
-        <Text style={styles.errorText}>{errorMessage}</Text>
-      ) : null}
+      {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
-      <TouchableOpacity
-        style={styles.unlockButton}
-        onPress={authenticate}
-        activeOpacity={0.8}
-      >
+      <TouchableOpacity style={styles.unlockButton} onPress={authenticate} activeOpacity={0.8}>
         <Text style={styles.unlockButtonText}>Unlock with Biometrics</Text>
       </TouchableOpacity>
     </View>
@@ -108,11 +118,11 @@ export function LiliaBiometricLock({
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: "#F9FAFB",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    alignItems: 'center',
+    borderColor: "#E5E7EB",
+    alignItems: "center",
     margin: 16,
   },
   lockIcon: {
@@ -121,31 +131,31 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
+    fontWeight: "700",
+    color: "#111827",
     marginBottom: 4,
   },
   subtitle: {
     fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
+    color: "#6B7280",
+    textAlign: "center",
     marginBottom: 16,
   },
   unlockButton: {
-    backgroundColor: '#10B981',
+    backgroundColor: "#10B981",
     paddingVertical: 12,
     paddingHorizontal: 20,
     borderRadius: 8,
   },
   unlockButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
+    color: "#FFFFFF",
+    fontWeight: "600",
     fontSize: 15,
   },
   errorText: {
-    color: '#EF4444',
+    color: "#EF4444",
     fontSize: 13,
     marginBottom: 12,
-    textAlign: 'center',
+    textAlign: "center",
   },
 });

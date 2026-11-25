@@ -12,7 +12,9 @@ export function useDatabase(explicitDb?: LiliaDatabase | null): LiliaDatabase {
   const provided = useContext(LiliaContext);
   const db = explicitDb ?? provided;
   if (!db) {
-    throw new Error("[LiliaDB] no database: render this inside a <LiliaProvider> or pass a database");
+    throw new Error(
+      "[LiliaDB] no database: render this inside a <LiliaProvider> or pass a database",
+    );
   }
   return db;
 }
@@ -21,7 +23,11 @@ export function useDatabase(explicitDb?: LiliaDatabase | null): LiliaDatabase {
 export const useLilia = useDatabase;
 
 /** The database of the nearest `<LiliaProvider>`, for a render function. */
-export function LiliaConsumer({ children }: { children: (db: LiliaDatabase) => React.ReactNode }): React.ReactElement {
+export function LiliaConsumer({
+  children,
+}: {
+  children: (db: LiliaDatabase) => React.ReactNode;
+}): React.ReactElement {
   const db = useDatabase();
   return <>{children(db)}</>;
 }

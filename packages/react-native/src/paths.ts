@@ -14,7 +14,9 @@ function invalid(message: string): LiliaError {
  * the directory the platform options choose (Application Support on iOS, the no-backup files
  * directory on Android, by default).
  */
-export function resolveDatabasePath(options: Pick<OpenDatabaseOptions, "name" | "path" | "ios" | "android">): string {
+export function resolveDatabasePath(
+  options: Pick<OpenDatabaseOptions, "name" | "path" | "ios" | "android">,
+): string {
   if (options.path !== undefined) {
     if (options.path.trim() === "") throw invalid("path is empty");
     return options.path;
@@ -25,8 +27,14 @@ export function resolveDatabasePath(options: Pick<OpenDatabaseOptions, "name" | 
   let directory: string | null | undefined;
   if (Platform.OS === "ios") {
     const group = options.ios?.groupContainerIdentifier;
-    directory = group === undefined ? native.directories()[options.ios?.directory ?? "applicationSupport"] : native.groupContainer(group);
-    if (!directory) throw invalid(group === undefined ? "no such iOS directory" : `the app is not in the App Group ${group}`);
+    directory =
+      group === undefined
+        ? native.directories()[options.ios?.directory ?? "applicationSupport"]
+        : native.groupContainer(group);
+    if (!directory)
+      throw invalid(
+        group === undefined ? "no such iOS directory" : `the app is not in the App Group ${group}`,
+      );
   } else if (Platform.OS === "android") {
     directory = native.directories()[options.android?.directory ?? "noBackup"];
     if (!directory) throw invalid("no such Android directory");

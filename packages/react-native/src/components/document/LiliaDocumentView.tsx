@@ -1,6 +1,6 @@
-import React from 'react';
-import { useDocument } from '../../hooks.js';
-import type { LiliaDatabase } from '../../database.js';
+import React from "react";
+import { useDocument } from "../../hooks.js";
+import type { LiliaDatabase } from "../../database.js";
 
 export interface LiliaDocumentViewProps<T = unknown> {
   space: string;

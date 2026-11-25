@@ -3,19 +3,19 @@ name: mobile-targets
 on:
   pull_request:
     paths:
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'tools/mobile/**'
-      - '.github/workflows/mobile-targets.yml'
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "tools/mobile/**"
+      - ".github/workflows/mobile-targets.yml"
   push:
     branches: [main]
     paths:
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'tools/mobile/**'
-      - '.github/workflows/mobile-targets.yml'
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "tools/mobile/**"
+      - ".github/workflows/mobile-targets.yml"
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
   check-apple-targets:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Select a full Xcode installation
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -49,7 +49,7 @@ jobs:
   check-android-targets:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi

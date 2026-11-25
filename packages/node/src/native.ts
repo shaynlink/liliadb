@@ -63,9 +63,12 @@ export function loadNative(): NativeModule {
     loaded = require(`@liliadb/node-${platform}`) as NativeModule;
     return loaded;
   } catch (error) {
-    const library = process.platform === "win32" ? "lilia_node_native.dll"
-      : process.platform === "darwin" ? "liblilia_node_native.dylib"
-      : "liblilia_node_native.so";
+    const library =
+      process.platform === "win32"
+        ? "lilia_node_native.dll"
+        : process.platform === "darwin"
+          ? "liblilia_node_native.dylib"
+          : "liblilia_node_native.so";
     for (const profile of ["release", "debug"]) {
       const candidate = new URL(`../../../target/${profile}/${library}`, import.meta.url).pathname;
       if (existsSync(candidate)) {
@@ -73,7 +76,9 @@ export function loadNative(): NativeModule {
         return loaded;
       }
     }
-    throw new Error(`No LiliaDB native build for ${platform}; set LILIA_NATIVE_PATH`, { cause: error });
+    throw new Error(`No LiliaDB native build for ${platform}; set LILIA_NATIVE_PATH`, {
+      cause: error,
+    });
   }
 }
 

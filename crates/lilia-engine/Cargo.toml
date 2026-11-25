@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "LiliaDB native storage engine: group-committed journal, MVCC memtable, leveled sorted runs"
 
 [dependencies]

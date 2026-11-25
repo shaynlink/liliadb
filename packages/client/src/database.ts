@@ -2,7 +2,8 @@
 // lifecycle (`close` waits for the calls made) and their paginated streams. Each runtime
 // package opens its transport and builds its database on this one.
 
-import { buildApi, type Api, type Runner } from "./api.js";
+import { buildApi, type Api } from "./api.js";
+import type { Runner } from "./api/calls.js";
 import {
   LiliaError,
   type CloseOptions,
@@ -36,7 +37,8 @@ export async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): P
   if (!signal) return promise;
   signal.throwIfAborted();
   const { promise: aborted, reject } = Promise.withResolvers<never>();
-  const onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+  const onAbort = () =>
+    reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
   signal.addEventListener("abort", onAbort, { once: true });
   try {
     return await Promise.race([promise, aborted]);
@@ -49,7 +51,7 @@ export async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): P
 async function* paginate<T, C>(
   fetch: (after: C | undefined, limit: number) => Promise<T[]>,
   cursor: (record: T) => C,
-  options: ScanStreamOptions<C>
+  options: ScanStreamOptions<C>,
 ): AsyncIterableIterator<T> {
   const pageSize = Math.max(1, options.batchSize ?? 100);
   let remaining = options.limit === undefined ? Infinity : Math.max(0, options.limit);
@@ -92,28 +94,52 @@ export class Database implements AsyncDisposable {
     this.kv = {
       ...this.api.kv,
       /** The records of `namespace` in key order, a page at a time. */
-      scanStream: (namespace: string, options: ScanStreamOptions<Uint8Array | string> = {}): AsyncIterableIterator<KvEntry> =>
+      scanStream: (
+        namespace: string,
+        options: ScanStreamOptions<Uint8Array | string> = {},
+      ): AsyncIterableIterator<KvEntry> =>
         paginate(
           (after, limit) => this.api.kv.scan(namespace, { after, limit, signal: options.signal }),
           (entry): Uint8Array | string => entry.key,
-          options
+          options,
         ),
     };
     this.json = {
       ...this.api.json,
       /** The documents of `space` in id order, a page at a time. */
-      scanStream: <T = JsonValue>(space: string, options: ScanStreamOptions<string> = {}): AsyncIterableIterator<JsonEntry<T>> =>
-        paginate((after, limit) => this.api.json.scan<T>(space, { after, limit, signal: options.signal }), (entry) => entry.id, options),
-      /** The documents of `space` whose id starts with `prefix`, a page at a time. */
-      scanPrefixStream: <T = JsonValue>(space: string, prefix: string, options: ScanStreamOptions<string> = {}): AsyncIterableIterator<JsonEntry<T>> =>
+      scanStream: <T = JsonValue>(
+        space: string,
+        options: ScanStreamOptions<string> = {},
+      ): AsyncIterableIterator<JsonEntry<T>> =>
         paginate(
-          (afterId, limit) => this.api.json.scanPrefix<T>(space, prefix, { afterId, limit, signal: options.signal }),
+          (after, limit) => this.api.json.scan<T>(space, { after, limit, signal: options.signal }),
           (entry) => entry.id,
-          options
+          options,
+        ),
+      /** The documents of `space` whose id starts with `prefix`, a page at a time. */
+      scanPrefixStream: <T = JsonValue>(
+        space: string,
+        prefix: string,
+        options: ScanStreamOptions<string> = {},
+      ): AsyncIterableIterator<JsonEntry<T>> =>
+        paginate(
+          (afterId, limit) =>
+            this.api.json.scanPrefix<T>(space, prefix, { afterId, limit, signal: options.signal }),
+          (entry) => entry.id,
+          options,
         ),
       /** The documents `query` selects, a page at a time. */
-      findStream: <T = JsonValue>(space: string, query: Record<string, JsonValue>, options: ScanStreamOptions<string> = {}): AsyncIterableIterator<JsonEntry<T>> =>
-        paginate((after, limit) => this.api.json.find<T>(space, query, { after, limit, signal: options.signal }), (entry) => entry.id, options),
+      findStream: <T = JsonValue>(
+        space: string,
+        query: Record<string, JsonValue>,
+        options: ScanStreamOptions<string> = {},
+      ): AsyncIterableIterator<JsonEntry<T>> =>
+        paginate(
+          (after, limit) =>
+            this.api.json.find<T>(space, query, { after, limit, signal: options.signal }),
+          (entry) => entry.id,
+          options,
+        ),
     };
     this.graph = this.api.graph;
     this.fts = this.api.fts;
@@ -144,7 +170,11 @@ export class Database implements AsyncDisposable {
     this.ensureOpen();
     const transport = this.transport;
     if (!transport.executeSync) {
-      throw lifecycleError("UNSUPPORTED", "synchronous operations need an embedded database", false);
+      throw lifecycleError(
+        "UNSUPPORTED",
+        "synchronous operations need an embedded database",
+        false,
+      );
     }
     this.syncApi ??= buildApi<"sync">((operation, map) => {
       this.ensureOpen();
@@ -170,10 +200,18 @@ export class Database implements AsyncDisposable {
     }
     if (!this.closing) {
       this.closed = true;
-      this.closing = Promise.allSettled([...this.pending]).then(() => this.transport.close(MAX_CLOSE_TIMEOUT_MS));
+      this.closing = Promise.allSettled(this.pending).then(() =>
+        this.transport.close(MAX_CLOSE_TIMEOUT_MS),
+      );
     }
     const { promise: timedOut, reject } = Promise.withResolvers<never>();
-    const timer = setTimeout(() => reject(lifecycleError("TIMEOUT", "close is still draining; operations are not cancelled", true)), timeout);
+    const timer = setTimeout(
+      () =>
+        reject(
+          lifecycleError("TIMEOUT", "close is still draining; operations are not cancelled", true),
+        ),
+      timeout,
+    );
     try {
       await abortable(Promise.race([this.closing, timedOut]), options.signal);
     } finally {

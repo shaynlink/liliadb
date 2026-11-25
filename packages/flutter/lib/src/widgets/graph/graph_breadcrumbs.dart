@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Breadcrumbs navigation trail for Graph trees and hierarchies in LiliaDB.
 class LiliaGraphBreadcrumbs extends StatelessWidget {

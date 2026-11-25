@@ -53,5 +53,13 @@ build/
 .gradle/
 *.gradle/
 
+# Dart/Flutter artifacts: a package does not commit its lockfile
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+packages/flutter/pubspec.lock
+# The xcframework tools/mobile/build-apple.sh copies into the Flutter plugin
+packages/flutter/darwin/liliadb_flutter/Lilia.xcframework
+
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md

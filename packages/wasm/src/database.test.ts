@@ -19,7 +19,7 @@ test("WASM in-memory database: lifecycle and integrity", async () => {
   // Further operations after close should reject with CLOSED
   await assert.rejects(
     db.kv.get("test", new Uint8Array([1])),
-    (err: unknown) => err instanceof LiliaError && err.code === "CLOSED"
+    (err: unknown) => err instanceof LiliaError && err.code === "CLOSED",
   );
 });
 
@@ -49,7 +49,7 @@ test("WASM KV store: CRUD, CAS, and scanning", async () => {
   // Stale CAS update should fail
   await assert.rejects(
     db.kv.set("users", k1, v1, { ifVersion: setRes.version }),
-    (err: unknown) => err instanceof LiliaError && err.code === "CONFLICT"
+    (err: unknown) => err instanceof LiliaError && err.code === "CONFLICT",
   );
 
   // Scan
@@ -92,11 +92,11 @@ test("WASM JSON store: documents, indexing, and queries", async () => {
   // Secondary indexing
   await db.json.createIndex("products", "cat_idx", "$.category");
   const indexes = await db.json.listIndexes("products");
-  assert.ok(indexes.some(i => i.indexName === "cat_idx"));
+  assert.ok(indexes.some((i) => i.indexName === "cat_idx"));
 
   const electronics = await db.json.findByIndex("products", "cat_idx", "electronics");
   assert.equal(electronics.length, 2);
-  assert.ok(electronics.every(e => (e.value as any).category === "electronics"));
+  assert.ok(electronics.every((e) => (e.value as any).category === "electronics"));
 
   // Find
   const found = await db.json.find("products", { name: "Desk" });
@@ -138,7 +138,7 @@ test("WASM Graph engine: nodes, edges, and reachability", async () => {
   const reachable = await db.graph.reachability("dependency", ["app"], {
     direction: "outgoing",
   });
-  assert.deepEqual(reachable.sort(), ["app", "auth", "db"].sort());
+  assert.deepEqual(reachable.toSorted(), ["app", "auth", "db"].toSorted());
 
   await db.close();
 });
@@ -149,12 +149,12 @@ test("WASM FTS5 engine: full-text indexing and search", async () => {
   await db.fts.index(
     "knowledge",
     "article-1",
-    "WebAssembly provides sandboxed binary code execution on the web and edge"
+    "WebAssembly provides sandboxed binary code execution on the web and edge",
   );
   await db.fts.index(
     "knowledge",
     "article-2",
-    "Origin Private File System OPFS provides fast synchronous persistent file access"
+    "Origin Private File System OPFS provides fast synchronous persistent file access",
   );
 
   const wasmHits = await db.fts.search("knowledge", "WebAssembly");
@@ -178,7 +178,7 @@ test("WASM SQL engine: read-only queries over the models", async () => {
 
   const users = await db.sql.query<{ id: string; name: string }>(
     "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = $1 ORDER BY id",
-    ["users"]
+    ["users"],
   );
   assert.deepEqual(users, [
     { id: "u1", name: "Alice" },
@@ -223,7 +223,7 @@ test("WASM Atomic multi-model batch and rollback", async () => {
     },
   ]);
   assert.equal(batchRes.length, 4);
-  assert.ok(batchRes.every(r => !r.deleted));
+  assert.ok(batchRes.every((r) => !r.deleted));
 
   // Conflicting batch must rollback everything atomically
   await assert.rejects(
@@ -242,7 +242,7 @@ test("WASM Atomic multi-model batch and rollback", async () => {
         value: { amount: 200 },
       },
     ]),
-    (err: unknown) => err instanceof LiliaError && err.code === "CONFLICT"
+    (err: unknown) => err instanceof LiliaError && err.code === "CONFLICT",
   );
 
   // ord-2 must NOT have been written
@@ -261,9 +261,20 @@ test("WASM synchronous API: the same calls in place", async () => {
 });
 
 test("WASM open options: invalid ones are refused as the engine reports them", async () => {
-  await assert.rejects(open({ durability: "fast" as never }), (err: unknown) => err instanceof LiliaError && err.code === "INVALID_INPUT");
-  await assert.rejects(open({ storage: "opfs", worker: false }), (err: unknown) => err instanceof LiliaError && err.code === "INVALID_INPUT", "OPFS needs a path");
-  await assert.rejects(open({ storage: "opfs" }), (err: unknown) => err instanceof LiliaError && err.code === "UNSUPPORTED", "OPFS runs in a worker, which Node lacks");
+  await assert.rejects(
+    open({ durability: "fast" as never }),
+    (err: unknown) => err instanceof LiliaError && err.code === "INVALID_INPUT",
+  );
+  await assert.rejects(
+    open({ storage: "opfs", worker: false }),
+    (err: unknown) => err instanceof LiliaError && err.code === "INVALID_INPUT",
+    "OPFS needs a path",
+  );
+  await assert.rejects(
+    open({ storage: "opfs" }),
+    (err: unknown) => err instanceof LiliaError && err.code === "UNSUPPORTED",
+    "OPFS runs in a worker, which Node lacks",
+  );
 });
 
 test("WASM in a worker: serve() and the worker transport over a message channel", async () => {
@@ -278,7 +289,7 @@ test("WASM in a worker: serve() and the worker transport over a message channel"
       released = true;
       channel.port1.close();
       channel.port2.close();
-    }
+    },
   );
   const db = Reflect.construct(Database, [transport]) as Database;
 
@@ -287,9 +298,13 @@ test("WASM in a worker: serve() and the worker transport over a message channel"
   await assert.rejects(
     db.kv.set("ns", "k", "w", { ifVersion: 1n }),
     (err: unknown) => err instanceof LiliaError && err.code === "CONFLICT",
-    "engine errors cross the channel"
+    "engine errors cross the channel",
   );
-  assert.throws(() => db.sync, (err: unknown) => err instanceof LiliaError && err.code === "UNSUPPORTED", "no synchronous calls through a worker");
+  assert.throws(
+    () => db.sync,
+    (err: unknown) => err instanceof LiliaError && err.code === "UNSUPPORTED",
+    "no synchronous calls through a worker",
+  );
   await db.close();
   assert.ok(released, "the worker is released once the database closes");
 });

@@ -3,6 +3,7 @@
 //! Suitable for Android `NNAPI`, Windows `DirectML`, and quantized ONNX models (~20 MB).
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use lilia_core::{ErrorCode, LiliaError};
 
@@ -47,7 +48,8 @@ impl From<OrtError> for LiliaError {
 /// Sentence-transformer running on ONNX Runtime (CPU, `NNAPI`, `DirectML`, `CoreML`).
 pub struct OrtEmbedder {
     model_id: BuiltinModel,
-    session: Session,
+    /// Running a session takes it mutably: embeddings run one batch at a time.
+    session: Mutex<Session>,
     tokenizer: Tokenizer,
 }
 
@@ -100,14 +102,17 @@ impl OrtEmbedder {
             ..PaddingParams::default()
         }));
 
-        let session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(4)?
+        let environment = ort::init().build()?;
+        let session = Session::builder(&environment)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(ort::Error::from)?
+            .with_intra_threads(4)
+            .map_err(ort::Error::from)?
             .commit_from_file(&model_path)?;
 
         Ok(Self {
             model_id: model,
-            session,
+            session: Mutex::new(session),
             tokenizer,
         })
     }
@@ -150,14 +155,17 @@ impl OrtEmbedder {
         let token_type_ids_tensor = OrtTensor::from_array(([rows, width], token_type_ids))?;
         let attention_mask_tensor = OrtTensor::from_array(([rows, width], attention_mask.clone()))?;
 
-        let outputs = self.session.run(ort::inputs![
+        // A panic while running poisons the lock, not the session: ONNX Runtime keeps no state
+        // between runs.
+        let mut session = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+        let outputs = session.run(ort::inputs![
             "input_ids" => input_ids_tensor,
             "token_type_ids" => token_type_ids_tensor,
             "attention_mask" => attention_mask_tensor,
-        ]?)?;
+        ])?;
 
         // Extract last_hidden_state (or first output tensor)
-        let (_output_shape, output_data) = outputs[0].try_extract_raw_tensor::<f32>()?;
+        let (_output_shape, output_data) = outputs[0].try_extract_tensor::<f32>()?;
         let dim = self.model_id.dimension() as usize;
         let mut results = Vec::with_capacity(rows);
 

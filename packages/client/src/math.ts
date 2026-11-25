@@ -17,7 +17,10 @@ export const quantization = {
     for (let i = 0; i < floats.length; i++) {
       const scaled = floats[i]! / scale;
       // Halves round away from zero, as Rust's `f32::round` does in the engine's quantizer.
-      quantized[i] = Math.max(-128, Math.min(127, Math.sign(scaled) * Math.round(Math.abs(scaled))));
+      quantized[i] = Math.max(
+        -128,
+        Math.min(127, Math.sign(scaled) * Math.round(Math.abs(scaled))),
+      );
     }
     return { quantized, scale };
   },
@@ -52,7 +55,10 @@ export const quantization = {
 };
 
 /** The bytes of `vector` as elements of `elementType`: given bytes as they are, numbers encoded or quantized. */
-export function vectorToBytes(vector: Float32Array | readonly number[] | Uint8Array, elementType?: VectorElementType): Uint8Array {
+export function vectorToBytes(
+  vector: Float32Array | readonly number[] | Uint8Array,
+  elementType?: VectorElementType,
+): Uint8Array {
   if (vector instanceof Uint8Array) return vector;
   if (elementType === "int8") {
     const { quantized } = quantization.toInt8(vector);
@@ -64,7 +70,11 @@ export function vectorToBytes(vector: Float32Array | readonly number[] | Uint8Ar
 }
 
 /** The dimension of `vector`: `dim` when given, else its element count. */
-export function vectorDim(vector: Float32Array | readonly number[] | Uint8Array, elementType?: VectorElementType, dim?: number): number {
+export function vectorDim(
+  vector: Float32Array | readonly number[] | Uint8Array,
+  elementType?: VectorElementType,
+  dim?: number,
+): number {
   if (dim !== undefined) return dim;
   if (!(vector instanceof Uint8Array)) return vector.length;
   if (elementType === "int8") return vector.byteLength;
@@ -73,9 +83,13 @@ export function vectorDim(vector: Float32Array | readonly number[] | Uint8Array,
 }
 
 /** `points` aggregated by `aggregation` (`avg` by default) into buckets of `bucketMs` aligned on 0. */
-function downsample(points: readonly TimeSeriesPoint[], bucketMs: number, aggregation: DownsampleAggregation = "avg"): TimeSeriesPoint[] {
+function downsample(
+  points: readonly TimeSeriesPoint[],
+  bucketMs: number,
+  aggregation: DownsampleAggregation = "avg",
+): TimeSeriesPoint[] {
   if (points.length === 0 || bucketMs <= 0) return points.map((point) => ({ ...point }));
-  const sorted = [...points].sort((a, b) => a.timestamp - b.timestamp);
+  const sorted = points.toSorted((a, b) => a.timestamp - b.timestamp);
   const result: TimeSeriesPoint[] = [];
   let bucket: number | undefined;
   let values: number[] = [];
@@ -121,14 +135,22 @@ export const geo = {
   },
 
   /** A closed polygon of `vertices` (4 to 128, 16 by default) approximating a circle, as JSON `[lon, lat]` pairs. */
-  circleToGeopoly(centerLon: number, centerLat: number, radiusMeters: number, vertices = 16): string {
+  circleToGeopoly(
+    centerLon: number,
+    centerLat: number,
+    radiusMeters: number,
+    vertices = 16,
+  ): string {
     const count = Math.max(4, Math.min(128, vertices));
     const dLat = radiusMeters / METERS_PER_DEGREE;
     const dLon = radiusMeters / (METERS_PER_DEGREE * Math.max(Math.cos(radians(centerLat)), 1e-6));
     const ring: [number, number][] = [];
     for (let i = 0; i < count; i++) {
       const angle = (i * 2 * Math.PI) / count;
-      ring.push([fixed(centerLon + dLon * Math.cos(angle)), fixed(centerLat + dLat * Math.sin(angle))]);
+      ring.push([
+        fixed(centerLon + dLon * Math.cos(angle)),
+        fixed(centerLat + dLat * Math.sin(angle)),
+      ]);
     }
     ring.push(ring[0]!);
     return JSON.stringify(ring);

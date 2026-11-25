@@ -1,7 +1,7 @@
-import React, { useMemo } from 'react';
-import { FlatList, RefreshControl, View } from 'react-native';
-import { useSqlQuery } from '../hooks.js';
-import type { LiliaFlatListProps } from '../types.js';
+import React, { useMemo } from "react";
+import { FlatList, RefreshControl } from "react-native";
+import { useSqlQuery } from "../hooks.js";
+import type { LiliaFlatListProps } from "../types.js";
 
 /**
  * Idiomatic React Native FlatList directly connected to LiliaDB.
@@ -25,15 +25,11 @@ export function LiliaFlatList<T = Record<string, unknown>>({
   db,
   ...flatListProps
 }: LiliaFlatListProps<T>): React.ReactElement {
-  const queryResult = useSqlQuery<T>(
-    sql ?? '',
-    sqlParams,
-    {
-      tables,
-      enabled: Boolean(sql),
-      db,
-    }
-  );
+  const queryResult = useSqlQuery<T>(sql ?? "", sqlParams, {
+    tables,
+    enabled: Boolean(sql),
+    db,
+  });
 
   const items: T[] = useMemo(() => {
     if (sql) return queryResult.data;
@@ -50,32 +46,29 @@ export function LiliaFlatList<T = Record<string, unknown>>({
 
   const defaultKeyExtractor = (item: T, index: number): string => {
     if (keyExtractor) return keyExtractor(item, index);
-    if (item && typeof item === 'object') {
+    if (item && typeof item === "object") {
       const anyObj = item as Record<string, unknown>;
-      if ('id' in anyObj && anyObj.id != null) return String(anyObj.id);
-      if ('rowid' in anyObj && anyObj.rowid != null) return String(anyObj.rowid);
-      if ('key' in anyObj && anyObj.key != null) return String(anyObj.key);
+      if ("id" in anyObj && anyObj.id != null) return String(anyObj.id);
+      if ("rowid" in anyObj && anyObj.rowid != null) return String(anyObj.rowid);
+      if ("key" in anyObj && anyObj.key != null) return String(anyObj.key);
     }
     return String(index);
   };
 
   const refreshControl = sql ? (
-    <RefreshControl
-      refreshing={queryResult.isRefetching}
-      onRefresh={queryResult.refetch}
-    />
+    <RefreshControl refreshing={queryResult.isRefetching} onRefresh={queryResult.refetch} />
   ) : (
     flatListProps.refreshControl
   );
 
   return (
     <FlatList<T>
+      {...flatListProps}
       data={items}
       renderItem={renderItem}
       keyExtractor={defaultKeyExtractor}
-      ListEmptyComponent={emptyComponent ? () => <>{emptyComponent}</> : flatListProps.ListEmptyComponent}
+      ListEmptyComponent={emptyComponent ? <>{emptyComponent}</> : flatListProps.ListEmptyComponent}
       refreshControl={refreshControl}
-      {...flatListProps}
     />
   );
 }

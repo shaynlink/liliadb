@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo } from "react";
 import {
   View,
   Text,
@@ -6,10 +6,10 @@ import {
   type StyleProp,
   type ViewStyle,
   type TextStyle,
-} from 'react-native';
-import type { JsonValue } from '@liliadb/client';
-import { useSqlQuery } from '../../hooks.js';
-import type { LiliaDatabase } from '../../database.js';
+} from "react-native";
+import type { JsonValue } from "@liliadb/client";
+import { useSqlQuery } from "../../hooks.js";
+import type { LiliaDatabase } from "../../database.js";
 
 export interface LiliaCountBadgeProps {
   sql?: string;
@@ -38,7 +38,7 @@ export function LiliaCountBadge({
   textStyle,
   db,
 }: LiliaCountBadgeProps): React.ReactElement | null {
-  const queryResult = useSqlQuery<Record<string, unknown>>(sql ?? '', sqlParams, {
+  const queryResult = useSqlQuery<Record<string, unknown>>(sql ?? "", sqlParams, {
     tables,
     enabled: Boolean(sql),
     db,
@@ -49,9 +49,9 @@ export function LiliaCountBadge({
       const row = queryResult.data[0];
       if (row) {
         const val = Object.values(row)[0];
-        if (typeof val === 'number') return val;
-        if (typeof val === 'bigint') return Number(val);
-        if (typeof val === 'string') {
+        if (typeof val === "number") return val;
+        if (typeof val === "bigint") return Number(val);
+        if (typeof val === "string") {
           const parsed = parseInt(val, 10);
           return isNaN(parsed) ? 0 : parsed;
         }
@@ -65,8 +65,7 @@ export function LiliaCountBadge({
     return null;
   }
 
-  const displayText =
-    resolvedCount > maxDisplay ? `${maxDisplay}+` : String(resolvedCount);
+  const displayText = resolvedCount > maxDisplay ? `${maxDisplay}+` : String(resolvedCount);
 
   return (
     <View style={[styles.badge, badgeStyle]}>
@@ -80,15 +79,15 @@ const styles = StyleSheet.create({
     minWidth: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: '#EF4444',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#EF4444",
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: 6,
   },
   text: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
+    fontWeight: "700",
+    textAlign: "center",
   },
 });

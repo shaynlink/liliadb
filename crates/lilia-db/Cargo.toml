@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "LiliaDB data models over the native engine: key-value, JSON documents with secondary indexes, transactions, row-level security and a Merkle ledger"
 
 [dependencies]

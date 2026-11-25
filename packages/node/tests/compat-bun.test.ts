@@ -16,7 +16,12 @@ const candidateDaemon = [
 const daemonBinary = process.env.LILIA_DAEMON_BIN ?? candidateDaemon;
 
 /** Waits until the daemon of `path` accepts a client. */
-async function waitUntilReady(path: string, endpoint: string, tokenFile: string, daemon: ChildProcess): Promise<void> {
+async function waitUntilReady(
+  path: string,
+  endpoint: string,
+  tokenFile: string,
+  daemon: ChildProcess,
+): Promise<void> {
   const deadline = Date.now() + 10_000;
   for (;;) {
     if (daemon.exitCode !== null) throw new Error(`daemon exited with ${daemon.exitCode}`);
@@ -58,7 +63,7 @@ test("Bun: embedded client executes KV, JSON and SQL mutations", async () => {
 
     // SQL analytics
     const sqlRes = await db.sql.query<{ id: string; name: string }>(
-      "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = 'profiles'"
+      "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = 'profiles'",
     );
     assert.equal(sqlRes.length, 1);
     assert.equal(sqlRes[0]?.name, "Alice");
@@ -96,7 +101,7 @@ test("Bun: embedded synchronous db.sync client executes KV, JSON and SQL mutatio
 
     // Sync SQL
     const sqlRes = db.sync.sql.query<{ id: string; name: string }>(
-      "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = 'items'"
+      "SELECT id, value->>'name' AS name FROM lilia_json WHERE space = 'items'",
     );
     assert.equal(sqlRes.length, 1);
     assert.equal(sqlRes[0]?.name, "Gadget");
@@ -121,7 +126,7 @@ test("Bun: daemon client connects over Unix domain socket IPC", async () => {
   const daemonProc = spawn(
     daemonBinary,
     ["--database", dbPath, "--endpoint", endpoint, "--token-file", tokenFile],
-    { stdio: "ignore" }
+    { stdio: "ignore" },
   );
 
   try {
@@ -168,7 +173,10 @@ test("Bun: idiomatic standards (await using, SQL tagged templates, Web Streams, 
       assert.equal(new TextDecoder().decode(kvEntry.value), "value:1");
 
       // 3. Generic JSON entries
-      interface BunItem { title: string; count: number }
+      interface BunItem {
+        title: string;
+        count: number;
+      }
       await db.json.put<BunItem>("bun_json", "doc:1", { title: "Bun Native", count: 42 });
       const jsonDoc = await db.json.get<BunItem>("bun_json", "doc:1");
       assert.ok(jsonDoc !== undefined);
@@ -178,7 +186,10 @@ test("Bun: idiomatic standards (await using, SQL tagged templates, Web Streams, 
 
       // 4. SQL tagged template strings
       const space = "bun_json";
-      const rows = await db.sql<{ id: string; title: string }>`SELECT id, value->>'title' AS title FROM lilia_json WHERE space = ${space}`;
+      const rows = await db.sql<{
+        id: string;
+        title: string;
+      }>`SELECT id, value->>'title' AS title FROM lilia_json WHERE space = ${space}`;
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.title, "Bun Native");
 
@@ -198,8 +209,9 @@ test("Bun: idiomatic standards (await using, SQL tagged templates, Web Streams, 
     }
 
     // Verify automatic closure via await using
-    await assert.rejects(closedDbRef.json.get("bun_json", "doc:1"), (err: unknown) =>
-      err instanceof LiliaError && err.code === "CLOSED"
+    await assert.rejects(
+      closedDbRef.json.get("bun_json", "doc:1"),
+      (err: unknown) => err instanceof LiliaError && err.code === "CLOSED",
     );
   } finally {
     await rm(dir, { recursive: true, force: true });

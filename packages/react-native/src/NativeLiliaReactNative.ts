@@ -9,7 +9,7 @@ export interface Spec extends TurboModule {
    * The directories of the app, by name, each created if missing: `applicationSupport`,
    * `documents`, `caches` on iOS; `noBackup`, `files`, `cache` on Android.
    */
-  directories(): Object;
+  directories(): object;
   /** The container of an App Group (iOS), or null when the app is not in it (or on Android). */
   groupContainer(identifier: string): string | null;
   /** Excludes `path` from iCloud backups (iOS); whether it did. */

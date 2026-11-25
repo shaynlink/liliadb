@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,7 +7,7 @@ import {
   type StyleProp,
   type ViewStyle,
   type TextStyle,
-} from 'react-native';
+} from "react-native";
 
 export interface LiliaSecureFieldProps {
   value: string;
@@ -26,7 +26,7 @@ export interface LiliaSecureFieldProps {
  */
 export function LiliaSecureField({
   value,
-  maskChar = '•',
+  maskChar = "•",
   autoHideTimeoutMs = 8000,
   containerStyle,
   textStyle,
@@ -66,7 +66,7 @@ export function LiliaSecureField({
     });
   }, [clearTimer, autoHideTimeoutMs, onReveal]);
 
-  const masked = value ? maskChar.repeat(Math.min(value.length, 24)) : '';
+  const masked = value ? maskChar.repeat(Math.min(value.length, 24)) : "";
   const displayText = isRevealed ? value : masked;
 
   return (
@@ -84,7 +84,7 @@ export function LiliaSecureField({
         {renderToggleIcon ? (
           renderToggleIcon(isRevealed)
         ) : (
-          <Text style={styles.toggleText}>{isRevealed ? 'Hide' : 'Show'}</Text>
+          <Text style={styles.toggleText}>{isRevealed ? "Hide" : "Show"}</Text>
         )}
       </TouchableOpacity>
     </View>
@@ -93,10 +93,10 @@ export function LiliaSecureField({
 
 const styles = StyleSheet.create({
   container: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F3F4F6',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#F3F4F6",
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -104,19 +104,19 @@ const styles = StyleSheet.create({
   text: {
     flex: 1,
     fontSize: 15,
-    fontFamily: 'monospace',
-    color: '#111827',
+    fontFamily: "monospace",
+    color: "#111827",
     marginRight: 8,
   },
   toggleButton: {
     paddingHorizontal: 8,
     paddingVertical: 4,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: "#E5E7EB",
     borderRadius: 6,
   },
   toggleText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
+    fontWeight: "600",
+    color: "#374151",
   },
 });

@@ -5,10 +5,20 @@
 export function decodeUtf8(bytes: Uint8Array): string {
   const codes: number[] = [];
   let text = "";
-  for (let i = 0; i < bytes.length; ) {
+  for (let i = 0; i < bytes.length;) {
     const lead = bytes[i]!;
-    const length = lead < 0x80 ? 1 : lead >= 0xf0 && lead < 0xf5 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc2 && lead < 0xe0 ? 2 : 0;
-    let code = length === 1 ? lead : length === 2 ? lead & 0x1f : length === 3 ? lead & 0x0f : lead & 0x07;
+    const length =
+      lead < 0x80
+        ? 1
+        : lead >= 0xf0 && lead < 0xf5
+          ? 4
+          : lead >= 0xe0
+            ? 3
+            : lead >= 0xc2 && lead < 0xe0
+              ? 2
+              : 0;
+    let code =
+      length === 1 ? lead : length === 2 ? lead & 0x1f : length === 3 ? lead & 0x0f : lead & 0x07;
     let valid = length > 0 && i + length <= bytes.length;
     for (let k = 1; valid && k < length; k++) {
       const next = bytes[i + k]!;

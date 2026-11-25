@@ -27,6 +27,14 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOS_MIN}"
 export WATCHOS_DEPLOYMENT_TARGET="${WATCHOS_MIN}"
 export TVOS_DEPLOYMENT_TARGET="${TVOS_MIN}"
 
+# The iOS, watchOS and tvOS SDKs ship with Xcode, not with the Command Line Tools that
+# `.cargo/config.toml` names: an exported DEVELOPER_DIR takes precedence over Cargo's `[env]`.
+export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
+if ! xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1; then
+    echo "error: no iOS SDK in ${DEVELOPER_DIR}: install Xcode, then set DEVELOPER_DIR to its Contents/Developer or run xcode-select -s" >&2
+    exit 1
+fi
+
 echo "==> [LiliaDB] Preparing Apple build environment..."
 mkdir -p "${BUILD_DIR}"
 mkdir -p "${OUT_DIR}"
@@ -143,6 +151,12 @@ if [ ${#XCFRAMEWORK_ARGS[@]} -gt 0 ] && command -v xcodebuild >/dev/null 2>&1; t
         "${XCFRAMEWORK_ARGS[@]}" \
         -output "${XCFRAMEWORK_OUT}"
     echo "==> [Success] XCFramework created at: ${XCFRAMEWORK_OUT}"
+    # The Flutter plugin's copy: a Swift package's binary target lies inside the package, and
+    # Flutter copies the package into the app's build, so neither a path out of it nor a
+    # symbolic link would survive.
+    FLUTTER_XCFRAMEWORK="${ROOT_DIR}/packages/flutter/darwin/liliadb_flutter/Lilia.xcframework"
+    rm -rf "${FLUTTER_XCFRAMEWORK}"
+    cp -R "${XCFRAMEWORK_OUT}" "${FLUTTER_XCFRAMEWORK}"
 else
     echo "==> No Apple target libraries or xcodebuild not found. Static libs generated."
 fi

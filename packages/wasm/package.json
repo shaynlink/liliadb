@@ -3,6 +3,12 @@
   "version": "0.2.0-alpha.1",
   "description": "Local-first multimodel database in WebAssembly: the browser's origin private file system (OPFS) or memory",
   "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "pkg",
+    "README.md"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,12 +23,6 @@
     },
     "./pkg/*": "./pkg/*"
   },
-  "files": [
-    "dist",
-    "!dist/**/*.test.*",
-    "pkg",
-    "README.md"
-  ],
   "scripts": {
     "build:wasm": "bash ../../tools/wasm/build.sh",
     "build": "tsc -p tsconfig.json",
@@ -30,11 +30,11 @@
     "lint": "tsc -p tsconfig.test.json --noEmit",
     "package": "pnpm pack --pack-destination ../../dist"
   },
-  "devDependencies": {
-    "@types/node": "24.10.0",
-    "typescript": "6.0.2"
-  },
   "dependencies": {
     "@liliadb/client": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
   }
 }

@@ -4,7 +4,7 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt}
 use std::path::{Component, Path, PathBuf};
 
 use lilia_io::Vfs;
-use rand::RngCore;
+use rand::Rng;
 use tokio::net::UnixListener;
 
 #[cfg(test)]

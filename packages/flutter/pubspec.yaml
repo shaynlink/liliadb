@@ -5,26 +5,31 @@ homepage: https://github.com/shaynlink/lilia
 repository: https://github.com/shaynlink/lilia/tree/main/packages/flutter
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
-  flutter: '>=3.10.0'
+  sdk: ">=3.13.0 <4.0.0"
+  flutter: ">=3.47.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  ffi: ^2.1.0
+  ffi: ^2.2.0
+  material_ui: ^1.11.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
+  # Dart calls the engine through dart:ffi: each platform only ships the native library, with
+  # no plugin class. Android packs the jniLibs of android/; iOS and macOS share darwin/ (a Swift
+  # package and a podspec) around the xcframework.
   plugin:
     platforms:
       android:
-        package: io.liliadb.flutter
-        pluginClass: LiliadbFlutterPlugin
+        ffiPlugin: true
       ios:
-        pluginClass: LiliadbFlutterPlugin
+        ffiPlugin: true
+        sharedDarwinSource: true
       macos:
-        pluginClass: LiliadbFlutterPlugin
+        ffiPlugin: true
+        sharedDarwinSource: true

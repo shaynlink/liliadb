@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../../database.dart';
 import '../../scope.dart';
 
@@ -67,7 +67,7 @@ class _LiliaKvTextFieldState extends State<LiliaKvTextField> {
 
   void _onTextChanged(String text) {
     _isEditing = true;
-    widget.onChanged?.(text);
+    widget.onChanged?.call(text);
 
     _debounceTimer?.cancel();
     _debounceTimer = Timer(Duration(milliseconds: widget.debounceMs), () {

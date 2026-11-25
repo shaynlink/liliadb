@@ -4,7 +4,8 @@
 
 export * from "./types.js";
 export { geo, quantization, timeseries } from "./math.js";
-export type { Api, Mode, Out } from "./api.js";
+export type { Api } from "./api.js";
+export type { Mode, Out } from "./api/calls.js";
 export { Database, abortable, lifecycleError, type Transport } from "./database.js";
 export { getUuid } from "./version.js";
 export {

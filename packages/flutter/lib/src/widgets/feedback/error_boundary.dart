@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 typedef LiliaErrorFallbackBuilder = Widget Function(
   BuildContext context,
@@ -33,7 +33,7 @@ class _LiliaErrorBoundaryState extends State<LiliaErrorBoundary> {
   }
 
   void catchError(Object error, [StackTrace? stackTrace]) {
-    widget.onError?.(error, stackTrace);
+    widget.onError?.call(error, stackTrace);
     setState(() {
       _error = error;
     });

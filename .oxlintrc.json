@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "react", "node", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "env": {
+    "builtin": true,
+    "es2024": true,
+    "node": true,
+    "browser": true
+  },
+  "rules": {
+    // Ordered I/O is the point here: the benchmarks time sequential commits, and writes to one
+    // database must land in order.
+    "eslint/no-await-in-loop": "off",
+    // `__DEV__` (React Native) and `__liliadb` (the JSI binding) are names the platforms impose.
+    "eslint/no-underscore-dangle": "off",
+    // The packages compile JSX with the automatic runtime (`"jsx": "react-jsx"`).
+    "react/react-in-jsx-scope": "off"
+  },
+  "ignorePatterns": ["**/dist/**", "**/node_modules/**", "target/**", "packages/wasm/pkg/**"]
+}

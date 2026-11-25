@@ -2,7 +2,14 @@
 // Run by `sdk_suite.mjs`: `node node_main.mjs --surface <id> --profile <p> --dir <dir>`.
 
 import { argument, emit, failure, PROFILES, runSurface } from "./harness.mjs";
-import { classicLevel, duckdb, lmdb, pglite, SQLITE_DRIVERS, surrealdb } from "./node_competitors.mjs";
+import {
+  classicLevel,
+  duckdb,
+  lmdb,
+  pglite,
+  SQLITE_DRIVERS,
+  surrealdb,
+} from "./node_competitors.mjs";
 import { liliaDaemonHttp, liliaDaemonIpc, liliaEmbedded } from "./node_surfaces.mjs";
 
 /** Every Node.js surface by id; each SQLite driver twice, with and without `fullfsync`. */
@@ -24,13 +31,14 @@ export const NODE_SURFACES = {
   "lilia-daemon-http": (dir) => liliaDaemonHttp(dir),
 };
 
+// Exit once standard output is flushed, even if a failed binding left handles open.
+const finish = () => process.stdout.write("", () => process.exit(0));
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const id = argument(args, "surface", "");
   const settings = PROFILES[argument(args, "profile", "quick")];
   const open = NODE_SURFACES[id];
-  // Exit once standard output is flushed, even if a failed binding left handles open.
-  const finish = () => process.stdout.write("", () => process.exit(0));
   // A binding may reject a promise nobody awaits (a dropped connection); that ends this surface.
   process.on("unhandledRejection", (error) => {
     emit(failure(id, "sdk", error instanceof Error ? error.message : error));

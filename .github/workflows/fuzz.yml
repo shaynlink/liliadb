@@ -1,0 +1,59 @@
+name: fuzz
+
+# Each night (and on demand), every fuzz target of `fuzz/` runs for a while from the seeds the
+# JavaScript client sends. A crash, a hang or an allocation beyond the limit fails the run and
+# its input is kept as an artifact: reproduce it with `cargo +nightly fuzz run <target> <file>`.
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "600"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      SECONDS_PER_TARGET: ${{ inputs.seconds || '600' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.5.2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Seeds from the JavaScript client
+        run: pnpm --filter @liliadb/client build && node fuzz/seeds.mjs
+      - name: Build the targets
+        working-directory: fuzz
+        run: cargo +nightly fuzz build -O
+      - name: Run each target
+        working-directory: fuzz
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in $(cargo +nightly fuzz list); do
+            echo "::group::$target"
+            cargo +nightly fuzz run -O "$target" -- \
+              -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048 -timeout=20
+            echo "::endgroup::"
+          done
+      - name: Keep the failing inputs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/

@@ -2,42 +2,62 @@
 
 ## Supported versions
 
-Only the latest `0.1.x` release is supported while LiliaDB is pre-1.0.
+LiliaDB is in alpha. Security fixes go to `main` and ship in the next release; earlier alphas are
+not patched. Upgrade to the latest release to get them.
 
-## Reporting
+## Reporting a vulnerability
 
-Do not open a public issue for a suspected vulnerability. Use GitHub private vulnerability
-reporting for `shaynlink/lilia` and include affected version, reproduction, impact, and suggested
-mitigation when available.
+Do not open a public issue, pull request or discussion for a vulnerability.
+
+Report it privately through GitHub:
+[Security → Report a vulnerability](https://github.com/shaynlink/liliadb/security/advisories/new).
+Only the maintainers see the report.
+
+Include what you can of:
+
+- the affected component (engine, daemon, a binding, the CLI, `lilia-zk`) and version or commit;
+- the platform, and the options the database was opened with;
+- the steps, input or file that reproduces it, and what an attacker gains;
+- a fix or a mitigation, if you have one.
+
+The maintainers confirm the report, work on a fix in a private fork, and publish a GitHub security
+advisory (with a CVE when one applies) when the release that fixes it is out. Reporters are
+credited in the advisory unless they ask not to be.
 
 ## Security model
 
-### 1. Data at Rest
-- **No built-in encryption**: the engine stores records unencrypted. Put a database on an
-  encrypted volume (FileVault, BitLocker, LUKS, the mobile platforms' data protection) when its
-  data needs encryption at rest.
-- **Integrity**: every block of the engine's files carries a checksum, verified on read; a
-  mismatch fails the read with `CORRUPT` instead of returning damaged data.
-  `lilia doctor --deep` (`integrityCheck`) reads every stored entry back.
-- **Tamper evidence**: a database opened with the ledger records every write in a Merkle
-  Mountain Range; `lilia ledger prove-*` export proofs that a record or a commit is in it, which
-  anyone holding a trusted root can verify, and `lilia ledger verify-db` checks the whole ledger
-  against the live records.
-- **Access control**: row-level security policies and masking rules apply to every read and
-  write of a session, SQL included, for the caller's security context.
+What LiliaDB protects against, and what it leaves to the platform.
 
-### 2. Filesystem & DACL Hardening (Unix & Windows Parity)
-- **Unix**: All database files, IPC socket paths, and authentication token files are created with mode `0600`; directories receive mode `0700`.
-- **Windows**: All database files, IPC named pipes and token paths receive a protected, restrictive DACL (`O:{sid}D:P(A;OICI;FA;;;{sid})` for directories, `O:{sid}D:P(A;;FA;;;{sid})` for files) granting access exclusively to the current process user SID. Inheritance from parent volumes is explicitly disabled (`SE_DACL_PROTECTED`), and existing broader ACLs or unauthorized account permissions are rejected on startup.
+- **Embedded use** (Node, Bun, Deno, React Native, Flutter, Swift, Kotlin, the browser): the
+  database runs with the privileges of the application. Its files are protected by the file
+  system's permissions only.
+- **Encryption at rest**: LiliaDB does not encrypt its files. Rely on the platform: FileVault,
+  BitLocker, LUKS, iOS Data Protection, Android file-based encryption, or the browser's storage
+  isolation.
+- **Integrity**: CRC32C checksums on every block detect accidental corruption (a torn write, a
+  failing drive), not deliberate modification by someone who can write the files.
+- **The daemon** (`lilia-daemon`) isolates the users of one machine from each other: user-only
+  sockets, named pipes and token files, peer credential checks, a token compared in constant time
+  on every request. It does not isolate a user from root, nor from other processes of the same
+  user. The HTTP gateway binds loopback; `--development` allows other addresses and is not for
+  production. See [the daemon's security](docs/architecture.md#daemon).
+- **Untrusted requests**: frames are limited to 16 MiB and results are bounded. A request that
+  makes the engine panic, read out of bounds, or exhaust memory or time beyond these limits is a
+  vulnerability.
+- **`lilia-zk`** (zero-knowledge proofs) has not been audited. Do not rely on its proofs where a
+  forged proof would be costly.
 
-### 3. IPC & Daemon Authentication
-- **Local Loopback Only**: The daemon binds strictly to local Unix domain sockets, local Windows named pipes (`\\.\pipe\...`), or local loopback HTTP (`127.0.0.1`). Remote pipes and network-exposed IPC endpoints are strictly rejected.
-- **Per-Session Bearer Tokens**: Daemon interactions require a cryptographically random token generated at daemon initialization. Token files are created with private DACLs and verified on every IPC and HTTP request.
+## Verification
 
-### 4. Memory, Log, and Crash Hygiene
-- **Zero Sensitive Data Logging**: Secret keys, authentication tokens, and user database payloads are strictly excluded from debug logs, error messages, and metrics.
-- **Request Tracing**: All errors are assigned random request UUIDs (`request_id`) for diagnostics without exposing sensitive contextual payloads.
-- **Physical Crash Resilience**: Recovery replays the journal up to its last complete, checksummed record: a torn tail is discarded, and with `durability: "durable"` every acknowledged commit survives a power cut.
+- **Fuzzing** (`fuzz/`, nightly in CI): the decoders of the daemon's requests (`rkyv` and
+  `MessagePack`), sequences of operations run on a database, and databases whose files were
+  damaged, opened and read in full. Run a target with
+  `cargo +nightly fuzz run <target>` from `fuzz/` after `node fuzz/seeds.mjs`.
+- **Power loss**: the engine's crash tests cut the power at random moments over an in-memory file
+  system that keeps what a real drive would, and check that every acknowledged commit survives.
 
-Before production use, keep dependencies current, back up by copying the database directory
-while it is closed, and never place a database on an untrusted network filesystem.
+## Supply chain
+
+`cargo deny check` (see [deny.toml](deny.toml)) refuses Rust dependencies with a known
+vulnerability, an unsound API, an unknown source or a license outside the allowed list; CI runs it
+on every pull request. Dependabot opens security updates for every ecosystem of the repository.

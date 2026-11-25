@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -8,10 +8,10 @@ import {
   StyleSheet,
   type StyleProp,
   type ViewStyle,
-} from 'react-native';
-import { useGraphNeighbors } from '../../hooks.js';
-import type { GraphDirection } from '@liliadb/client';
-import type { LiliaDatabase } from '../../database.js';
+} from "react-native";
+import { useGraphNeighbors } from "../../hooks.js";
+import type { GraphDirection } from "@liliadb/client";
+import type { LiliaDatabase } from "../../database.js";
 
 export interface LiliaGraphExplorerProps {
   graph: string;
@@ -31,7 +31,7 @@ export interface LiliaGraphExplorerProps {
 export function LiliaGraphExplorer({
   graph,
   rootNode,
-  direction = 'outgoing',
+  direction = "outgoing",
   kind,
   renderNode,
   onNodePress,
@@ -53,7 +53,7 @@ export function LiliaGraphExplorer({
       setCurrentNode(neighbor);
       onNodePress?.(neighbor);
     },
-    [currentNode, onNodePress]
+    [currentNode, onNodePress],
   );
 
   const handleBack = useCallback(() => {
@@ -100,9 +100,7 @@ export function LiliaGraphExplorer({
 
       {/* Neighbors List */}
       <View style={styles.neighborsSection}>
-        <Text style={styles.neighborsTitle}>
-          Neighbors ({neighbors.length})
-        </Text>
+        <Text style={styles.neighborsTitle}>Neighbors ({neighbors.length})</Text>
 
         {isLoading ? (
           <ActivityIndicator style={{ marginTop: 20 }} size="small" color="#3B82F6" />
@@ -138,10 +136,10 @@ export function LiliaGraphExplorer({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
     borderRadius: 12,
     padding: 16,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
@@ -150,39 +148,39 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   navRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    justifyContent: "space-between",
     marginBottom: 8,
   },
   navButton: {
     paddingVertical: 4,
     paddingHorizontal: 8,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: "#F3F4F6",
     borderRadius: 6,
   },
   navButtonText: {
     fontSize: 12,
-    color: '#4B5563',
-    fontWeight: '600',
+    color: "#4B5563",
+    fontWeight: "600",
   },
   currentNodeCard: {
-    backgroundColor: '#EFF6FF',
-    borderColor: '#BFDBFE',
+    backgroundColor: "#EFF6FF",
+    borderColor: "#BFDBFE",
     borderWidth: 1,
     borderRadius: 10,
     padding: 12,
-    alignItems: 'center',
+    alignItems: "center",
   },
   currentNodeLabel: {
     fontSize: 11,
-    color: '#3B82F6',
-    fontWeight: '700',
-    textTransform: 'uppercase',
+    color: "#3B82F6",
+    fontWeight: "700",
+    textTransform: "uppercase",
   },
   currentNodeId: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#1E40AF',
+    fontWeight: "700",
+    color: "#1E40AF",
     marginTop: 2,
   },
   neighborsSection: {
@@ -190,43 +188,43 @@ const styles = StyleSheet.create({
   },
   neighborsTitle: {
     fontSize: 13,
-    fontWeight: '700',
-    color: '#6B7280',
+    fontWeight: "700",
+    color: "#6B7280",
     marginBottom: 8,
-    textTransform: 'uppercase',
+    textTransform: "uppercase",
   },
   scroll: {
-    flexDirection: 'row',
+    flexDirection: "row",
   },
   neighborCard: {
-    backgroundColor: '#F9FAFB',
-    borderColor: '#E5E7EB',
+    backgroundColor: "#F9FAFB",
+    borderColor: "#E5E7EB",
     borderWidth: 1,
     borderRadius: 8,
     padding: 12,
     marginRight: 10,
     minWidth: 100,
-    alignItems: 'center',
+    alignItems: "center",
   },
   neighborId: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
+    fontWeight: "600",
+    color: "#111827",
   },
   exploreText: {
     fontSize: 11,
-    color: '#3B82F6',
-    fontWeight: '600',
+    color: "#3B82F6",
+    fontWeight: "600",
     marginTop: 4,
   },
   emptyText: {
     fontSize: 13,
-    color: '#9CA3AF',
-    fontStyle: 'italic',
+    color: "#9CA3AF",
+    fontStyle: "italic",
     paddingVertical: 12,
   },
   errorText: {
-    color: '#EF4444',
+    color: "#EF4444",
     fontSize: 13,
   },
 });
