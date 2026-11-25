@@ -4,12 +4,16 @@ on:
   pull_request:
     paths:
       - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'tools/mobile/**'
       - '.github/workflows/mobile-targets.yml'
   push:
     branches: [main]
     paths:
       - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'tools/mobile/**'
       - '.github/workflows/mobile-targets.yml'
 
@@ -18,7 +22,7 @@ permissions:
 
 jobs:
   check-apple-targets:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Select a full Xcode installation
@@ -29,7 +33,8 @@ jobs:
         run: echo "DEVELOPER_DIR=${MD_APPLE_SDK_ROOT}/Contents/Developer" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@1.100.0
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,aarch64-apple-watchos,aarch64-apple-tvos
+          targets: x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,aarch64-apple-watchos,aarch64-apple-tvos
+      - uses: Swatinem/rust-cache@v2
       - name: Verify compilation for Apple targets (iOS, watchOS, tvOS)
         run: |
           cargo check -p lilia-db -p lilia-ffi --target aarch64-apple-ios
@@ -37,6 +42,8 @@ jobs:
           cargo check -p lilia-db -p lilia-ffi --target aarch64-apple-watchos
           cargo check -p lilia-db -p lilia-ffi --target aarch64-apple-tvos
       - name: Test Apple XCFramework build script
+        env:
+          LILIA_APPLE_PROFILE: apple-check
         run: ./tools/mobile/build-apple.sh
 
   check-android-targets:

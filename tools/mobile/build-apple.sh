@@ -10,6 +10,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${ROOT_DIR}/target/apple-build"
 OUT_DIR="${ROOT_DIR}/release/apple"
 SPM_DIR="${ROOT_DIR}/packages/apple-spm"
+# Cargo profile of the Apple slices: `release` for the shipped XCFramework; CI checks that every
+# slice compiles and links with `apple-check` (see Cargo.toml).
+PROFILE="${LILIA_APPLE_PROFILE:-release}"
 
 # Minimum OS versions: the platforms of the generated Package.swift, and the deployment targets
 # that rustc and the C compiler of every `cc` dependency (zstd, blake3, psm) build for. Without
@@ -73,7 +76,7 @@ echo "==> [LiliaDB] Checking installed rustup Apple targets..."
 for target in "${TARGETS[@]}"; do
     if rustup target list | grep -q "${target} (installed)"; then
         echo "==> Compiling for target: ${target}..."
-        cargo build -p lilia-ffi --release --target "${target}"
+        cargo build -p lilia-ffi --profile "${PROFILE}" --target "${target}"
     fi
 done
 
@@ -82,8 +85,8 @@ XCFRAMEWORK_ARGS=()
 # Group macOS slices
 mkdir -p "${BUILD_DIR}/macos"
 MACOS_LIBS=()
-[ -f "${ROOT_DIR}/target/aarch64-apple-darwin/release/liblilia_ffi.a" ] && MACOS_LIBS+=("${ROOT_DIR}/target/aarch64-apple-darwin/release/liblilia_ffi.a")
-[ -f "${ROOT_DIR}/target/x86_64-apple-darwin/release/liblilia_ffi.a" ] && MACOS_LIBS+=("${ROOT_DIR}/target/x86_64-apple-darwin/release/liblilia_ffi.a")
+[ -f "${ROOT_DIR}/target/aarch64-apple-darwin/${PROFILE}/liblilia_ffi.a" ] && MACOS_LIBS+=("${ROOT_DIR}/target/aarch64-apple-darwin/${PROFILE}/liblilia_ffi.a")
+[ -f "${ROOT_DIR}/target/x86_64-apple-darwin/${PROFILE}/liblilia_ffi.a" ] && MACOS_LIBS+=("${ROOT_DIR}/target/x86_64-apple-darwin/${PROFILE}/liblilia_ffi.a")
 
 if [ ${#MACOS_LIBS[@]} -gt 1 ]; then
     lipo -create "${MACOS_LIBS[@]}" -output "${BUILD_DIR}/macos/liblilia_ffi.a"
@@ -93,14 +96,14 @@ elif [ ${#MACOS_LIBS[@]} -eq 1 ]; then
 fi
 
 # Group iOS Device slices
-if [ -f "${ROOT_DIR}/target/aarch64-apple-ios/release/liblilia_ffi.a" ]; then
-    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-ios/release/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
+if [ -f "${ROOT_DIR}/target/aarch64-apple-ios/${PROFILE}/liblilia_ffi.a" ]; then
+    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-ios/${PROFILE}/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
 fi
 
 # Group iOS Simulator slices
 IOS_SIM_LIBS=()
-[ -f "${ROOT_DIR}/target/aarch64-apple-ios-sim/release/liblilia_ffi.a" ] && IOS_SIM_LIBS+=("${ROOT_DIR}/target/aarch64-apple-ios-sim/release/liblilia_ffi.a")
-[ -f "${ROOT_DIR}/target/x86_64-apple-ios/release/liblilia_ffi.a" ] && IOS_SIM_LIBS+=("${ROOT_DIR}/target/x86_64-apple-ios/release/liblilia_ffi.a")
+[ -f "${ROOT_DIR}/target/aarch64-apple-ios-sim/${PROFILE}/liblilia_ffi.a" ] && IOS_SIM_LIBS+=("${ROOT_DIR}/target/aarch64-apple-ios-sim/${PROFILE}/liblilia_ffi.a")
+[ -f "${ROOT_DIR}/target/x86_64-apple-ios/${PROFILE}/liblilia_ffi.a" ] && IOS_SIM_LIBS+=("${ROOT_DIR}/target/x86_64-apple-ios/${PROFILE}/liblilia_ffi.a")
 
 if [ ${#IOS_SIM_LIBS[@]} -gt 1 ]; then
     mkdir -p "${BUILD_DIR}/ios-sim"
@@ -111,23 +114,23 @@ elif [ ${#IOS_SIM_LIBS[@]} -eq 1 ]; then
 fi
 
 # Group watchOS Device slices
-if [ -f "${ROOT_DIR}/target/aarch64-apple-watchos/release/liblilia_ffi.a" ]; then
-    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-watchos/release/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
+if [ -f "${ROOT_DIR}/target/aarch64-apple-watchos/${PROFILE}/liblilia_ffi.a" ]; then
+    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-watchos/${PROFILE}/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
 fi
 
 # Group watchOS Simulator slices
-if [ -f "${ROOT_DIR}/target/aarch64-apple-watchos-sim/release/liblilia_ffi.a" ]; then
-    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-watchos-sim/release/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
+if [ -f "${ROOT_DIR}/target/aarch64-apple-watchos-sim/${PROFILE}/liblilia_ffi.a" ]; then
+    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-watchos-sim/${PROFILE}/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
 fi
 
 # Group tvOS Device slices
-if [ -f "${ROOT_DIR}/target/aarch64-apple-tvos/release/liblilia_ffi.a" ]; then
-    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-tvos/release/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
+if [ -f "${ROOT_DIR}/target/aarch64-apple-tvos/${PROFILE}/liblilia_ffi.a" ]; then
+    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-tvos/${PROFILE}/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
 fi
 
 # Group tvOS Simulator slices
-if [ -f "${ROOT_DIR}/target/aarch64-apple-tvos-sim/release/liblilia_ffi.a" ]; then
-    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-tvos-sim/release/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
+if [ -f "${ROOT_DIR}/target/aarch64-apple-tvos-sim/${PROFILE}/liblilia_ffi.a" ]; then
+    XCFRAMEWORK_ARGS+=("-library" "${ROOT_DIR}/target/aarch64-apple-tvos-sim/${PROFILE}/liblilia_ffi.a" "-headers" "${BUILD_DIR}/headers")
 fi
 
 # 4. Create XCFramework
